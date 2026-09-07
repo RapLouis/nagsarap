@@ -72,6 +72,16 @@ Route::prefix('v1')->group(function () {
         );
 
         Route::post(
+            '/register/liveness-frame',
+            [
+                RegistrationController::class,
+                'analyzeLivenessFrame',
+            ]
+        )->middleware(
+            'throttle:180,1'
+        );
+        
+        Route::post(
             '/register/verify-face',
             [
                 RegistrationController::class,

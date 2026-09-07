@@ -854,6 +854,99 @@ def verify_liveness():
                 "Liveness processing failed.",
         }), 500
 
+@app.post("/analyze-liveness-frame")
+def analyze_liveness_frame_endpoint():
+    data = request.get_json(
+        silent=True
+    )
+
+    if not data:
+        return jsonify({
+            "success": False,
+            "detail":
+                "Invalid request body.",
+        }), 400
+
+    image_base64 = data.get(
+        "image_base64"
+    )
+
+    if not image_base64:
+        return jsonify({
+            "success": False,
+            "detail":
+                "Missing image_base64.",
+        }), 400
+
+    try:
+        frame = analyze_liveness_frame(
+            image_base64,
+            "live",
+        )
+
+        return jsonify({
+            "success": True,
+
+            "face_detected": True,
+
+            "yaw":
+                round(
+                    frame["yaw"],
+                    4,
+                ),
+
+            "eye_openness":
+                round(
+                    frame[
+                        "eye_openness"
+                    ],
+                    4,
+                ),
+
+            "mouth_width":
+                round(
+                    frame[
+                        "mouth_width"
+                    ],
+                    4,
+                ),
+
+            "blur_score":
+                round(
+                    frame[
+                        "blur_score"
+                    ],
+                    2,
+                ),
+
+            "detection_score":
+                round(
+                    frame[
+                        "detection_score"
+                    ],
+                    4,
+                ),
+        }), 200
+
+    except ValueError as exc:
+        return jsonify({
+            "success": False,
+            "face_detected": False,
+            "detail": str(exc),
+        }), 422
+
+    except Exception as exc:
+        print(
+            "[LIVE FRAME ERROR]",
+            exc,
+        )
+
+        return jsonify({
+            "success": False,
+            "face_detected": False,
+            "detail":
+                "Unable to analyze live frame.",
+        }), 500
 
 # ============================================================
 # RUN

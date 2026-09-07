@@ -163,18 +163,10 @@ class HomeScreen extends StatelessWidget {
                             return;
                           }
 
-                          Navigator.of(
-                            context,
-                            ).pushAndRemoveUntil(
-                            MaterialPageRoute(
-                                builder: (_) =>
-                                    const AuthGate(),
-                            ),
-                            (
-                                route,
-                            ) =>
-                                false,
-                            );
+                          Navigator.of(context).pushAndRemoveUntil(
+                            MaterialPageRoute(builder: (_) => const AuthGate()),
+                            (route) => false,
+                          );
                         },
                         icon: const Icon(Icons.logout_rounded),
                         label: const Text('Test Logout'),

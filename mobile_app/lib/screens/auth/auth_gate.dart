@@ -6,17 +6,13 @@ import '../home/home_screen.dart';
 import 'auth_screen.dart';
 
 class AuthGate extends StatefulWidget {
-  const AuthGate({
-    super.key,
-  });
+  const AuthGate({super.key});
 
   @override
-  State<AuthGate> createState() =>
-      _AuthGateState();
+  State<AuthGate> createState() => _AuthGateState();
 }
 
-class _AuthGateState
-    extends State<AuthGate> {
+class _AuthGateState extends State<AuthGate> {
   bool loading = true;
 
   Map<String, dynamic>? user;
@@ -38,9 +34,7 @@ class _AuthGateState
   */
 
   Future<void> restoreSession() async {
-    final hasSession =
-        await AuthService.instance
-            .hasSavedSession();
+    final hasSession = await AuthService.instance.hasSavedSession();
 
     if (!hasSession) {
       if (!mounted) {
@@ -55,8 +49,7 @@ class _AuthGateState
       return;
     }
 
-    final result =
-        await AuthService.instance.me();
+    final result = await AuthService.instance.me();
 
     if (!mounted) {
       return;
@@ -80,9 +73,7 @@ class _AuthGateState
   }
 
   @override
-  Widget build(
-    BuildContext context,
-  ) {
+  Widget build(BuildContext context) {
     /*
     |--------------------------------------------------------------------------
     | LOADING
@@ -91,47 +82,33 @@ class _AuthGateState
 
     if (loading) {
       return const Scaffold(
-        backgroundColor:
-            AppColors.navy,
+        backgroundColor: AppColors.navy,
         body: SafeArea(
           child: Center(
             child: Column(
-              mainAxisSize:
-                  MainAxisSize.min,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 SizedBox(
                   width: 58,
                   height: 58,
-                  child:
-                      CircularProgressIndicator(
+                  child: CircularProgressIndicator(
                     strokeWidth: 4,
-                    color:
-                        AppColors.gold,
+                    color: AppColors.gold,
                   ),
                 ),
-                SizedBox(
-                  height: 22,
-                ),
+                SizedBox(height: 22),
                 Text(
                   'CCIS Attendance',
                   style: TextStyle(
-                    color:
-                        Colors.white,
+                    color: Colors.white,
                     fontSize: 18,
-                    fontWeight:
-                        FontWeight.w700,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
-                SizedBox(
-                  height: 6,
-                ),
+                SizedBox(height: 6),
                 Text(
                   'Restoring your session...',
-                  style: TextStyle(
-                    color:
-                        Colors.white70,
-                    fontSize: 12,
-                  ),
+                  style: TextStyle(color: Colors.white70, fontSize: 12),
                 ),
               ],
             ),
@@ -147,10 +124,7 @@ class _AuthGateState
     */
 
     if (authenticated) {
-      return HomeScreen(
-        user: user,
-        student: student,
-      );
+      return HomeScreen(user: user, student: student);
     }
 
     /*

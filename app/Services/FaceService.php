@@ -161,6 +161,48 @@ class FaceService
                 * sqrt($normB)
             );
     }
+    public function analyzeLivenessFrame(
+    UploadedFile $frame
+            ): array {
+                $bytes = file_get_contents(
+                    $frame->getRealPath()
+                );
+
+                if ($bytes === false) {
+                    throw new RuntimeException(
+                        'Unable to read camera frame.'
+                    );
+                }
+
+                $response = Http::timeout(15)->post(
+                    rtrim(
+                        config('services.face.url'),
+                        '/'
+                    ).'/analyze-liveness-frame',
+                    [
+                        'image_base64' =>
+                            'data:image/jpeg;base64,'
+                            .base64_encode($bytes),
+                    ]
+                );
+
+                if ($response->failed()) {
+                    throw new RuntimeException(
+                        $response->json('detail')
+                            ?? 'Unable to analyze live face.'
+                    );
+                }
+
+                $result = $response->json();
+
+                if (!is_array($result)) {
+                    throw new RuntimeException(
+                        'Invalid liveness response.'
+                    );
+                }
+
+                return $result;
+            }
 
     private function uploadedFileToDataUrl(
         UploadedFile $file

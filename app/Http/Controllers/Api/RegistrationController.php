@@ -103,7 +103,46 @@ class RegistrationController extends Controller
             ],
         ], 201);
     }
-
+    public function analyzeLivenessFrame(
+        Request $request,
+        FaceService $faceService
+    ): JsonResponse {
+        $request->validate([
+            'frame' => [
+                'required',
+                'image',
+                'mimes:jpeg,jpg,png',
+                'max:5048',
+            ],
+        ]);
+    
+        try {
+            $result =
+                $faceService
+                    ->analyzeLivenessFrame(
+                        $request->file(
+                            'frame'
+                        )
+                    );
+    
+            return response()->json([
+                'success' => true,
+                'code' =>
+                    'LIVENESS_FRAME_ANALYZED',
+                'data' =>
+                    $result,
+            ]);
+        } catch (RuntimeException $e) {
+            return response()->json([
+                'success' => false,
+                'code' =>
+                    'LIVENESS_FRAME_FAILED',
+                'message' =>
+                    $e->getMessage(),
+            ], 422);
+        }
+    }
+    
     public function verifyFace(
         Request $request,
         FaceService $faceService

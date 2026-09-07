@@ -21,11 +21,9 @@ class AuthResult {
 class AuthService {
   AuthService._();
 
-  static final AuthService instance =
-      AuthService._();
+  static final AuthService instance = AuthService._();
 
-  final ApiService _api =
-      ApiService.instance;
+  final ApiService _api = ApiService.instance;
 
   /*
   |--------------------------------------------------------------------------
@@ -38,76 +36,49 @@ class AuthService {
     required String password,
   }) async {
     try {
-      final response =
-          await _api.dio.post(
+      final response = await _api.dio.post(
         ApiEndpoints.login,
-        data: {
-          'student_number':
-              studentNumber.trim(),
-          'password': password,
-        },
+        data: {'student_number': studentNumber.trim(), 'password': password},
       );
 
-      final dynamic raw =
-          response.data;
+      final dynamic raw = response.data;
 
       if (raw is! Map) {
         return AuthResult(
           success: false,
-          message:
-              'Invalid response from server.',
+          message: 'Invalid response from server.',
         );
       }
 
-      final data =
-          Map<String, dynamic>.from(
-        raw,
-      );
+      final data = Map<String, dynamic>.from(raw);
 
-      final dynamic tokenValue =
-          data['token'] ??
-              data['access_token'];
+      final dynamic tokenValue = data['token'] ?? data['access_token'];
 
-      if (tokenValue == null ||
-          tokenValue
-              .toString()
-              .isEmpty) {
+      if (tokenValue == null || tokenValue.toString().isEmpty) {
         return AuthResult(
           success: false,
           message:
               data['message']?.toString() ??
-                  'Login failed. No authentication token was returned.',
+              'Login failed. No authentication token was returned.',
         );
       }
 
-      await _api.saveToken(
-        tokenValue.toString(),
-      );
+      await _api.saveToken(tokenValue.toString());
 
-      final parsed =
-          _extractUserAndStudent(
-        data,
-      );
+      final parsed = _extractUserAndStudent(data);
 
       return AuthResult(
         success: true,
-        message:
-            data['message']?.toString() ??
-                'Login successful.',
+        message: data['message']?.toString() ?? 'Login successful.',
         user: parsed.$1,
         student: parsed.$2,
       );
     } on DioException catch (e) {
-      return AuthResult(
-        success: false,
-        message:
-            _extractErrorMessage(e),
-      );
+      return AuthResult(success: false, message: _extractErrorMessage(e));
     } catch (e) {
       return AuthResult(
         success: false,
-        message:
-            'Unable to log in. Please try again.',
+        message: 'Unable to log in. Please try again.',
       );
     }
   }
@@ -120,49 +91,30 @@ class AuthService {
 
   Future<AuthResult> me() async {
     try {
-      final token =
-          await _api.getToken();
+      final token = await _api.getToken();
 
-      if (token == null ||
-          token.isEmpty) {
-        return AuthResult(
-          success: false,
-          message:
-              'No saved login session.',
-        );
+      if (token == null || token.isEmpty) {
+        return AuthResult(success: false, message: 'No saved login session.');
       }
 
-      final response =
-          await _api.dio.get(
-        ApiEndpoints.me,
-      );
+      final response = await _api.dio.get(ApiEndpoints.me);
 
-      final dynamic raw =
-          response.data;
+      final dynamic raw = response.data;
 
       if (raw is! Map) {
         return AuthResult(
           success: false,
-          message:
-              'Invalid response from server.',
+          message: 'Invalid response from server.',
         );
       }
 
-      final data =
-          Map<String, dynamic>.from(
-        raw,
-      );
+      final data = Map<String, dynamic>.from(raw);
 
-      final parsed =
-          _extractUserAndStudent(
-        data,
-      );
+      final parsed = _extractUserAndStudent(data);
 
       return AuthResult(
         success: true,
-        message:
-            data['message']?.toString() ??
-                'Authenticated.',
+        message: data['message']?.toString() ?? 'Authenticated.',
         user: parsed.$1,
         student: parsed.$2,
       );
@@ -172,21 +124,15 @@ class AuthService {
        * delete it so the user is sent
        * back to login.
        */
-      if (e.response?.statusCode ==
-          401) {
+      if (e.response?.statusCode == 401) {
         await _api.removeToken();
       }
 
-      return AuthResult(
-        success: false,
-        message:
-            _extractErrorMessage(e),
-      );
+      return AuthResult(success: false, message: _extractErrorMessage(e));
     } catch (e) {
       return AuthResult(
         success: false,
-        message:
-            'Unable to restore your login session.',
+        message: 'Unable to restore your login session.',
       );
     }
   }
@@ -199,9 +145,7 @@ class AuthService {
 
   Future<void> logout() async {
     try {
-      await _api.dio.post(
-        ApiEndpoints.logout,
-      );
+      await _api.dio.post(ApiEndpoints.logout);
     } catch (_) {
       /*
        * Logout locally even if
@@ -228,10 +172,7 @@ class AuthService {
   |--------------------------------------------------------------------------
   */
 
-  (
-    Map<String, dynamic>?,
-    Map<String, dynamic>?
-  ) _extractUserAndStudent(
+  (Map<String, dynamic>?, Map<String, dynamic>?) _extractUserAndStudent(
     Map<String, dynamic> data,
   ) {
     Map<String, dynamic>? user;
@@ -247,17 +188,11 @@ class AuthService {
      */
 
     if (data['user'] is Map) {
-      user =
-          Map<String, dynamic>.from(
-        data['user'] as Map,
-      );
+      user = Map<String, dynamic>.from(data['user'] as Map);
     }
 
     if (data['student'] is Map) {
-      student =
-          Map<String, dynamic>.from(
-        data['student'] as Map,
-      );
+      student = Map<String, dynamic>.from(data['student'] as Map);
     }
 
     /*
@@ -271,13 +206,8 @@ class AuthService {
      * }
      */
 
-    if (student == null &&
-        user != null &&
-        user['student'] is Map) {
-      student =
-          Map<String, dynamic>.from(
-        user['student'] as Map,
-      );
+    if (student == null && user != null && user['student'] is Map) {
+      student = Map<String, dynamic>.from(user['student'] as Map);
     }
 
     /*
@@ -290,28 +220,15 @@ class AuthService {
      * }
      */
 
-    if (user == null &&
-        (data.containsKey('id') ||
-            data.containsKey(
-              'email',
-            ))) {
-      user =
-          Map<String, dynamic>.from(
-        data,
-      );
+    if (user == null && (data.containsKey('id') || data.containsKey('email'))) {
+      user = Map<String, dynamic>.from(data);
 
       if (data['student'] is Map) {
-        student =
-            Map<String, dynamic>.from(
-          data['student'] as Map,
-        );
+        student = Map<String, dynamic>.from(data['student'] as Map);
       }
     }
 
-    return (
-      user,
-      student,
-    );
+    return (user, student);
   }
 
   /*
@@ -320,49 +237,34 @@ class AuthService {
   |--------------------------------------------------------------------------
   */
 
-  String _extractErrorMessage(
-    DioException exception,
-  ) {
-    final response =
-        exception.response;
+  String _extractErrorMessage(DioException exception) {
+    final response = exception.response;
 
     if (response == null) {
       return 'Unable to connect to the server.';
     }
 
-    final dynamic raw =
-        response.data;
+    final dynamic raw = response.data;
 
     if (raw is Map) {
-      final data =
-          Map<String, dynamic>.from(
-        raw,
-      );
+      final data = Map<String, dynamic>.from(raw);
 
       if (data['message'] != null) {
-        return data['message']
-            .toString();
+        return data['message'].toString();
       }
 
       if (data['error'] != null) {
-        return data['error']
-            .toString();
+        return data['error'].toString();
       }
 
       if (data['errors'] is Map) {
-        final errors =
-            Map<String, dynamic>.from(
-          data['errors'] as Map,
-        );
+        final errors = Map<String, dynamic>.from(data['errors'] as Map);
 
         if (errors.isNotEmpty) {
-          final first =
-              errors.values.first;
+          final first = errors.values.first;
 
-          if (first is List &&
-              first.isNotEmpty) {
-            return first.first
-                .toString();
+          if (first is List && first.isNotEmpty) {
+            return first.first.toString();
           }
 
           return first.toString();
