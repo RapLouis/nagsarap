@@ -1,4 +1,5 @@
-import 'package:file_selector/file_selector.dart' as fs;
+import 'package:file_selector/file_selector.dart'
+    as fs;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -13,38 +14,40 @@ class RegisterTab extends StatefulWidget {
   });
 
   @override
-  State<RegisterTab> createState() => _RegisterTabState();
+  State<RegisterTab> createState() =>
+      _RegisterTabState();
 }
 
-class _RegisterTabState extends State<RegisterTab> {
+class _RegisterTabState
+    extends State<RegisterTab> {
   /*
   |--------------------------------------------------------------------------
   | CONTROLLERS
   |--------------------------------------------------------------------------
   */
 
-  final TextEditingController studentNumberController =
+  final studentNumberController =
       TextEditingController();
 
-  final TextEditingController surnameController =
+  final surnameController =
       TextEditingController();
 
-  final TextEditingController firstNameController =
+  final firstNameController =
       TextEditingController();
 
-  final TextEditingController middleNameController =
+  final middleNameController =
       TextEditingController();
 
-  final TextEditingController extensionController =
+  final extensionController =
       TextEditingController();
 
-  final TextEditingController emailController =
+  final emailController =
       TextEditingController();
 
-  final TextEditingController passwordController =
+  final passwordController =
       TextEditingController();
 
-  final TextEditingController confirmPasswordController =
+  final confirmPasswordController =
       TextEditingController();
 
   /*
@@ -53,7 +56,8 @@ class _RegisterTabState extends State<RegisterTab> {
   |--------------------------------------------------------------------------
   */
 
-  final ImagePicker imagePicker = ImagePicker();
+  final ImagePicker imagePicker =
+      ImagePicker();
 
   XFile? profilePhoto;
 
@@ -61,7 +65,7 @@ class _RegisterTabState extends State<RegisterTab> {
 
   /*
   |--------------------------------------------------------------------------
-  | UI STATE
+  | STATE
   |--------------------------------------------------------------------------
   */
 
@@ -99,18 +103,22 @@ class _RegisterTabState extends State<RegisterTab> {
 
   /*
   |--------------------------------------------------------------------------
-  | PROFILE PHOTO
+  | PICK + REAL VALIDATE PROFILE PHOTO
   |--------------------------------------------------------------------------
   */
 
-  Future<void> pickProfilePhoto() async {
-    if (validatingPhoto || registering) {
+  Future<void>
+      pickProfilePhoto() async {
+    if (validatingPhoto ||
+        registering) {
       return;
     }
 
     try {
-      final XFile? image = await imagePicker.pickImage(
-        source: ImageSource.gallery,
+      final XFile? image =
+          await imagePicker.pickImage(
+        source:
+            ImageSource.gallery,
         imageQuality: 95,
       );
 
@@ -118,9 +126,15 @@ class _RegisterTabState extends State<RegisterTab> {
         return;
       }
 
+      if (!mounted) {
+        return;
+      }
+
       setState(() {
         profilePhoto = image;
+
         validatingPhoto = true;
+
         facePhotoValid = false;
 
         photoValidationMessage =
@@ -129,46 +143,74 @@ class _RegisterTabState extends State<RegisterTab> {
 
       /*
       |--------------------------------------------------------------------------
-      | TEMPORARY PHOTO VALIDATION
+      | REAL SERVER VALIDATION
       |--------------------------------------------------------------------------
-      |
-      | This is intentionally temporary.
-      |
-      | In the next stage we will replace this with:
-      |
-      | Flutter
-      |   ↓
-      | Laravel image validation endpoint
-      |   ↓
-      | FaceService
-      |   ↓
-      | Python OpenCV + InsightFace
-      |
-      | Checks:
-      | - image can be decoded
-      | - image is not too blurry
-      | - exactly one face is detected
-      | - face is usable for embedding
-      |
       */
 
-      await Future.delayed(
-        const Duration(
-          milliseconds: 900,
-        ),
+      final result =
+          await RegistrationService
+              .instance
+              .validateReferencePhoto(
+        profilePhoto: image,
       );
 
       if (!mounted) {
         return;
       }
 
+      if (result.success) {
+        setState(() {
+          validatingPhoto = false;
+
+          facePhotoValid = true;
+
+          photoValidationMessage =
+              result.message;
+        });
+
+        return;
+      }
+
+      /*
+      |--------------------------------------------------------------------------
+      | INVALID IMAGE
+      |--------------------------------------------------------------------------
+      */
+
       setState(() {
         validatingPhoto = false;
-        facePhotoValid = true;
+
+        facePhotoValid = false;
 
         photoValidationMessage =
-            'Face detected. Photo is ready for verification.';
+            result.message;
       });
+
+      await showDialog<void>(
+        context: context,
+        builder:
+            (dialogContext) {
+          return AppDialog(
+            type:
+                AppDialogType.error,
+
+            title:
+                'Photo Not Accepted',
+
+            message:
+                result.message,
+
+            primaryText:
+                'Choose Another Photo',
+
+            primaryAction: () {
+              Navigator.of(
+                dialogContext,
+              ).pop();
+            },
+          );
+        },
+      );
     } catch (e) {
       debugPrint(
         'Reference photo error: $e',
@@ -179,19 +221,48 @@ class _RegisterTabState extends State<RegisterTab> {
       }
 
       setState(() {
-        profilePhoto = null;
         validatingPhoto = false;
+
         facePhotoValid = false;
 
         photoValidationMessage =
             'Unable to process the selected photo.';
       });
+
+      await showSimpleError(
+        title:
+            'Photo Error',
+        message:
+            'Unable to process the selected photo. Please try another image.',
+      );
     }
   }
 
   /*
   |--------------------------------------------------------------------------
-  | FORM 5 PICKER
+  | REMOVE PROFILE PHOTO
+  |--------------------------------------------------------------------------
+  */
+
+  void removeProfilePhoto() {
+    if (registering ||
+        validatingPhoto) {
+      return;
+    }
+
+    setState(() {
+      profilePhoto = null;
+
+      facePhotoValid = false;
+
+      photoValidationMessage =
+          null;
+    });
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | FORM 5
   |--------------------------------------------------------------------------
   */
 
@@ -201,12 +272,14 @@ class _RegisterTabState extends State<RegisterTab> {
     }
 
     try {
-      const fs.XTypeGroup pdfType = fs.XTypeGroup(
+      const fs.XTypeGroup pdfType =
+          fs.XTypeGroup(
         label: 'PDF documents',
         extensions: <String>[
           'pdf',
         ],
-        uniformTypeIdentifiers: <String>[
+        uniformTypeIdentifiers:
+            <String>[
           'com.adobe.pdf',
         ],
         mimeTypes: <String>[
@@ -214,8 +287,10 @@ class _RegisterTabState extends State<RegisterTab> {
         ],
       );
 
-      final XFile? selectedFile = await fs.openFile(
-        acceptedTypeGroups: <fs.XTypeGroup>[
+      final XFile? selectedFile =
+          await fs.openFile(
+        acceptedTypeGroups:
+            <fs.XTypeGroup>[
           pdfType,
         ],
       );
@@ -224,10 +299,6 @@ class _RegisterTabState extends State<RegisterTab> {
         return;
       }
 
-      /*
-       * 10 MB maximum.
-       */
-
       final int fileSize =
           await selectedFile.length();
 
@@ -235,12 +306,9 @@ class _RegisterTabState extends State<RegisterTab> {
           10 * 1024 * 1024;
 
       if (fileSize > maxFileSize) {
-        if (!mounted) {
-          return;
-        }
-
         await showSimpleError(
-          title: 'File Too Large',
+          title:
+              'File Too Large',
           message:
               'Your Form 5 must not exceed 10 MB.',
         );
@@ -248,24 +316,23 @@ class _RegisterTabState extends State<RegisterTab> {
         return;
       }
 
-      /*
-       * Extra extension protection.
-       */
+      final lowerName =
+          selectedFile.name
+              .toLowerCase();
 
-      final String lowerName =
-          selectedFile.name.toLowerCase();
-
-      if (!lowerName.endsWith('.pdf')) {
-        if (!mounted) {
-          return;
-        }
-
+      if (!lowerName
+          .endsWith('.pdf')) {
         await showSimpleError(
-          title: 'Invalid Form 5',
+          title:
+              'Invalid Form 5',
           message:
               'Please select a PDF copy of your Form 5.',
         );
 
+        return;
+      }
+
+      if (!mounted) {
         return;
       }
 
@@ -274,45 +341,17 @@ class _RegisterTabState extends State<RegisterTab> {
       });
     } catch (e) {
       debugPrint(
-        'Form 5 picker error: $e',
+        'Form 5 error: $e',
       );
-
-      if (!mounted) {
-        return;
-      }
 
       await showSimpleError(
-        title: 'Unable to Select File',
+        title:
+            'Unable to Select File',
         message:
-            'The Form 5 could not be selected. Please try again.',
+            'The Form 5 could not be selected.',
       );
     }
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | REMOVE PHOTO
-  |--------------------------------------------------------------------------
-  */
-
-  void removeProfilePhoto() {
-    if (registering) {
-      return;
-    }
-
-    setState(() {
-      profilePhoto = null;
-      facePhotoValid = false;
-      validatingPhoto = false;
-      photoValidationMessage = null;
-    });
-  }
-
-  /*
-  |--------------------------------------------------------------------------
-  | REMOVE FORM 5
-  |--------------------------------------------------------------------------
-  */
 
   void removeForm5() {
     if (registering) {
@@ -326,23 +365,15 @@ class _RegisterTabState extends State<RegisterTab> {
 
   /*
   |--------------------------------------------------------------------------
-  | STUDENT NUMBER FORMAT
+  | STUDENT NUMBER
   |--------------------------------------------------------------------------
-  |
-  | Example:
-  |
-  | 23140012
-  |
-  | becomes:
-  |
-  | 23-140012
-  |
   */
 
   void formatStudentNumber(
     String value,
   ) {
-    String numbers = value.replaceAll(
+    String numbers =
+        value.replaceAll(
       RegExp(
         r'[^0-9]',
       ),
@@ -350,7 +381,8 @@ class _RegisterTabState extends State<RegisterTab> {
     );
 
     if (numbers.length > 8) {
-      numbers = numbers.substring(
+      numbers =
+          numbers.substring(
         0,
         8,
       );
@@ -365,14 +397,17 @@ class _RegisterTabState extends State<RegisterTab> {
       formatted = numbers;
     }
 
-    if (studentNumberController.text !=
+    if (studentNumberController
+            .text !=
         formatted) {
-      studentNumberController.value =
+      studentNumberController
+          .value =
           TextEditingValue(
         text: formatted,
         selection:
             TextSelection.collapsed(
-          offset: formatted.length,
+          offset:
+              formatted.length,
         ),
       );
     }
@@ -382,148 +417,144 @@ class _RegisterTabState extends State<RegisterTab> {
 
   /*
   |--------------------------------------------------------------------------
-  | PASSWORD VALIDATION
+  | VALIDATION
   |--------------------------------------------------------------------------
   */
 
-  bool get hasMinimumLength {
-    return passwordController.text.length >=
-        8;
-  }
+  bool get hasMinimumLength =>
+      passwordController
+          .text.length >=
+      8;
 
-  bool get hasUppercase {
-    return RegExp(
-      r'[A-Z]',
-    ).hasMatch(
-      passwordController.text,
-    );
-  }
+  bool get hasUppercase =>
+      RegExp(
+        r'[A-Z]',
+      ).hasMatch(
+        passwordController.text,
+      );
 
-  bool get hasSpecialCharacter {
-    return RegExp(
-      r'[!@#$%^&*(),.?":{}|<>_\-+=]',
-    ).hasMatch(
-      passwordController.text,
-    );
-  }
+  bool get hasSpecialCharacter =>
+      RegExp(
+        r'[!@#$%^&*(),.?":{}|<>_\-+=]',
+      ).hasMatch(
+        passwordController.text,
+      );
 
-  bool get passwordsMatch {
-    return passwordController
-            .text.isNotEmpty &&
-        passwordController.text ==
-            confirmPasswordController.text;
-  }
+  bool get passwordsMatch =>
+      passwordController
+          .text.isNotEmpty &&
+      passwordController.text ==
+          confirmPasswordController
+              .text;
+
+  bool get validEmail =>
+      RegExp(
+        r'^[^@\s]+@[^@\s]+\.[^@\s]+$',
+      ).hasMatch(
+        emailController.text
+            .trim(),
+      );
+
+  bool get validStudentNumber =>
+      RegExp(
+        r'^\d{2}-\d{6}$',
+      ).hasMatch(
+        studentNumberController
+            .text
+            .trim(),
+      );
 
   /*
   |--------------------------------------------------------------------------
-  | EMAIL VALIDATION
+  | CAN REGISTER
   |--------------------------------------------------------------------------
   */
 
-  bool get validEmail {
-    return RegExp(
-      r'^[^@\s]+@[^@\s]+\.[^@\s]+$',
-    ).hasMatch(
-      emailController.text.trim(),
-    );
-  }
+  bool get canRegister =>
+      validStudentNumber &&
+      firstNameController.text
+          .trim()
+          .isNotEmpty &&
+      surnameController.text
+          .trim()
+          .isNotEmpty &&
+      validEmail &&
+      hasMinimumLength &&
+      hasUppercase &&
+      hasSpecialCharacter &&
+      passwordsMatch &&
+      profilePhoto != null &&
+      facePhotoValid &&
+      form5 != null &&
+      !validatingPhoto &&
+      !registering;
 
   /*
   |--------------------------------------------------------------------------
-  | STUDENT NUMBER VALIDATION
+  | REGISTER
   |--------------------------------------------------------------------------
   */
 
-  bool get validStudentNumber {
-    return RegExp(
-      r'^\d{2}-\d{6}$',
-    ).hasMatch(
-      studentNumberController.text.trim(),
-    );
-  }
-
-  /*
-  |--------------------------------------------------------------------------
-  | REGISTER BUTTON
-  |--------------------------------------------------------------------------
-  */
-
-  bool get canRegister {
-    return validStudentNumber &&
-        firstNameController.text
-            .trim()
-            .isNotEmpty &&
-        surnameController.text
-            .trim()
-            .isNotEmpty &&
-        validEmail &&
-        hasMinimumLength &&
-        hasUppercase &&
-        hasSpecialCharacter &&
-        passwordsMatch &&
-        profilePhoto != null &&
-        facePhotoValid &&
-        form5 != null &&
-        !validatingPhoto &&
-        !registering;
-  }
-
-  /*
-  |--------------------------------------------------------------------------
-  | SUBMIT REGISTRATION
-  |--------------------------------------------------------------------------
-  */
-
-  Future<void> submitRegistration() async {
-    if (!canRegister || registering) {
+  Future<void>
+      submitRegistration() async {
+    if (!canRegister ||
+        registering) {
       return;
     }
 
-    final XFile? selectedPhoto =
+    final selectedPhoto =
         profilePhoto;
 
-    final XFile? selectedForm5 =
+    final selectedForm5 =
         form5;
 
     if (selectedPhoto == null ||
         selectedForm5 == null) {
-      await showSimpleError(
-        title: 'Missing Documents',
-        message:
-            'Please upload both your reference photo and Form 5.',
-      );
-
       return;
     }
 
-    FocusScope.of(context).unfocus();
+    FocusScope.of(context)
+        .unfocus();
 
     setState(() {
       registering = true;
     });
 
     final result =
-        await RegistrationService.instance
+        await RegistrationService
+            .instance
             .register(
       studentNumber:
-          studentNumberController.text
-              .trim(),
+          studentNumberController
+              .text,
+
       surname:
-          surnameController.text.trim(),
+          surnameController.text,
+
       firstname:
-          firstNameController.text.trim(),
+          firstNameController.text,
+
       middlename:
-          middleNameController.text.trim(),
+          middleNameController.text,
+
       ext:
-          extensionController.text.trim(),
+          extensionController.text,
+
       email:
-          emailController.text.trim(),
+          emailController.text,
+
       password:
           passwordController.text,
+
       passwordConfirmation:
-          confirmPasswordController.text,
-      profilePhoto: selectedPhoto,
-      form5: selectedForm5,
+          confirmPasswordController
+              .text,
+
+      profilePhoto:
+          selectedPhoto,
+
+      form5:
+          selectedForm5,
     );
 
     if (!mounted) {
@@ -535,63 +566,35 @@ class _RegisterTabState extends State<RegisterTab> {
     });
 
     if (!result.success) {
-      await showDialog<void>(
-        context: context,
-        builder: (
-          BuildContext dialogContext,
-        ) {
-          return AppDialog(
-            type: AppDialogType.error,
-            title: 'Registration Failed',
-            message: result.message,
-            primaryText: 'Try Again',
-            primaryAction: () {
-              Navigator.of(
-                dialogContext,
-              ).pop();
-            },
-          );
-        },
+      await showSimpleError(
+        title:
+            'Registration Failed',
+        message:
+            result.message,
       );
 
       return;
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | SUCCESS
-    |--------------------------------------------------------------------------
-    |
-    | IMPORTANT:
-    |
-    | We do NOT send the student directly to the final dashboard here.
-    |
-    | Registration is only the first part.
-    |
-    | Next stage:
-    | Registration
-    |     ↓
-    | Live face/liveness verification
-    |     ↓
-    | Account verified
-    |     ↓
-    | Dashboard
-    |
-    */
-
     await showDialog<void>(
       context: context,
-      barrierDismissible: false,
-      builder: (
-        BuildContext dialogContext,
-      ) {
+      barrierDismissible:
+          false,
+      builder:
+          (dialogContext) {
         return AppDialog(
-          type: AppDialogType.success,
+          type:
+              AppDialogType.success,
+
           title:
               'Registration Successful',
+
           message:
-              'Your account has been created. The next step is to verify your identity using live facial verification.',
-          primaryText: 'Continue',
+              'Your account has been created. Continue to live face verification.',
+
+          primaryText:
+              'Continue',
+
           primaryAction: () {
             Navigator.of(
               dialogContext,
@@ -601,27 +604,21 @@ class _RegisterTabState extends State<RegisterTab> {
       },
     );
 
-    if (!mounted) {
-      return;
-    }
-
     /*
-     * For Stage 12 we leave the student here.
+     * Stage 14:
      *
-     * In the NEXT STAGE, this exact position
-     * will navigate to:
+     * Navigate from here to:
      *
      * RegistrationFaceVerificationScreen()
      *
-     * We do not create a fake dashboard redirect,
-     * because your system requires registration
-     * liveness + face verification first.
+     * We intentionally do NOT enter
+     * the dashboard yet.
      */
   }
 
   /*
   |--------------------------------------------------------------------------
-  | SIMPLE ERROR DIALOG
+  | ERROR DIALOG
   |--------------------------------------------------------------------------
   */
 
@@ -635,11 +632,11 @@ class _RegisterTabState extends State<RegisterTab> {
 
     await showDialog<void>(
       context: context,
-      builder: (
-        BuildContext dialogContext,
-      ) {
+      builder:
+          (dialogContext) {
         return AppDialog(
-          type: AppDialogType.error,
+          type:
+              AppDialogType.error,
           title: title,
           message: message,
           primaryText: 'Okay',
@@ -655,7 +652,7 @@ class _RegisterTabState extends State<RegisterTab> {
 
   /*
   |--------------------------------------------------------------------------
-  | BUILD
+  | UI
   |--------------------------------------------------------------------------
   */
 
@@ -664,7 +661,8 @@ class _RegisterTabState extends State<RegisterTab> {
     BuildContext context,
   ) {
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(
+      padding:
+          const EdgeInsets.fromLTRB(
         28,
         30,
         28,
@@ -674,22 +672,18 @@ class _RegisterTabState extends State<RegisterTab> {
         crossAxisAlignment:
             CrossAxisAlignment.start,
         children: [
-          /*
-          |--------------------------------------------------------------------------
-          | STUDENT NUMBER
-          |--------------------------------------------------------------------------
-          */
-
           AppTextField(
-            label: 'Student Number *',
-            hint: '23-140012',
+            label:
+                'Student Number *',
+            hint:
+                '24-010342',
             controller:
                 studentNumberController,
             keyboardType:
                 TextInputType.number,
             maxLength: 9,
             helperText:
-                'Format: YY-NNNNNN (example: 23-140012)',
+                'Format: YY-NNNNNN (example: 24-010342)',
             textInputAction:
                 TextInputAction.next,
             onChanged:
@@ -700,20 +694,14 @@ class _RegisterTabState extends State<RegisterTab> {
             height: 18,
           ),
 
-          /*
-          |--------------------------------------------------------------------------
-          | FIRST NAME + SURNAME
-          |--------------------------------------------------------------------------
-          */
-
           Row(
-            crossAxisAlignment:
-                CrossAxisAlignment.start,
             children: [
               Expanded(
                 child: AppTextField(
-                  label: 'First Name *',
-                  hint: 'First Name',
+                  label:
+                      'First Name *',
+                  hint:
+                      'First Name',
                   controller:
                       firstNameController,
                   textInputAction:
@@ -728,7 +716,8 @@ class _RegisterTabState extends State<RegisterTab> {
               ),
               Expanded(
                 child: AppTextField(
-                  label: 'Surname *',
+                  label:
+                      'Surname *',
                   hint: 'Surname',
                   controller:
                       surnameController,
@@ -746,33 +735,30 @@ class _RegisterTabState extends State<RegisterTab> {
             height: 18,
           ),
 
-          /*
-          |--------------------------------------------------------------------------
-          | MIDDLE NAME + EXTENSION
-          |--------------------------------------------------------------------------
-          */
-
           Row(
-            crossAxisAlignment:
-                CrossAxisAlignment.start,
             children: [
               Expanded(
                 flex: 2,
                 child: AppTextField(
-                  label: 'Middle Name',
-                  hint: 'Middle Name',
+                  label:
+                      'Middle Name',
+                  hint:
+                      'Middle Name',
                   controller:
                       middleNameController,
                   textInputAction:
                       TextInputAction.next,
                 ),
               ),
+
               const SizedBox(
                 width: 12,
               ),
+
               Expanded(
                 child: AppTextField(
-                  label: 'Extension',
+                  label:
+                      'Extension',
                   hint: 'Jr.',
                   controller:
                       extensionController,
@@ -787,16 +773,13 @@ class _RegisterTabState extends State<RegisterTab> {
             height: 18,
           ),
 
-          /*
-          |--------------------------------------------------------------------------
-          | EMAIL
-          |--------------------------------------------------------------------------
-          */
-
           AppTextField(
-            label: 'Email Address *',
-            hint: 'example@email.com',
-            controller: emailController,
+            label:
+                'Email Address *',
+            hint:
+                'example@email.com',
+            controller:
+                emailController,
             keyboardType:
                 TextInputType.emailAddress,
             textInputAction:
@@ -812,27 +795,13 @@ class _RegisterTabState extends State<RegisterTab> {
             const SizedBox(
               height: 6,
             ),
-            const Row(
-              children: [
-                Icon(
-                  Icons.error_outline_rounded,
-                  size: 14,
-                  color: AppColors.error,
-                ),
-                SizedBox(
-                  width: 6,
-                ),
-                Expanded(
-                  child: Text(
-                    'Enter a valid email address',
-                    style: TextStyle(
-                      fontSize: 10,
-                      color:
-                          AppColors.error,
-                    ),
-                  ),
-                ),
-              ],
+            const Text(
+              'Enter a valid email address',
+              style: TextStyle(
+                fontSize: 10,
+                color:
+                    AppColors.error,
+              ),
             ),
           ],
 
@@ -840,24 +809,22 @@ class _RegisterTabState extends State<RegisterTab> {
             height: 18,
           ),
 
-          /*
-          |--------------------------------------------------------------------------
-          | PASSWORD
-          |--------------------------------------------------------------------------
-          */
-
           AppTextField(
-            label: 'Set Password *',
-            hint: 'Enter your password',
+            label:
+                'Set Password *',
+            hint:
+                'Enter your password',
             controller:
                 passwordController,
-            obscureText: hidePassword,
+            obscureText:
+                hidePassword,
             textInputAction:
                 TextInputAction.next,
             onChanged: (_) {
               setState(() {});
             },
-            suffixIcon: IconButton(
+            suffixIcon:
+                IconButton(
               onPressed: () {
                 setState(() {
                   hidePassword =
@@ -879,12 +846,15 @@ class _RegisterTabState extends State<RegisterTab> {
           ),
 
           _PasswordRequirement(
-            passed: hasMinimumLength,
-            text: 'At least 8 characters',
+            passed:
+                hasMinimumLength,
+            text:
+                'At least 8 characters',
           ),
 
           _PasswordRequirement(
-            passed: hasUppercase,
+            passed:
+                hasUppercase,
             text:
                 'At least one uppercase letter',
           ),
@@ -900,14 +870,9 @@ class _RegisterTabState extends State<RegisterTab> {
             height: 18,
           ),
 
-          /*
-          |--------------------------------------------------------------------------
-          | CONFIRM PASSWORD
-          |--------------------------------------------------------------------------
-          */
-
           AppTextField(
-            label: 'Confirm Password *',
+            label:
+                'Confirm Password *',
             hint:
                 'Confirm your password',
             controller:
@@ -919,7 +884,8 @@ class _RegisterTabState extends State<RegisterTab> {
             onChanged: (_) {
               setState(() {});
             },
-            suffixIcon: IconButton(
+            suffixIcon:
+                IconButton(
               onPressed: () {
                 setState(() {
                   hideConfirmPassword =
@@ -941,6 +907,7 @@ class _RegisterTabState extends State<RegisterTab> {
             const SizedBox(
               height: 7,
             ),
+
             Row(
               children: [
                 Icon(
@@ -950,27 +917,29 @@ class _RegisterTabState extends State<RegisterTab> {
                       : Icons
                           .cancel_rounded,
                   size: 15,
-                  color: passwordsMatch
-                      ? AppColors.success
-                      : AppColors.error,
+                  color:
+                      passwordsMatch
+                          ? AppColors
+                              .success
+                          : AppColors
+                              .error,
                 ),
                 const SizedBox(
                   width: 6,
                 ),
-                Expanded(
-                  child: Text(
-                    passwordsMatch
-                        ? 'Passwords match'
-                        : 'Passwords do not match',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color:
-                          passwordsMatch
-                              ? AppColors
-                                  .success
-                              : AppColors
-                                  .error,
-                    ),
+                Text(
+                  passwordsMatch
+                      ? 'Passwords match'
+                      : 'Passwords do not match',
+                  style:
+                      TextStyle(
+                    fontSize: 11,
+                    color:
+                        passwordsMatch
+                            ? AppColors
+                                .success
+                            : AppColors
+                                .error,
                   ),
                 ),
               ],
@@ -993,8 +962,6 @@ class _RegisterTabState extends State<RegisterTab> {
               fontSize: 14,
               fontWeight:
                   FontWeight.w600,
-              color:
-                  AppColors.textPrimary,
             ),
           ),
 
@@ -1003,7 +970,7 @@ class _RegisterTabState extends State<RegisterTab> {
           ),
 
           const Text(
-            'Upload a clear photo containing exactly one visible face.',
+            'Upload one clear face photo. The actual server will validate it before registration.',
             style: TextStyle(
               fontSize: 11,
               height: 1.4,
@@ -1026,15 +993,17 @@ class _RegisterTabState extends State<RegisterTab> {
                 BorderRadius.circular(
               16,
             ),
-            child: AnimatedContainer(
-              duration: const Duration(
+            child:
+                AnimatedContainer(
+              duration:
+                  const Duration(
                 milliseconds: 180,
               ),
-              width: double.infinity,
+              width:
+                  double.infinity,
               padding:
-                  const EdgeInsets.symmetric(
-                horizontal: 18,
-                vertical: 22,
+                  const EdgeInsets.all(
+                22,
               ),
               decoration:
                   BoxDecoration(
@@ -1043,10 +1012,14 @@ class _RegisterTabState extends State<RegisterTab> {
                     BorderRadius.circular(
                   16,
                 ),
-                border: Border.all(
-                  color: facePhotoValid
-                      ? AppColors.success
-                      : AppColors.gold,
+                border:
+                    Border.all(
+                  color:
+                      facePhotoValid
+                          ? AppColors
+                              .success
+                          : AppColors
+                              .gold,
                   width: 1.3,
                 ),
               ),
@@ -1054,72 +1027,53 @@ class _RegisterTabState extends State<RegisterTab> {
                 children: [
                   if (validatingPhoto)
                     const SizedBox(
-                      width: 40,
-                      height: 40,
+                      width: 42,
+                      height: 42,
                       child:
                           CircularProgressIndicator(
-                        strokeWidth: 3,
+                        strokeWidth:
+                            3,
                         color:
-                            AppColors.navy,
+                            AppColors
+                                .navy,
                       ),
                     )
                   else
-                    Container(
-                      width: 54,
-                      height: 54,
-                      decoration:
-                          BoxDecoration(
-                        shape:
-                            BoxShape.circle,
-                        color: facePhotoValid
-                            ? AppColors
-                                .success
-                                .withValues(
-                                alpha:
-                                    0.10,
-                              )
-                            : AppColors
-                                .navy
-                                .withValues(
-                                alpha:
-                                    0.07,
-                              ),
-                      ),
-                      child: Icon(
-                        facePhotoValid
-                            ? Icons
-                                .check_rounded
-                            : Icons
-                                .add_a_photo_outlined,
-                        size: 31,
-                        color:
-                            facePhotoValid
-                                ? AppColors
-                                    .success
-                                : AppColors
-                                    .navy,
-                      ),
+                    Icon(
+                      facePhotoValid
+                          ? Icons
+                              .verified_rounded
+                          : Icons
+                              .add_a_photo_outlined,
+                      size: 48,
+                      color:
+                          facePhotoValid
+                              ? AppColors
+                                  .success
+                              : AppColors
+                                  .navy,
                     ),
 
                   const SizedBox(
-                    height: 11,
+                    height: 10,
                   ),
 
                   Text(
-                    profilePhoto?.name ??
+                    profilePhoto
+                            ?.name ??
                         'Upload Reference Photo',
                     textAlign:
                         TextAlign.center,
                     maxLines: 2,
                     overflow:
-                        TextOverflow.ellipsis,
+                        TextOverflow
+                            .ellipsis,
                     style:
                         const TextStyle(
                       fontSize: 13,
                       fontWeight:
-                          FontWeight.w600,
-                      color: AppColors
-                          .textPrimary,
+                          FontWeight
+                              .w600,
                     ),
                   ),
 
@@ -1129,19 +1083,20 @@ class _RegisterTabState extends State<RegisterTab> {
 
                   Text(
                     validatingPhoto
-                        ? 'Checking image...'
+                        ? 'Validating with face service...'
                         : photoValidationMessage ??
-                            'JPG, JPEG, PNG or HEIC',
+                            'JPG, JPEG or PNG',
                     textAlign:
                         TextAlign.center,
                     style:
                         TextStyle(
                       fontSize: 11,
-                      height: 1.4,
-                      color: facePhotoValid
-                          ? AppColors.success
-                          : AppColors
-                              .textSecondary,
+                      color:
+                          facePhotoValid
+                              ? AppColors
+                                  .success
+                              : AppColors
+                                  .textSecondary,
                     ),
                   ),
 
@@ -1149,29 +1104,15 @@ class _RegisterTabState extends State<RegisterTab> {
                           null &&
                       !validatingPhoto) ...[
                     const SizedBox(
-                      height: 9,
+                      height: 7,
                     ),
-                    TextButton.icon(
+
+                    TextButton(
                       onPressed:
-                          registering
-                              ? null
-                              : removeProfilePhoto,
-                      icon: const Icon(
-                        Icons
-                            .delete_outline_rounded,
-                        size: 16,
-                      ),
-                      label:
+                          removeProfilePhoto,
+                      child:
                           const Text(
-                        'Remove photo',
-                      ),
-                      style:
-                          TextButton.styleFrom(
-                        foregroundColor:
-                            AppColors.error,
-                        visualDensity:
-                            VisualDensity
-                                .compact,
+                        'Remove Photo',
                       ),
                     ),
                   ],
@@ -1207,7 +1148,6 @@ class _RegisterTabState extends State<RegisterTab> {
             'Upload your current Form 5 for student information verification.',
             style: TextStyle(
               fontSize: 11,
-              height: 1.4,
               color:
                   AppColors.textSecondary,
             ),
@@ -1225,15 +1165,12 @@ class _RegisterTabState extends State<RegisterTab> {
                 BorderRadius.circular(
               16,
             ),
-            child: AnimatedContainer(
-              duration: const Duration(
-                milliseconds: 180,
-              ),
-              width: double.infinity,
+            child: Container(
+              width:
+                  double.infinity,
               padding:
-                  const EdgeInsets.symmetric(
-                horizontal: 18,
-                vertical: 24,
+                  const EdgeInsets.all(
+                22,
               ),
               decoration:
                   BoxDecoration(
@@ -1242,47 +1179,35 @@ class _RegisterTabState extends State<RegisterTab> {
                     BorderRadius.circular(
                   16,
                 ),
-                border: Border.all(
-                  color: form5 != null
-                      ? AppColors.success
-                      : AppColors.gold,
-                  width: 1.3,
+                border:
+                    Border.all(
+                  color: form5 !=
+                          null
+                      ? AppColors
+                          .success
+                      : AppColors
+                          .gold,
                 ),
               ),
               child: Column(
                 children: [
-                  Container(
-                    width: 54,
-                    height: 54,
-                    decoration:
-                        BoxDecoration(
-                      shape:
-                          BoxShape.circle,
-                      color: form5 != null
-                          ? AppColors.success
-                              .withValues(
-                              alpha: 0.10,
-                            )
-                          : AppColors.navy
-                              .withValues(
-                              alpha: 0.07,
-                            ),
-                    ),
-                    child: Icon(
-                      form5 != null
-                          ? Icons
-                              .check_rounded
-                          : Icons
-                              .upload_file_outlined,
-                      size: 31,
-                      color: form5 != null
-                          ? AppColors.success
-                          : AppColors.navy,
-                    ),
+                  Icon(
+                    form5 != null
+                        ? Icons
+                            .check_circle_outline_rounded
+                        : Icons
+                            .upload_file_outlined,
+                    size: 45,
+                    color:
+                        form5 != null
+                            ? AppColors
+                                .success
+                            : AppColors
+                                .navy,
                   ),
 
                   const SizedBox(
-                    height: 10,
+                    height: 8,
                   ),
 
                   Text(
@@ -1290,15 +1215,6 @@ class _RegisterTabState extends State<RegisterTab> {
                         'Upload your Form 5',
                     textAlign:
                         TextAlign.center,
-                    maxLines: 2,
-                    overflow:
-                        TextOverflow.ellipsis,
-                    style:
-                        const TextStyle(
-                      fontSize: 13,
-                      fontWeight:
-                          FontWeight.w600,
-                    ),
                   ),
 
                   const SizedBox(
@@ -1310,38 +1226,21 @@ class _RegisterTabState extends State<RegisterTab> {
                     style: TextStyle(
                       fontSize: 10,
                       color:
-                          AppColors.textMuted,
+                          AppColors
+                              .textMuted,
                     ),
                   ),
 
-                  if (form5 != null) ...[
-                    const SizedBox(
-                      height: 9,
-                    ),
-                    TextButton.icon(
+                  if (form5 !=
+                      null)
+                    TextButton(
                       onPressed:
-                          registering
-                              ? null
-                              : removeForm5,
-                      icon: const Icon(
-                        Icons
-                            .delete_outline_rounded,
-                        size: 16,
-                      ),
-                      label:
+                          removeForm5,
+                      child:
                           const Text(
                         'Remove Form 5',
                       ),
-                      style:
-                          TextButton.styleFrom(
-                        foregroundColor:
-                            AppColors.error,
-                        visualDensity:
-                            VisualDensity
-                                .compact,
-                      ),
                     ),
-                  ],
                 ],
               ),
             ),
@@ -1353,23 +1252,27 @@ class _RegisterTabState extends State<RegisterTab> {
 
           /*
           |--------------------------------------------------------------------------
-          | REGISTER
+          | CREATE ACCOUNT
           |--------------------------------------------------------------------------
           */
 
           SizedBox(
-            width: double.infinity,
-            child: FilledButton(
-              onPressed: canRegister
-                  ? submitRegistration
-                  : null,
+            width:
+                double.infinity,
+            child:
+                FilledButton(
+              onPressed:
+                  canRegister
+                      ? submitRegistration
+                      : null,
               child: registering
                   ? const SizedBox(
                       width: 23,
                       height: 23,
                       child:
                           CircularProgressIndicator(
-                        strokeWidth: 2.5,
+                        strokeWidth:
+                            2.5,
                         color:
                             Colors.white,
                       ),
@@ -1385,21 +1288,14 @@ class _RegisterTabState extends State<RegisterTab> {
           ),
 
           const Center(
-            child: Padding(
-              padding:
-                  EdgeInsets.symmetric(
-                horizontal: 20,
-              ),
-              child: Text(
-                'Your information, Form 5 and reference photo will be verified before your account is fully activated.',
-                textAlign:
-                    TextAlign.center,
-                style: TextStyle(
-                  fontSize: 10,
-                  height: 1.5,
-                  color:
-                      AppColors.textMuted,
-                ),
+            child: Text(
+              'Your account will require live facial verification before activation.',
+              textAlign:
+                  TextAlign.center,
+              style: TextStyle(
+                fontSize: 10,
+                color:
+                    AppColors.textMuted,
               ),
             ),
           ),
@@ -1451,16 +1347,14 @@ class _PasswordRequirement
           const SizedBox(
             width: 7,
           ),
-          Expanded(
-            child: Text(
-              text,
-              style: TextStyle(
-                fontSize: 10,
-                color: passed
-                    ? AppColors.success
-                    : AppColors
-                        .textSecondary,
-              ),
+          Text(
+            text,
+            style: TextStyle(
+              fontSize: 10,
+              color: passed
+                  ? AppColors.success
+                  : AppColors
+                      .textSecondary,
             ),
           ),
         ],

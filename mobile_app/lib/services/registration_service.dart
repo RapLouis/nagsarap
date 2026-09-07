@@ -1,18 +1,48 @@
 import 'package:dio/dio.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:file_selector/file_selector.dart';
 
 import '../core/api_endpoints.dart';
 import 'api_service.dart';
 
+/*
+|--------------------------------------------------------------------------
+| PHOTO VALIDATION RESULT
+|--------------------------------------------------------------------------
+*/
+
+class ReferencePhotoValidationResult {
+  final bool success;
+
+  final String message;
+
+  final String? code;
+
+  const ReferencePhotoValidationResult({
+    required this.success,
+    required this.message,
+    this.code,
+  });
+}
+
+/*
+|--------------------------------------------------------------------------
+| REGISTRATION RESULT
+|--------------------------------------------------------------------------
+*/
+
 class RegistrationResult {
   final bool success;
+
   final String message;
+
+  final String? code;
+
   final Map<String, dynamic>? data;
 
   const RegistrationResult({
     required this.success,
     required this.message,
+    this.code,
     this.data,
   });
 }
@@ -23,7 +53,90 @@ class RegistrationService {
   static final RegistrationService instance =
       RegistrationService._();
 
-  final ApiService _api = ApiService.instance;
+  final ApiService _api =
+      ApiService.instance;
+
+  /*
+  |--------------------------------------------------------------------------
+  | VALIDATE REFERENCE PHOTO
+  |--------------------------------------------------------------------------
+  |
+  | Runs BEFORE account registration.
+  |
+  */
+
+  Future<ReferencePhotoValidationResult>
+      validateReferencePhoto({
+    required XFile profilePhoto,
+  }) async {
+    try {
+      final formData = FormData.fromMap({
+        'profile_photo':
+            await MultipartFile.fromFile(
+          profilePhoto.path,
+          filename:
+              profilePhoto.name,
+        ),
+      });
+
+      final response =
+          await _api.dio.post(
+        ApiEndpoints
+            .validateReferencePhoto,
+        data: formData,
+        options: Options(
+          contentType:
+              'multipart/form-data',
+        ),
+      );
+
+      final dynamic raw =
+          response.data;
+
+      if (raw is! Map) {
+        return const ReferencePhotoValidationResult(
+          success: false,
+          message:
+              'Invalid response from the server.',
+        );
+      }
+
+      final data =
+          Map<String, dynamic>.from(
+        raw,
+      );
+
+      return ReferencePhotoValidationResult(
+        success:
+            data['success'] == true,
+        code:
+            data['code']?.toString(),
+        message:
+            data['message']?.toString() ??
+                'Photo validation completed.',
+      );
+    } on DioException catch (e) {
+      return ReferencePhotoValidationResult(
+        success: false,
+        code:
+            _extractCode(e),
+        message:
+            _extractErrorMessage(e),
+      );
+    } catch (e) {
+      return const ReferencePhotoValidationResult(
+        success: false,
+        message:
+            'Unable to validate the reference photo.',
+      );
+    }
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | REGISTER
+  |--------------------------------------------------------------------------
+  */
 
   Future<RegistrationResult> register({
     required String studentNumber,
@@ -38,80 +151,187 @@ class RegistrationService {
     required XFile form5,
   }) async {
     try {
-      final formData = FormData.fromMap({
-        'student_number': studentNumber.trim(),
-        'surname': surname.trim(),
-        'firstname': firstname.trim(),
-        'middlename': middlename.trim().isEmpty
-            ? null
-            : middlename.trim(),
-        'ext': ext.trim().isEmpty
-            ? null
-            : ext.trim(),
-        'email': email.trim(),
-        'password': password,
-        'password_confirmation': passwordConfirmation,
+      final formData =
+          FormData.fromMap({
+        'student_number':
+            studentNumber.trim(),
 
-        'profile_photo': await MultipartFile.fromFile(
+        'surname':
+            surname.trim(),
+
+        'firstname':
+            firstname.trim(),
+
+        'middlename':
+            middlename.trim().isEmpty
+                ? null
+                : middlename.trim(),
+
+        'ext':
+            ext.trim().isEmpty
+                ? null
+                : ext.trim(),
+
+        'email':
+            email.trim(),
+
+        'password':
+            password,
+
+        'password_confirmation':
+            passwordConfirmation,
+
+        'device_name':
+            'Flutter Android',
+
+        'profile_photo':
+            await MultipartFile.fromFile(
           profilePhoto.path,
-          filename: profilePhoto.name,
+          filename:
+              profilePhoto.name,
         ),
 
-        'form_5': await MultipartFile.fromFile(
+        'form_5':
+            await MultipartFile.fromFile(
           form5.path,
-          filename: form5.name,
+          filename:
+              form5.name,
         ),
       });
 
-      final response = await _api.dio.post(
+      final response =
+          await _api.dio.post(
         ApiEndpoints.register,
         data: formData,
         options: Options(
-          contentType: 'multipart/form-data',
+          contentType:
+              'multipart/form-data',
         ),
       );
 
-      final raw = response.data;
+      final dynamic raw =
+          response.data;
 
       if (raw is! Map) {
         return const RegistrationResult(
           success: false,
-          message: 'Invalid response from server.',
+          message:
+              'Invalid response from server.',
         );
       }
 
-      final data = Map<String, dynamic>.from(raw);
+      final responseMap =
+          Map<String, dynamic>.from(
+        raw,
+      );
 
-      final token = data['token'] ??
-          data['access_token'];
+      /*
+      |--------------------------------------------------------------------------
+      | YOUR LARAVEL RESPONSE STRUCTURE
+      |--------------------------------------------------------------------------
+      |
+      | {
+      |   success: true,
+      |   code: "...",
+      |   message: "...",
+      |   data: {
+      |     token: "...",
+      |     user: {...},
+      |     student: {...}
+      |   }
+      | }
+      |
+      */
+
+      Map<String, dynamic> data = {};
+
+      if (responseMap['data']
+          is Map) {
+        data =
+            Map<String, dynamic>.from(
+          responseMap['data']
+              as Map,
+        );
+      }
+
+      /*
+      |--------------------------------------------------------------------------
+      | SAVE SANCTUM TOKEN
+      |--------------------------------------------------------------------------
+      */
+
+      final dynamic token =
+          data['token'];
 
       if (token != null &&
-          token.toString().isNotEmpty) {
+          token
+              .toString()
+              .isNotEmpty) {
         await _api.saveToken(
           token.toString(),
         );
       }
 
       return RegistrationResult(
-        success: true,
+        success:
+            responseMap['success'] ==
+                    true ||
+                response.statusCode ==
+                    201,
+
+        code:
+            responseMap['code']
+                ?.toString(),
+
         message:
-            data['message']?.toString() ??
+            responseMap['message']
+                    ?.toString() ??
                 'Registration successful.',
+
         data: data,
       );
     } on DioException catch (e) {
       return RegistrationResult(
         success: false,
-        message: _extractErrorMessage(e),
+        code:
+            _extractCode(e),
+        message:
+            _extractErrorMessage(e),
       );
     } catch (e) {
-      return RegistrationResult(
+      return const RegistrationResult(
         success: false,
         message:
             'Unable to register. Please try again.',
       );
     }
   }
+
+  /*
+  |--------------------------------------------------------------------------
+  | EXTRACT CODE
+  |--------------------------------------------------------------------------
+  */
+
+  String? _extractCode(
+    DioException exception,
+  ) {
+    final dynamic raw =
+        exception.response?.data;
+
+    if (raw is Map) {
+      return raw['code']
+          ?.toString();
+    }
+
+    return null;
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | ERROR MESSAGE
+  |--------------------------------------------------------------------------
+  */
 
   String _extractErrorMessage(
     DioException exception,
@@ -120,18 +340,41 @@ class RegistrationService {
         exception.response;
 
     if (response == null) {
-      return 'Unable to connect to the server.';
+      return 'Unable to connect to the server. Make sure Laravel and the required services are running.';
     }
 
-    final raw = response.data;
+    final dynamic raw =
+        response.data;
 
     if (raw is Map) {
       final data =
-          Map<String, dynamic>.from(raw);
+          Map<String, dynamic>.from(
+        raw,
+      );
+
+      /*
+       * Direct message from Laravel.
+       */
 
       if (data['message'] != null) {
-        return data['message'].toString();
+        final String message =
+            data['message']
+                .toString();
+
+        /*
+         * Laravel validation often has a generic
+         * "The given data was invalid" message.
+         * Prefer the individual errors when available.
+         */
+
+        if (data['errors'] is! Map) {
+          return message;
+        }
       }
+
+      /*
+       * Laravel validation errors.
+       */
 
       if (data['errors'] is Map) {
         final errors =
@@ -140,26 +383,44 @@ class RegistrationService {
         );
 
         if (errors.isNotEmpty) {
-          final first =
+          final dynamic first =
               errors.values.first;
 
           if (first is List &&
               first.isNotEmpty) {
-            return first.first.toString();
+            return first.first
+                .toString();
           }
 
           return first.toString();
         }
       }
+
+      if (data['message'] != null) {
+        return data['message']
+            .toString();
+      }
     }
 
-    switch (response.statusCode) {
+    switch (
+        response.statusCode) {
+      case 401:
+        return 'Authentication is required.';
+
+      case 409:
+        return 'This information is already registered.';
+
+      case 413:
+        return 'The selected file is too large.';
+
       case 422:
-        return 'Please check your registration information.';
+        return 'The selected information could not be validated.';
+
       case 500:
         return 'The server encountered an error.';
+
       default:
-        return 'Registration failed.';
+        return 'Unable to complete the request.';
     }
   }
 }

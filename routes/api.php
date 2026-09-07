@@ -42,6 +42,10 @@ Route::prefix('v1')->group(function () {
     Route::post('/register', [RegistrationController::class, 'register'])
         ->middleware('throttle:5,1');
 
+    Route::post(
+    '/register/validate-photo',
+    [RegistrationController::class, 'validatePhoto']
+);
 
     /*
     |--------------------------------------------------------------------------

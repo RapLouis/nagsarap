@@ -26,11 +26,17 @@ class CreateNewUser implements CreatesNewUsers
         private readonly FaceService $faceService,
     ) {}
 
+    /*
+    |--------------------------------------------------------------------------
+    | CREATE USER
+    |--------------------------------------------------------------------------
+    */
+
     public function create(array $input): User
     {
         /*
         |--------------------------------------------------------------------------
-        | 1. Validate registration data
+        | 1. VALIDATE REGISTRATION DATA
         |--------------------------------------------------------------------------
         */
 
@@ -42,13 +48,22 @@ class CreateNewUser implements CreatesNewUsers
                     'string',
                     'max:20',
 
-                    // Format: 23-140012
-                    // 23 = year
-                    // 14 = college
-                    // 0012 = sequence
+                    /*
+                     * Format:
+                     *
+                     * 24-010342
+                     *
+                     * 24   = year
+                     * 01   = college code
+                     * 0342 = student sequence
+                     */
+
                     'regex:/^\d{2}-\d{6}$/',
 
-                    Rule::unique('students', 'student_number'),
+                    Rule::unique(
+                        'students',
+                        'student_number'
+                    ),
                 ],
 
                 'surname' => [
@@ -80,8 +95,16 @@ class CreateNewUser implements CreatesNewUsers
                     'string',
                     'email',
                     'max:255',
-                    Rule::unique('users', 'email'),
-                    Rule::unique('students', 'email'),
+
+                    Rule::unique(
+                        'users',
+                        'email'
+                    ),
+
+                    Rule::unique(
+                        'students',
+                        'email'
+                    ),
                 ],
 
                 'password' => [
@@ -90,12 +113,24 @@ class CreateNewUser implements CreatesNewUsers
                     'min:8',
                     'confirmed',
 
-                    // At least one uppercase letter
+                    /*
+                     * At least one uppercase letter.
+                     */
+
                     'regex:/[A-Z]/',
 
-                    // At least one special character
+                    /*
+                     * At least one special character.
+                     */
+
                     'regex:/[^A-Za-z0-9]/',
                 ],
+
+                /*
+                |--------------------------------------------------------------------------
+                | REFERENCE PHOTO
+                |--------------------------------------------------------------------------
+                */
 
                 'profile_photo' => [
                     'required',
@@ -106,13 +141,19 @@ class CreateNewUser implements CreatesNewUsers
                 ],
 
                 /*
-                 * Do NOT depend on MIME detection for Form 5.
-                 *
-                 * Some valid PDFs from macOS/browser uploads can be
-                 * detected as application/octet-stream.
-                 *
-                 * We validate the actual PDF signature below.
-                 */
+                |--------------------------------------------------------------------------
+                | FORM 5
+                |--------------------------------------------------------------------------
+                |
+                | Do not depend entirely on MIME detection.
+                |
+                | Some valid PDFs uploaded from macOS or browsers may be
+                | detected as application/octet-stream.
+                |
+                | The actual PDF signature is checked below.
+                |
+                */
+
                 'form_5' => [
                     'required',
                     'file',
@@ -121,97 +162,186 @@ class CreateNewUser implements CreatesNewUsers
             ],
             [
                 'student_number.regex' =>
-                    'Student number must follow the format 23-140012.',
+                    'Student number must follow the format 24-010342.',
+
+                'student_number.unique' =>
+                    'This student number is already registered.',
+
+                'email.unique' =>
+                    'This email address is already registered.',
 
                 'password.min' =>
                     'Password must contain at least 8 characters.',
 
+                'password.confirmed' =>
+                    'Password confirmation does not match.',
+
                 'password.regex' =>
                     'Password must contain an uppercase letter and a special character.',
+
+                'profile_photo.required' =>
+                    'A reference photo is required.',
+
+                'form_5.required' =>
+                    'Your Form 5 document is required.',
             ]
         )->validate();
 
         /*
         |--------------------------------------------------------------------------
-        | 2. Normalize student number
+        | 2. NORMALIZE STUDENT NUMBER
         |--------------------------------------------------------------------------
         */
 
-        $studentNumber = trim($input['student_number']);
+        $studentNumber = trim(
+            $input['student_number']
+        );
 
         /*
         |--------------------------------------------------------------------------
-        | 3. Extract information from student number
+        | 3. EXTRACT INFORMATION FROM STUDENT NUMBER
         |--------------------------------------------------------------------------
         |
         | Example:
         |
-        | 23-140012
+        | 24-010342
         |
-        | 23   = year code
-        | 14   = college code
-        | 0012 = student sequence
+        | 24   = year code
+        | 01   = college code
+        | 0342 = unique sequence
         |
         */
 
-        if (!preg_match(
-            '/^(\d{2})-(\d{2})(\d{4})$/',
-            $studentNumber,
-            $matches
-        )) {
+        if (
+            !preg_match(
+                '/^(\d{2})-(\d{2})(\d{4})$/',
+                $studentNumber,
+                $matches
+            )
+        ) {
             throw ValidationException::withMessages([
                 'student_number' =>
-                    'Invalid student number. Expected format: 23-140012.',
+                    'Invalid student number. Expected format: 24-010342.',
             ]);
         }
 
         $yearCode = $matches[1];
+
         $collegeCode = $matches[2];
+
         $studentSequence = $matches[3];
 
         /*
         |--------------------------------------------------------------------------
-        | 4. College mapping
+        | 4. COLLEGE MAPPING
         |--------------------------------------------------------------------------
         |
-        | Add more colleges here later without changing the registration UI.
+        | Known college codes:
+        |
+        | 01 = CAFSD
+        | 02 = CAS
+        | 03 = CBEA
+        | 04 = CTE
+        | 05 = COE
+        | 06 = UNKNOWN FOR NOW
+        | 07 = CIT
+        | 08 = CHS
+        | 09 = GS
+        | 10 = UNKNOWN FOR NOW
+        | 11 = UNKNOWN FOR NOW
+        | 12 = CVM
+        | 13 = UNKNOWN FOR NOW
+        | 14 = CCIS
+        | 15 = UNKNOWN FOR NOW
+        | 16 = UNKNOWN FOR NOW
+        |
+        | IMPORTANT:
+        |
+        | Unknown college names are intentionally stored as an empty
+        | string for now. Their college CODE is still valid.
         |
         */
 
         $collegeMap = [
+            '01' => 'CAFSD',
+            '02' => 'CAS',
+            '03' => 'CBEA',
+            '04' => 'CTE',
+            '05' => 'COE',
+            '06' => '',
+            '07' => 'CIT',
+            '08' => 'CHS',
+            '09' => 'GS',
+            '10' => '',
+            '11' => '',
+            '12' => 'CVM',
+            '13' => '',
             '14' => 'CCIS',
-
-            // Future examples:
-            // '11' => 'College Name',
-            // '12' => 'College Name',
-            // '13' => 'College Name',
+            '15' => '',
+            '16' => '',
         ];
 
-        if (!array_key_exists($collegeCode, $collegeMap)) {
+        /*
+         * Reject codes that are completely outside the
+         * currently recognized 01-16 range.
+         *
+         * Blank values inside the map are NOT rejected.
+         */
+
+        if (
+            !array_key_exists(
+                $collegeCode,
+                $collegeMap
+            )
+        ) {
             throw ValidationException::withMessages([
                 'student_number' =>
                     "College code {$collegeCode} from the student number is not recognized.",
             ]);
         }
 
-        $college = $collegeMap[$collegeCode];
+        /*
+         * Example:
+         *
+         * 24-010342
+         *
+         * college_code = 01
+         * college      = CAFSD
+         *
+         *
+         * Example with unknown college name:
+         *
+         * 24-060342
+         *
+         * college_code = 06
+         * college      = ''
+         */
+
+        $college = $collegeMap[
+            $collegeCode
+        ];
 
         /*
         |--------------------------------------------------------------------------
-        | 5. Validate the actual Form 5 file
+        | 5. VALIDATE ACTUAL FORM 5 FILE
         |--------------------------------------------------------------------------
         |
-        | We inspect the PDF signature instead of trusting browser MIME type.
+        | Check the actual PDF signature instead of trusting
+        | the browser/device MIME type.
         |
         */
 
-        $form5File = $input['form_5'];
+        $form5File =
+            $input['form_5'];
 
-        $temporaryPdfPath = $form5File->getRealPath();
+        $temporaryPdfPath =
+            $form5File->getRealPath();
 
         if (
             !$temporaryPdfPath ||
-            !is_file($temporaryPdfPath)
+            !is_file(
+                $temporaryPdfPath
+            )
         ) {
             throw ValidationException::withMessages([
                 'form_5' =>
@@ -219,7 +349,10 @@ class CreateNewUser implements CreatesNewUsers
             ]);
         }
 
-        $handle = fopen($temporaryPdfPath, 'rb');
+        $handle = fopen(
+            $temporaryPdfPath,
+            'rb'
+        );
 
         if ($handle === false) {
             throw ValidationException::withMessages([
@@ -229,16 +362,23 @@ class CreateNewUser implements CreatesNewUsers
         }
 
         /*
-         * Read enough bytes to tolerate a BOM or small amount
-         * of metadata before %PDF-.
+         * Read enough bytes to tolerate a BOM or a small
+         * amount of metadata before the PDF signature.
          */
-        $header = fread($handle, 4096);
+
+        $header = fread(
+            $handle,
+            4096
+        );
 
         fclose($handle);
 
         if (
             $header === false ||
-            strpos($header, '%PDF-') === false
+            strpos(
+                $header,
+                '%PDF-'
+            ) === false
         ) {
             throw ValidationException::withMessages([
                 'form_5' =>
@@ -248,8 +388,12 @@ class CreateNewUser implements CreatesNewUsers
 
         /*
         |--------------------------------------------------------------------------
-        | 6. Verify reference face before DB creation
+        | 6. VERIFY REFERENCE FACE BEFORE DATABASE CREATION
         |--------------------------------------------------------------------------
+        |
+        | The Python face service checks whether a usable face
+        | can be extracted from the uploaded reference photo.
+        |
         */
 
         try {
@@ -261,13 +405,23 @@ class CreateNewUser implements CreatesNewUsers
         } catch (RuntimeException $e) {
             throw ValidationException::withMessages([
                 'profile_photo' =>
-                    'Reference Photo Error: '.$e->getMessage(),
+                    'Reference Photo Error: ' .
+                    $e->getMessage(),
             ]);
         }
 
+        /*
+         * InsightFace embeddings should contain substantially
+         * more than 100 values.
+         */
+
         if (
-            !is_array($photoEmbedding) ||
-            count($photoEmbedding) < 100
+            !is_array(
+                $photoEmbedding
+            ) ||
+            count(
+                $photoEmbedding
+            ) < 100
         ) {
             throw ValidationException::withMessages([
                 'profile_photo' =>
@@ -277,73 +431,132 @@ class CreateNewUser implements CreatesNewUsers
 
         /*
         |--------------------------------------------------------------------------
-        | 7. Store files privately
+        | 7. STORE FILES PRIVATELY
         |--------------------------------------------------------------------------
         */
 
         $photoPath = null;
+
         $pdfPath = null;
 
         try {
-            $photoPath =
-                $input['profile_photo']->store(
-                    'profile_photos',
-                    'private'
-                );
-
-            $pdfPath =
-                $input['form_5']->store(
-                    'form_5_documents',
-                    'private'
-                );
-
-            $pdfAbsolutePath =
-                Storage::disk('private')->path($pdfPath);
-
             /*
             |--------------------------------------------------------------------------
-            | 8. OCR / Form 5 verification
+            | STORE REFERENCE PHOTO
             |--------------------------------------------------------------------------
             */
 
-            $expectedFullName = implode(
-                ' ',
-                array_filter([
-                    trim($input['firstname']),
-                    trim($input['middlename'] ?? ''),
-                    trim($input['surname']),
-                    trim($input['ext'] ?? ''),
-                ])
-            );
-
-            $verificationResult =
-                $this->form5Service->verifyAndExtract(
-                    $pdfAbsolutePath,
-                    $studentNumber,
-                    $expectedFullName,
-                );
-
-            if (
-                !isset($verificationResult['is_verified']) ||
-                !$verificationResult['is_verified']
-            ) {
-                $isLatestTerm =
-                    $verificationResult['is_latest_term']
-                    ?? true;
-
-                throw ValidationException::withMessages([
-                    'form_5' => !$isLatestTerm
-                        ? 'The uploaded Form 5 is not valid for the current academic year or semester.'
-                        : 'Form 5 verification failed. Make sure the student number and name match the uploaded Form 5.',
-                ]);
-            }
-
-            $extractedData =
-                $verificationResult['data'] ?? [];
+            $photoPath =
+                $input['profile_photo']
+                    ->store(
+                        'profile_photos',
+                        'private'
+                    );
 
             /*
             |--------------------------------------------------------------------------
-            | 9. Create Student + User atomically
+            | STORE FORM 5
+            |--------------------------------------------------------------------------
+            */
+
+            $pdfPath =
+                $input['form_5']
+                    ->store(
+                        'form_5_documents',
+                        'private'
+                    );
+
+            /*
+             * Get the absolute path so the OCR service can
+             * process the stored PDF.
+             */
+
+            $pdfAbsolutePath =
+                Storage::disk(
+                    'private'
+                )->path(
+                    $pdfPath
+                );
+
+            /*
+            |--------------------------------------------------------------------------
+            | 8. OCR / FORM 5 VERIFICATION
+            |--------------------------------------------------------------------------
+            */
+
+            $expectedFullName =
+                implode(
+                    ' ',
+                    array_filter([
+                        trim(
+                            $input['firstname']
+                        ),
+
+                        trim(
+                            $input['middlename']
+                                ?? ''
+                        ),
+
+                        trim(
+                            $input['surname']
+                        ),
+
+                        trim(
+                            $input['ext']
+                                ?? ''
+                        ),
+                    ])
+                );
+
+            $verificationResult =
+                $this->form5Service
+                    ->verifyAndExtract(
+                        $pdfAbsolutePath,
+                        $studentNumber,
+                        $expectedFullName,
+                    );
+
+            /*
+            |--------------------------------------------------------------------------
+            | FORM 5 MUST MATCH REGISTRATION
+            |--------------------------------------------------------------------------
+            */
+
+            if (
+                !isset(
+                    $verificationResult[
+                        'is_verified'
+                    ]
+                ) ||
+                !$verificationResult[
+                    'is_verified'
+                ]
+            ) {
+                $isLatestTerm =
+                    $verificationResult[
+                        'is_latest_term'
+                    ] ?? true;
+
+                throw ValidationException::withMessages([
+                    'form_5' =>
+                        !$isLatestTerm
+                            ? 'The uploaded Form 5 is not valid for the current academic year or semester.'
+                            : 'Form 5 verification failed. Make sure the student number and name match the uploaded Form 5.',
+                ]);
+            }
+
+            /*
+             * Information extracted from the Form 5.
+             */
+
+            $extractedData =
+                $verificationResult[
+                    'data'
+                ] ?? [];
+
+            /*
+            |--------------------------------------------------------------------------
+            | 9. CREATE STUDENT + USER ATOMICALLY
             |--------------------------------------------------------------------------
             */
 
@@ -358,88 +571,158 @@ class CreateNewUser implements CreatesNewUsers
                     $photoEmbedding,
                     $extractedData
                 ) {
-                    $student = Student::create([
-                        'student_number' =>
-                            $studentNumber,
+                    /*
+                    |--------------------------------------------------------------------------
+                    | CREATE STUDENT
+                    |--------------------------------------------------------------------------
+                    */
 
-                        'surname' =>
-                            trim($input['surname']),
+                    $student =
+                        Student::create([
+                            'student_number' =>
+                                $studentNumber,
 
-                        'firstname' =>
-                            trim($input['firstname']),
+                            'surname' =>
+                                trim(
+                                    $input['surname']
+                                ),
 
-                        'middlename' =>
-                            !empty($input['middlename'])
-                                ? trim($input['middlename'])
-                                : null,
+                            'firstname' =>
+                                trim(
+                                    $input['firstname']
+                                ),
 
-                        'ext' =>
-                            !empty($input['ext'])
-                                ? trim($input['ext'])
-                                : null,
+                            'middlename' =>
+                                !empty(
+                                    $input['middlename']
+                                )
+                                    ? trim(
+                                        $input[
+                                            'middlename'
+                                        ]
+                                    )
+                                    : null,
 
-                        'email' =>
-                            strtolower(trim($input['email'])),
+                            'ext' =>
+                                !empty(
+                                    $input['ext']
+                                )
+                                    ? trim(
+                                        $input['ext']
+                                    )
+                                    : null,
 
-                        /*
-                         * Automatically determined from student number.
-                         */
-                        'college_code' =>
-                            $collegeCode,
+                            'email' =>
+                                strtolower(
+                                    trim(
+                                        $input['email']
+                                    )
+                                ),
 
-                        'college' =>
-                            $college,
+                            /*
+                            |--------------------------------------------------------------------------
+                            | COLLEGE
+                            |--------------------------------------------------------------------------
+                            |
+                            | Automatically derived from the
+                            | student's student number.
+                            |
+                            */
 
-                        /*
-                         * Data extracted from Form 5 OCR.
-                         */
-                        'degree' =>
-                            $extractedData['degree'] ?? null,
+                            'college_code' =>
+                                $collegeCode,
 
-                        'year_section' =>
-                            $extractedData['year_section'] ?? null,
+                            'college' =>
+                                $college,
 
-                        'semester' =>
-                            $extractedData['semester'] ?? null,
+                            /*
+                            |--------------------------------------------------------------------------
+                            | FORM 5 OCR DATA
+                            |--------------------------------------------------------------------------
+                            */
 
-                        'academic_year' =>
-                            $extractedData['academic_year'] ?? null,
+                            'degree' =>
+                                $extractedData[
+                                    'degree'
+                                ] ?? null,
 
-                        /*
-                         * Biometric/document storage.
-                         */
-                        'face_photo_path' =>
-                            $photoPath,
+                            'year_section' =>
+                                $extractedData[
+                                    'year_section'
+                                ] ?? null,
 
-                        'form_5_path' =>
-                            $pdfPath,
+                            'semester' =>
+                                $extractedData[
+                                    'semester'
+                                ] ?? null,
 
-                        'face_embedding' =>
-                            $photoEmbedding,
+                            'academic_year' =>
+                                $extractedData[
+                                    'academic_year'
+                                ] ?? null,
 
-                        /*
-                         * User still needs live liveness +
-                         * face verification.
-                         */
-                        'verification_status' =>
-                            'pending_face_verification',
-                    ]);
+                            /*
+                            |--------------------------------------------------------------------------
+                            | DOCUMENTS + BIOMETRICS
+                            |--------------------------------------------------------------------------
+                            */
+
+                            'face_photo_path' =>
+                                $photoPath,
+
+                            'form_5_path' =>
+                                $pdfPath,
+
+                            'face_embedding' =>
+                                $photoEmbedding,
+
+                            /*
+                            |--------------------------------------------------------------------------
+                            | VERIFICATION STATUS
+                            |--------------------------------------------------------------------------
+                            |
+                            | Account exists, but the student must still
+                            | complete LIVE liveness + face verification.
+                            |
+                            */
+
+                            'verification_status' =>
+                                'pending_face_verification',
+                        ]);
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | CREATE AUTHENTICATION USER
+                    |--------------------------------------------------------------------------
+                    */
 
                     return User::create([
                         'student_id' =>
-                            $student->student_id,
+                            $student
+                                ->student_id,
 
                         'name' =>
                             trim(
-                                $student->firstname.' '.
-                                $student->surname
+                                $student
+                                    ->firstname .
+                                ' ' .
+                                $student
+                                    ->surname
                             ),
 
                         'email' =>
-                            strtolower(trim($input['email'])),
+                            strtolower(
+                                trim(
+                                    $input['email']
+                                )
+                            ),
 
                         'password' =>
-                            Hash::make($input['password']),
+                            Hash::make(
+                                $input[
+                                    'password'
+                                ]
+                            ),
 
                         'role' =>
                             'student',
@@ -449,11 +732,13 @@ class CreateNewUser implements CreatesNewUsers
 
             /*
             |--------------------------------------------------------------------------
-            | 10. Verify Student relationship
+            | 10. VERIFY STUDENT RELATIONSHIP
             |--------------------------------------------------------------------------
             */
 
-            $user->load('student');
+            $user->load(
+                'student'
+            );
 
             if (!$user->student) {
                 throw new RuntimeException(
@@ -462,31 +747,53 @@ class CreateNewUser implements CreatesNewUsers
             }
 
             return $user;
-
-        } catch (ValidationException $e) {
+        } catch (
+            ValidationException $e
+        ) {
+            /*
+            |--------------------------------------------------------------------------
+            | DELETE STORED FILES WHEN VALIDATION FAILS
+            |--------------------------------------------------------------------------
+            */
 
             if ($photoPath) {
-                Storage::disk('private')
-                    ->delete($photoPath);
+                Storage::disk(
+                    'private'
+                )->delete(
+                    $photoPath
+                );
             }
 
             if ($pdfPath) {
-                Storage::disk('private')
-                    ->delete($pdfPath);
+                Storage::disk(
+                    'private'
+                )->delete(
+                    $pdfPath
+                );
             }
 
             throw $e;
-
         } catch (Throwable $e) {
+            /*
+            |--------------------------------------------------------------------------
+            | DELETE STORED FILES WHEN UNEXPECTED ERROR OCCURS
+            |--------------------------------------------------------------------------
+            */
 
             if ($photoPath) {
-                Storage::disk('private')
-                    ->delete($photoPath);
+                Storage::disk(
+                    'private'
+                )->delete(
+                    $photoPath
+                );
             }
 
             if ($pdfPath) {
-                Storage::disk('private')
-                    ->delete($pdfPath);
+                Storage::disk(
+                    'private'
+                )->delete(
+                    $pdfPath
+                );
             }
 
             report($e);
