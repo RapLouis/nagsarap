@@ -13,38 +13,10 @@ use RuntimeException;
 
 class RegistrationController extends Controller
 {
-    /*
-    |--------------------------------------------------------------------------
-    | VALIDATE REFERENCE PHOTO
-    |--------------------------------------------------------------------------
-    |
-    | Called by Flutter immediately after a student selects a reference
-    | photograph.
-    |
-    | This does NOT create an account.
-    |
-    | It only verifies that the image is usable by our face system.
-    |
-    | Flutter
-    |    ↓
-    | Laravel
-    |    ↓
-    | FaceService
-    |    ↓
-    | Python / OpenCV / InsightFace
-    |
-    */
-
     public function validatePhoto(
         Request $request,
         FaceService $faceService
     ): JsonResponse {
-        /*
-        |--------------------------------------------------------------------------
-        | VALIDATE FILE
-        |--------------------------------------------------------------------------
-        */
-
         $request->validate([
             'profile_photo' => [
                 'required',
@@ -55,12 +27,6 @@ class RegistrationController extends Controller
             ],
         ]);
 
-        /*
-        |--------------------------------------------------------------------------
-        | RUN REAL FACE VALIDATION
-        |--------------------------------------------------------------------------
-        */
-
         try {
             $embedding =
                 $faceService
@@ -70,65 +36,36 @@ class RegistrationController extends Controller
                         )
                     );
 
-            /*
-             * InsightFace embedding should contain
-             * substantially more than 100 values.
-             */
-
             if (
-                !is_array($embedding) ||
-                count($embedding) < 100
+                !is_array($embedding)
+                || count($embedding) < 100
             ) {
                 return response()->json([
                     'success' => false,
-
                     'code' =>
                         'INVALID_FACE_EMBEDDING',
-
                     'message' =>
-                        'A usable face could not be extracted from this photo. Please select another photo.',
+                        'A usable face could not be extracted from this photo.',
                 ], 422);
             }
 
             return response()->json([
                 'success' => true,
-
                 'code' =>
                     'REFERENCE_PHOTO_VALID',
-
                 'message' =>
                     'Face detected. Photo is ready for registration.',
             ]);
         } catch (RuntimeException $e) {
-            /*
-             * The Python/FaceService error is passed
-             * back to Flutter.
-             *
-             * Examples may include:
-             *
-             * - No face detected
-             * - Image too blurry
-             * - Multiple faces detected
-             * - Unable to decode image
-             */
-
             return response()->json([
                 'success' => false,
-
                 'code' =>
                     'REFERENCE_PHOTO_INVALID',
-
                 'message' =>
                     $e->getMessage(),
             ], 422);
         }
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | REGISTER
-    |--------------------------------------------------------------------------
-    */
 
     public function register(
         Request $request,
@@ -152,96 +89,151 @@ class RegistrationController extends Controller
 
         return response()->json([
             'success' => true,
-
             'code' =>
                 'REGISTRATION_CREATED',
-
             'message' =>
                 'Registration created. Complete live face verification.',
-
             'data' => [
-                'token' =>
-                    $token,
-
+                'token' => $token,
                 'token_type' =>
                     'Bearer',
-
-                'user' =>
-                    $user,
-
+                'user' => $user,
                 'student' =>
                     $user->student,
             ],
         ], 201);
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | VERIFY LIVE REGISTRATION FACE
-    |--------------------------------------------------------------------------
-    |
-    | Stage 14 will call this endpoint after the student completes
-    | the live liveness sequence.
-    |
-    */
-
     public function verifyFace(
         Request $request,
         FaceService $faceService
     ): JsonResponse {
         $request->validate([
-            'live_camera_frame' => [
+            'center_frame' => [
                 'required',
                 'image',
-                'mimes:jpeg,png,jpg',
+                'mimes:jpeg,jpg,png',
                 'max:5048',
             ],
 
-            'liveness_passed' => [
+            'blink_frame' => [
                 'required',
-                'accepted',
+                'image',
+                'mimes:jpeg,jpg,png',
+                'max:5048',
+            ],
+
+            'turned_frame' => [
+                'required',
+                'image',
+                'mimes:jpeg,jpg,png',
+                'max:5048',
+            ],
+
+            'smile_frame' => [
+                'required',
+                'image',
+                'mimes:jpeg,jpg,png',
+                'max:5048',
+            ],
+
+            'returned_frame' => [
+                'required',
+                'image',
+                'mimes:jpeg,jpg,png',
+                'max:5048',
+            ],
+
+            'live_camera_frame' => [
+                'required',
+                'image',
+                'mimes:jpeg,jpg,png',
+                'max:5048',
             ],
         ]);
 
-        /*
-        |--------------------------------------------------------------------------
-        | AUTHENTICATED STUDENT
-        |--------------------------------------------------------------------------
-        */
-
-        $user =
-            $request->user();
+        $user = $request->user();
 
         if (!$user) {
             return response()->json([
                 'success' => false,
-
                 'code' =>
                     'UNAUTHENTICATED',
-
                 'message' =>
                     'Authentication is required.',
             ], 401);
         }
 
-        $student =
-            $user->student;
+        $student = $user->student;
 
         if (!$student) {
             return response()->json([
                 'success' => false,
-
                 'code' =>
                     'STUDENT_NOT_FOUND',
-
                 'message' =>
                     'Student record not found.',
             ], 404);
         }
 
+        if (
+            $student->verification_status
+            === 'verified'
+        ) {
+            return response()->json([
+                'success' => true,
+                'code' =>
+                    'ALREADY_VERIFIED',
+                'message' =>
+                    'Biometric registration is already complete.',
+                'data' => [
+                    'student' =>
+                        $student,
+                    'verification_status' =>
+                        'verified',
+                ],
+            ]);
+        }
+
         /*
         |--------------------------------------------------------------------------
-        | LIVE FACE EMBEDDING
+        | SERVER-SIDE MEDIAPIPE LIVENESS
+        |--------------------------------------------------------------------------
+        */
+
+        try {
+            $liveness =
+                $faceService
+                    ->verifyLiveness(
+                        $request->file(
+                            'center_frame'
+                        ),
+                        $request->file(
+                            'blink_frame'
+                        ),
+                        $request->file(
+                            'turned_frame'
+                        ),
+                        $request->file(
+                            'smile_frame'
+                        ),
+                        $request->file(
+                            'returned_frame'
+                        ),
+                    );
+        } catch (RuntimeException $e) {
+            return response()->json([
+                'success' => false,
+                'code' =>
+                    'LIVENESS_FAILED',
+                'message' =>
+                    $e->getMessage(),
+            ], 422);
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | LIVE INSIGHTFACE EMBEDDING
         |--------------------------------------------------------------------------
         */
 
@@ -256,10 +248,8 @@ class RegistrationController extends Controller
         } catch (RuntimeException $e) {
             return response()->json([
                 'success' => false,
-
                 'code' =>
                     'FACE_SCAN_FAILED',
-
                 'message' =>
                     $e->getMessage(),
             ], 422);
@@ -267,104 +257,93 @@ class RegistrationController extends Controller
 
         /*
         |--------------------------------------------------------------------------
-        | REFERENCE PHOTO
+        | REFERENCE EMBEDDING
         |--------------------------------------------------------------------------
         */
 
-        if (!$student->face_photo_path) {
-            return response()->json([
-                'success' => false,
-
-                'code' =>
-                    'REFERENCE_PHOTO_NOT_FOUND',
-
-                'message' =>
-                    'Reference photo is missing.',
-            ], 422);
-        }
+        $referenceEmbedding =
+            $student->face_embedding;
 
         if (
-            !Storage::disk('private')
-                ->exists(
-                    $student->face_photo_path
-                )
+            !is_array($referenceEmbedding)
+            || empty($referenceEmbedding)
+        ) {
+            if (
+                !$student->face_photo_path
+                || !Storage::disk('private')
+                    ->exists(
+                        $student
+                            ->face_photo_path
+                    )
+            ) {
+                return response()->json([
+                    'success' => false,
+                    'code' =>
+                        'REFERENCE_PHOTO_NOT_FOUND',
+                    'message' =>
+                        'Reference face data could not be found.',
+                ], 422);
+            }
+
+            try {
+                $referenceEmbedding =
+                    $faceService
+                        ->extractEmbeddingFromBytes(
+                            Storage::disk(
+                                'private'
+                            )->get(
+                                $student
+                                    ->face_photo_path
+                            )
+                        );
+            } catch (
+                RuntimeException $e
+            ) {
+                return response()->json([
+                    'success' => false,
+                    'code' =>
+                        'REFERENCE_FACE_FAILED',
+                    'message' =>
+                        $e->getMessage(),
+                ], 422);
+            }
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | IDENTITY MATCH
+        |--------------------------------------------------------------------------
+        */
+
+        $similarity =
+            $faceService
+                ->cosineSimilarity(
+                    $liveEmbedding,
+                    $referenceEmbedding
+                );
+
+        $threshold =
+            (float) config(
+                'services.face.enrollment_threshold',
+                0.50
+            );
+
+        if (
+            $similarity
+            < $threshold
         ) {
             return response()->json([
                 'success' => false,
-
-                'code' =>
-                    'REFERENCE_PHOTO_NOT_FOUND',
-
-                'message' =>
-                    'The registered reference photo could not be found.',
-            ], 422);
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | COMPARE LIVE FACE WITH REFERENCE PHOTO
-        |--------------------------------------------------------------------------
-        */
-
-        try {
-            $referenceBytes =
-                Storage::disk('private')
-                    ->get(
-                        $student->face_photo_path
-                    );
-
-            $referenceEmbedding =
-                $faceService
-                    ->extractEmbeddingFromBytes(
-                        $referenceBytes
-                    );
-
-            $similarity =
-                $faceService
-                    ->cosineSimilarity(
-                        $liveEmbedding,
-                        $referenceEmbedding
-                    );
-        } catch (RuntimeException $e) {
-            return response()->json([
-                'success' => false,
-
-                'code' =>
-                    'REFERENCE_FACE_FAILED',
-
-                'message' =>
-                    $e->getMessage(),
-            ], 422);
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | MATCH THRESHOLD
-        |--------------------------------------------------------------------------
-        */
-
-        $threshold = (float) config(
-            'services.face.enrollment_threshold',
-            0.50
-        );
-
-        if ($similarity < $threshold) {
-            return response()->json([
-                'success' => false,
-
                 'code' =>
                     'FACE_MISMATCH',
-
                 'message' =>
                     'Live face does not match the uploaded profile photo.',
-
                 'data' => [
                     'similarity' =>
                         round(
                             $similarity,
                             4
                         ),
-
                     'required_similarity' =>
                         $threshold,
                 ],
@@ -373,7 +352,7 @@ class RegistrationController extends Controller
 
         /*
         |--------------------------------------------------------------------------
-        | DUPLICATE FACE CHECK
+        | DUPLICATE FACE
         |--------------------------------------------------------------------------
         */
 
@@ -400,35 +379,34 @@ class RegistrationController extends Controller
             as $otherStudent
         ) {
             if (
-                empty(
-                    $otherStudent->face_embedding
+                !is_array(
+                    $otherStudent
+                        ->face_embedding
+                )
+                || empty(
+                    $otherStudent
+                        ->face_embedding
                 )
             ) {
                 continue;
             }
 
-            try {
-                $duplicateSimilarity =
-                    $faceService
-                        ->cosineSimilarity(
-                            $liveEmbedding,
-                            $otherStudent
-                                ->face_embedding
-                        );
-            } catch (RuntimeException) {
-                continue;
-            }
+            $duplicateSimilarity =
+                $faceService
+                    ->cosineSimilarity(
+                        $liveEmbedding,
+                        $otherStudent
+                            ->face_embedding
+                    );
 
             if (
-                $duplicateSimilarity >=
-                $duplicateThreshold
+                $duplicateSimilarity
+                >= $duplicateThreshold
             ) {
                 return response()->json([
                     'success' => false,
-
                     'code' =>
                         'DUPLICATE_FACE',
-
                     'message' =>
                         'This face is already registered to another student.',
                 ], 409);
@@ -437,7 +415,7 @@ class RegistrationController extends Controller
 
         /*
         |--------------------------------------------------------------------------
-        | BIOMETRICS VERIFIED
+        | VERIFIED
         |--------------------------------------------------------------------------
         */
 
@@ -451,25 +429,22 @@ class RegistrationController extends Controller
 
         return response()->json([
             'success' => true,
-
             'code' =>
                 'BIOMETRICS_VERIFIED',
-
             'message' =>
                 'Biometric verification completed successfully.',
-
             'data' => [
                 'student' =>
                     $student->fresh(),
-
                 'similarity' =>
                     round(
                         $similarity,
                         4
                     ),
-
                 'verification_status' =>
                     'verified',
+                'liveness' =>
+                    $liveness,
             ],
         ]);
     }

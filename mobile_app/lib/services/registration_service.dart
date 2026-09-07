@@ -4,17 +4,9 @@ import 'package:image_picker/image_picker.dart';
 import '../core/api_endpoints.dart';
 import 'api_service.dart';
 
-/*
-|--------------------------------------------------------------------------
-| PHOTO VALIDATION RESULT
-|--------------------------------------------------------------------------
-*/
-
 class ReferencePhotoValidationResult {
   final bool success;
-
   final String message;
-
   final String? code;
 
   const ReferencePhotoValidationResult({
@@ -24,22 +16,27 @@ class ReferencePhotoValidationResult {
   });
 }
 
-/*
-|--------------------------------------------------------------------------
-| REGISTRATION RESULT
-|--------------------------------------------------------------------------
-*/
-
 class RegistrationResult {
   final bool success;
-
   final String message;
-
   final String? code;
-
   final Map<String, dynamic>? data;
 
   const RegistrationResult({
+    required this.success,
+    required this.message,
+    this.code,
+    this.data,
+  });
+}
+
+class FaceVerificationResult {
+  final bool success;
+  final String message;
+  final String? code;
+  final Map<String, dynamic>? data;
+
+  const FaceVerificationResult({
     required this.success,
     required this.message,
     this.code,
@@ -56,15 +53,6 @@ class RegistrationService {
   final ApiService _api =
       ApiService.instance;
 
-  /*
-  |--------------------------------------------------------------------------
-  | VALIDATE REFERENCE PHOTO
-  |--------------------------------------------------------------------------
-  |
-  | Runs BEFORE account registration.
-  |
-  */
-
   Future<ReferencePhotoValidationResult>
       validateReferencePhoto({
     required XFile profilePhoto,
@@ -74,8 +62,7 @@ class RegistrationService {
         'profile_photo':
             await MultipartFile.fromFile(
           profilePhoto.path,
-          filename:
-              profilePhoto.name,
+          filename: profilePhoto.name,
         ),
       });
 
@@ -112,18 +99,18 @@ class RegistrationService {
         code:
             data['code']?.toString(),
         message:
-            data['message']?.toString() ??
+            data['message']
+                    ?.toString() ??
                 'Photo validation completed.',
       );
     } on DioException catch (e) {
       return ReferencePhotoValidationResult(
         success: false,
-        code:
-            _extractCode(e),
+        code: _extractCode(e),
         message:
             _extractErrorMessage(e),
       );
-    } catch (e) {
+    } catch (_) {
       return const ReferencePhotoValidationResult(
         success: false,
         message:
@@ -131,12 +118,6 @@ class RegistrationService {
       );
     }
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | REGISTER
-  |--------------------------------------------------------------------------
-  */
 
   Future<RegistrationResult> register({
     required String studentNumber,
@@ -155,47 +136,36 @@ class RegistrationService {
           FormData.fromMap({
         'student_number':
             studentNumber.trim(),
-
         'surname':
             surname.trim(),
-
         'firstname':
             firstname.trim(),
-
         'middlename':
             middlename.trim().isEmpty
                 ? null
                 : middlename.trim(),
-
         'ext':
             ext.trim().isEmpty
                 ? null
                 : ext.trim(),
-
         'email':
             email.trim(),
-
         'password':
             password,
-
         'password_confirmation':
             passwordConfirmation,
-
         'device_name':
             'Flutter Android',
-
         'profile_photo':
             await MultipartFile.fromFile(
           profilePhoto.path,
           filename:
               profilePhoto.name,
         ),
-
         'form_5':
             await MultipartFile.fromFile(
           form5.path,
-          filename:
-              form5.name,
+          filename: form5.name,
         ),
       });
 
@@ -225,25 +195,8 @@ class RegistrationService {
         raw,
       );
 
-      /*
-      |--------------------------------------------------------------------------
-      | YOUR LARAVEL RESPONSE STRUCTURE
-      |--------------------------------------------------------------------------
-      |
-      | {
-      |   success: true,
-      |   code: "...",
-      |   message: "...",
-      |   data: {
-      |     token: "...",
-      |     user: {...},
-      |     student: {...}
-      |   }
-      | }
-      |
-      */
-
-      Map<String, dynamic> data = {};
+      Map<String, dynamic> data =
+          {};
 
       if (responseMap['data']
           is Map) {
@@ -253,12 +206,6 @@ class RegistrationService {
               as Map,
         );
       }
-
-      /*
-      |--------------------------------------------------------------------------
-      | SAVE SANCTUM TOKEN
-      |--------------------------------------------------------------------------
-      */
 
       final dynamic token =
           data['token'];
@@ -278,27 +225,23 @@ class RegistrationService {
                     true ||
                 response.statusCode ==
                     201,
-
         code:
             responseMap['code']
                 ?.toString(),
-
         message:
             responseMap['message']
                     ?.toString() ??
                 'Registration successful.',
-
         data: data,
       );
     } on DioException catch (e) {
       return RegistrationResult(
         success: false,
-        code:
-            _extractCode(e),
+        code: _extractCode(e),
         message:
             _extractErrorMessage(e),
       );
-    } catch (e) {
+    } catch (_) {
       return const RegistrationResult(
         success: false,
         message:
@@ -307,11 +250,131 @@ class RegistrationService {
     }
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | EXTRACT CODE
-  |--------------------------------------------------------------------------
-  */
+  Future<FaceVerificationResult>
+      verifyRegistrationFace({
+    required XFile centerFrame,
+    required XFile blinkFrame,
+    required XFile turnedFrame,
+    required XFile smileFrame,
+    required XFile returnedFrame,
+  }) async {
+    try {
+      final formData =
+          FormData.fromMap({
+        'center_frame':
+            await MultipartFile.fromFile(
+          centerFrame.path,
+          filename:
+              'center-frame.jpg',
+        ),
+
+        'blink_frame':
+            await MultipartFile.fromFile(
+          blinkFrame.path,
+          filename:
+              'blink-frame.jpg',
+        ),
+
+        'turned_frame':
+            await MultipartFile.fromFile(
+          turnedFrame.path,
+          filename:
+              'turned-frame.jpg',
+        ),
+
+        'smile_frame':
+            await MultipartFile.fromFile(
+          smileFrame.path,
+          filename:
+              'smile-frame.jpg',
+        ),
+
+        'returned_frame':
+            await MultipartFile.fromFile(
+          returnedFrame.path,
+          filename:
+              'returned-frame.jpg',
+        ),
+
+        /*
+         * Final centered frame is also
+         * used for InsightFace identity
+         * verification.
+         */
+        'live_camera_frame':
+            await MultipartFile.fromFile(
+          returnedFrame.path,
+          filename:
+              'live-camera-frame.jpg',
+        ),
+      });
+
+      final response =
+          await _api.dio.post(
+        ApiEndpoints
+            .verifyRegistrationFace,
+        data: formData,
+        options: Options(
+          contentType:
+              'multipart/form-data',
+        ),
+      );
+
+      final dynamic raw =
+          response.data;
+
+      if (raw is! Map) {
+        return const FaceVerificationResult(
+          success: false,
+          message:
+              'Invalid verification response.',
+        );
+      }
+
+      final responseMap =
+          Map<String, dynamic>.from(
+        raw,
+      );
+
+      Map<String, dynamic>? data;
+
+      if (responseMap['data']
+          is Map) {
+        data =
+            Map<String, dynamic>.from(
+          responseMap['data']
+              as Map,
+        );
+      }
+
+      return FaceVerificationResult(
+        success:
+            responseMap['success'] ==
+                true,
+        code:
+            responseMap['code']
+                ?.toString(),
+        message:
+            responseMap['message']
+                    ?.toString() ??
+                'Face verification completed.',
+        data: data,
+      );
+    } on DioException catch (e) {
+      return FaceVerificationResult(
+        success: false,
+        code: _extractCode(e),
+        message:
+            _extractErrorMessage(e),
+      );
+    } catch (_) {
+      return const FaceVerificationResult(
+        success: false,
+        message:
+            'Unable to complete facial verification.',
+      );
+    }
+  }
 
   String? _extractCode(
     DioException exception,
@@ -327,12 +390,6 @@ class RegistrationService {
     return null;
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | ERROR MESSAGE
-  |--------------------------------------------------------------------------
-  */
-
   String _extractErrorMessage(
     DioException exception,
   ) {
@@ -340,7 +397,7 @@ class RegistrationService {
         exception.response;
 
     if (response == null) {
-      return 'Unable to connect to the server. Make sure Laravel and the required services are running.';
+      return 'Unable to connect to the server. Make sure Laravel and the biometric service are running.';
     }
 
     final dynamic raw =
@@ -351,30 +408,6 @@ class RegistrationService {
           Map<String, dynamic>.from(
         raw,
       );
-
-      /*
-       * Direct message from Laravel.
-       */
-
-      if (data['message'] != null) {
-        final String message =
-            data['message']
-                .toString();
-
-        /*
-         * Laravel validation often has a generic
-         * "The given data was invalid" message.
-         * Prefer the individual errors when available.
-         */
-
-        if (data['errors'] is! Map) {
-          return message;
-        }
-      }
-
-      /*
-       * Laravel validation errors.
-       */
 
       if (data['errors'] is Map) {
         final errors =
@@ -402,23 +435,17 @@ class RegistrationService {
       }
     }
 
-    switch (
-        response.statusCode) {
+    switch (response.statusCode) {
       case 401:
         return 'Authentication is required.';
-
       case 409:
-        return 'This information is already registered.';
-
+        return 'This face is already registered.';
       case 413:
-        return 'The selected file is too large.';
-
+        return 'The selected image is too large.';
       case 422:
-        return 'The selected information could not be validated.';
-
+        return 'Face or liveness verification failed.';
       case 500:
-        return 'The server encountered an error.';
-
+        return 'The biometric service encountered an error.';
       default:
         return 'Unable to complete the request.';
     }

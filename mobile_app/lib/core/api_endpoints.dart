@@ -1,12 +1,6 @@
 class ApiEndpoints {
   ApiEndpoints._();
 
-  /*
-  |--------------------------------------------------------------------------
-  | AUTHENTICATION
-  |--------------------------------------------------------------------------
-  */
-
   static const String login =
       '/api/v1/auth/login';
 
@@ -15,12 +9,6 @@ class ApiEndpoints {
 
   static const String me =
       '/api/v1/me';
-
-  /*
-  |--------------------------------------------------------------------------
-  | REGISTRATION
-  |--------------------------------------------------------------------------
-  */
 
   static const String register =
       '/api/v1/register';
@@ -31,20 +19,8 @@ class ApiEndpoints {
   static const String verifyRegistrationFace =
       '/api/v1/register/verify-face';
 
-  /*
-  |--------------------------------------------------------------------------
-  | EVENTS
-  |--------------------------------------------------------------------------
-  */
-
   static const String events =
       '/api/v1/events';
-
-  /*
-  |--------------------------------------------------------------------------
-  | ATTENDANCE
-  |--------------------------------------------------------------------------
-  */
 
   static const String attendanceCheckIn =
       '/api/v1/attendance/check-in';
@@ -54,12 +30,6 @@ class ApiEndpoints {
 
   static const String attendanceHistory =
       '/api/v1/attendance/history';
-
-  /*
-  |--------------------------------------------------------------------------
-  | SANCTIONS
-  |--------------------------------------------------------------------------
-  */
 
   static const String sanctions =
       '/api/v1/sanctions';
