@@ -12,10 +12,8 @@ class ApiEndpoints {
   static const String validateReferencePhoto =
       '/api/v1/register/validate-photo';
 
-  static const String analyzeRegistrationLiveness =
-      '/api/v1/register/liveness-frame';
-
-  static const String verifyRegistrationFace = '/api/v1/register/verify-face';
+  static const String webVerificationUrl =
+      '/api/v1/register/web-verification-url';
 
   static const String events = '/api/v1/events';
 

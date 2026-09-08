@@ -11,25 +11,27 @@ dependencies:
   flutter:
     sdk: flutter
 
+  # UI
   cupertino_icons: ^1.0.8
+  google_fonts: ^8.2.1
 
   # API
   dio: ^5.11.1
 
-  # Authentication/token storage
+  # Authentication / token storage
   flutter_secure_storage: ^11.0.0
 
-  # Local/offline storage
+  # Local / offline storage
   shared_preferences: ^2.5.5
 
   # Network
   connectivity_plus: ^7.3.1
 
-  # Location/geofencing
+  # Location / geofencing
   geolocator: ^14.0.3
   permission_handler: ^13.0.2
 
-  # Camera/images
+  # Camera / images
   camera: ^0.12.1
   image_picker: ^1.2.3
 
@@ -44,8 +46,9 @@ dependencies:
   intl: ^0.20.3
   uuid: ^4.6.0
 
-  # UI
-  google_fonts: ^8.2.1
+  # Existing Laravel / React biometric verification
+  webview_flutter: ^4.14.1
+  webview_flutter_android: ^4.14.1
 
 dev_dependencies:
   flutter_test:

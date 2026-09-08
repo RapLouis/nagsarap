@@ -4,25 +4,30 @@ use App\Http\Controllers\Api\AttendanceController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\EventController;
 use App\Http\Controllers\Api\RegistrationController;
+use App\Http\Controllers\Api\WebVerificationController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function () {
+
     /*
     |--------------------------------------------------------------------------
-    | Public authentication
+    | AUTH
     |--------------------------------------------------------------------------
     */
 
     Route::post(
         '/auth/login',
-        [AuthController::class, 'login']
+        [
+            AuthController::class,
+            'login',
+        ]
     )->middleware(
         'throttle:10,1'
     );
 
     /*
     |--------------------------------------------------------------------------
-    | Public registration
+    | REGISTRATION
     |--------------------------------------------------------------------------
     */
 
@@ -48,13 +53,14 @@ Route::prefix('v1')->group(function () {
 
     /*
     |--------------------------------------------------------------------------
-    | Sanctum protected API
+    | PROTECTED STUDENT API
     |--------------------------------------------------------------------------
     */
 
     Route::middleware(
         'auth:sanctum'
     )->group(function () {
+
         Route::get(
             '/me',
             [
@@ -71,25 +77,27 @@ Route::prefix('v1')->group(function () {
             ]
         );
 
+        /*
+        |--------------------------------------------------------------------------
+        | MOBILE → EXISTING WEB LIVENESS
+        |--------------------------------------------------------------------------
+        */
+
         Route::post(
-            '/register/liveness-frame',
+            '/register/web-verification-url',
             [
-                RegistrationController::class,
-                'analyzeLivenessFrame',
-            ]
-        )->middleware(
-            'throttle:180,1'
-        );
-        
-        Route::post(
-            '/register/verify-face',
-            [
-                RegistrationController::class,
-                'verifyFace',
+                WebVerificationController::class,
+                'createUrl',
             ]
         )->middleware(
             'throttle:10,1'
         );
+
+        /*
+        |--------------------------------------------------------------------------
+        | EVENTS
+        |--------------------------------------------------------------------------
+        */
 
         Route::get(
             '/events',
@@ -106,6 +114,12 @@ Route::prefix('v1')->group(function () {
                 'show',
             ]
         );
+
+        /*
+        |--------------------------------------------------------------------------
+        | ATTENDANCE
+        |--------------------------------------------------------------------------
+        */
 
         Route::get(
             '/attendance/history',

@@ -5,6 +5,8 @@ use App\Http\Controllers\EventController;
 use App\Http\Controllers\FaceVerificationController;
 use App\Models\Event;
 use App\Models\Student;
+use App\Models\User;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Storage;
@@ -20,6 +22,129 @@ Route::inertia(
     '/',
     'welcome'
 )->name('home');
+
+
+/*
+|--------------------------------------------------------------------------
+| Mobile → Web biometric verification bridge
+|--------------------------------------------------------------------------
+|
+| PURPOSE:
+|
+| Flutter authenticates through Laravel Sanctum.
+|
+| The existing web biometric verification page uses Laravel's normal
+| authenticated web session.
+|
+| Flutter first asks the protected API for a short-lived signed URL:
+|
+| /api/v1/register/web-verification-url
+|
+| Flutter then opens that signed URL inside WebView.
+|
+| This route:
+|
+| 1. validates the Laravel signature
+| 2. loads the same User + Student
+| 3. starts a normal Laravel web session
+| 4. redirects to the EXISTING /register/verify-face page
+|
+| This allows Flutter to reuse the SAME:
+|
+| - React verification page
+| - MediaPipe liveness
+| - FaceVerificationController
+| - FaceService
+| - OpenCV
+| - InsightFace
+| - database
+| - migrations
+|
+*/
+
+/*
+|--------------------------------------------------------------------------
+| MOBILE → EXISTING WEB BIOMETRIC VERIFICATION
+|--------------------------------------------------------------------------
+*/
+
+Route::get(
+    '/mobile/register/verify-face/{user}',
+    function (
+        Request $request,
+        User $user
+    ) {
+        /*
+         * Signature validation is handled by:
+         *
+         * signed:relative
+         *
+         * DO NOT call hasValidSignature() here because that validates
+         * the absolute host by default.
+         */
+
+        if ($user->role !== 'student') {
+            abort(
+                403,
+                'Only student accounts can complete biometric verification.'
+            );
+        }
+
+        $user->load('student');
+
+        $student = $user->student;
+
+        if (!$student) {
+            abort(
+                403,
+                'No student profile is linked to this account.'
+            );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | START NORMAL LARAVEL WEB SESSION
+        |--------------------------------------------------------------------------
+        */
+
+        Auth::login($user);
+
+        $request
+            ->session()
+            ->regenerate();
+
+        /*
+        |--------------------------------------------------------------------------
+        | ALREADY VERIFIED
+        |--------------------------------------------------------------------------
+        */
+
+        if (
+            $student->verification_status ===
+            'verified'
+        ) {
+            return redirect()
+                ->route('dashboard');
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | REUSE EXISTING WORKING WEB PAGE
+        |--------------------------------------------------------------------------
+        */
+
+        return redirect()
+            ->route(
+                'register.verify-face'
+            );
+    }
+)
+    ->middleware(
+        'signed:relative'
+    )
+    ->name(
+        'mobile.register.verify-face.bridge'
+    );
 
 
 /*
@@ -48,6 +173,8 @@ Route::middleware(['auth'])->group(function () {
     |
     | Registration flow:
     |
+    | WEB:
+    |
     | POST /register
     |      ↓
     | Fortify creates Student + User
@@ -55,6 +182,23 @@ Route::middleware(['auth'])->group(function () {
     | Fortify logs user in
     |      ↓
     | FortifyServiceProvider redirects here
+    |
+    |
+    | MOBILE:
+    |
+    | Flutter POST /api/v1/register
+    |      ↓
+    | SAME CreateNewUser
+    |      ↓
+    | Sanctum token returned
+    |      ↓
+    | Flutter requests temporary signed URL
+    |      ↓
+    | /mobile/register/verify-face/{user}
+    |      ↓
+    | Laravel web session created
+    |      ↓
+    | redirected here
     |
     */
 
@@ -67,7 +211,11 @@ Route::middleware(['auth'])->group(function () {
             /*
              * Only student accounts should use biometric registration.
              */
-            if (!$user || $user->role !== 'student') {
+
+            if (
+                !$user ||
+                $user->role !== 'student'
+            ) {
                 return redirect()
                     ->route('dashboard');
             }
@@ -75,6 +223,7 @@ Route::middleware(['auth'])->group(function () {
             /*
              * Load the linked Student.
              */
+
             $student = $user
                 ->load('student')
                 ->student;
@@ -83,6 +232,7 @@ Route::middleware(['auth'])->group(function () {
              * This should not normally happen because CreateNewUser
              * creates Student + User in one DB transaction.
              */
+
             if (!$student) {
                 abort(
                     403,
@@ -95,8 +245,10 @@ Route::middleware(['auth'])->group(function () {
              *
              * Do not make them repeat liveness verification.
              */
+
             if (
-                $student->verification_status ===
+                $student
+                    ->verification_status ===
                 'verified'
             ) {
                 return redirect()
@@ -108,6 +260,7 @@ Route::middleware(['auth'])->group(function () {
              *
              * The actual image stays inside the Laravel private disk.
              */
+
             $student->face_photo_url =
                 $student->face_photo_path
                     ? route(
@@ -119,14 +272,26 @@ Route::middleware(['auth'])->group(function () {
                     )
                     : null;
 
+            /*
+             * IMPORTANT:
+             *
+             * This is your EXISTING web React page.
+             *
+             * We are intentionally reusing this exact page for Flutter's
+             * WebView instead of rewriting MediaPipe liveness in Dart.
+             */
+
             return Inertia::render(
                 'auth/verify-face',
                 [
-                    'student' => $student,
+                    'student' =>
+                        $student,
                 ]
             );
         }
-    )->name('register.verify-face');
+    )->name(
+        'register.verify-face'
+    );
 
 
     /*
@@ -134,17 +299,20 @@ Route::middleware(['auth'])->group(function () {
     | Submit live biometric verification
     |--------------------------------------------------------------------------
     |
+    | SAME endpoint for the working web verification flow.
+    |
     | verifyFace() should:
     |
     | 1. receive live camera frame
     | 2. require liveness_passed
     | 3. extract InsightFace embedding
     | 4. compare with registered embedding
-    | 5. update:
+    | 5. perform duplicate-face protection
+    | 6. update:
     |
     |    verification_status = verified
     |
-    | 6. redirect to dashboard
+    | 7. redirect to dashboard
     |
     */
 
@@ -155,8 +323,12 @@ Route::middleware(['auth'])->group(function () {
             'verifyFace',
         ]
     )
-        ->middleware('throttle:20,1')
-        ->name('register.verify-face.submit');
+        ->middleware(
+            'throttle:20,1'
+        )
+        ->name(
+            'register.verify-face.submit'
+        );
 
 
     /*
@@ -174,6 +346,7 @@ Route::middleware(['auth'])->group(function () {
             /*
              * Load Student + attendance relationships.
              */
+
             $student = $user
                 ->load([
                     'student.attendances.event',
@@ -183,8 +356,10 @@ Route::middleware(['auth'])->group(function () {
             /*
              * Student accounts MUST have a Student profile.
              */
+
             if (
-                $user->role === 'student' &&
+                $user->role ===
+                    'student' &&
                 !$student
             ) {
                 abort(
@@ -199,10 +374,13 @@ Route::middleware(['auth'])->group(function () {
              * Any student who has not reached "verified"
              * goes back to the biometric verification page.
              */
+
             if (
-                $user->role === 'student' &&
+                $user->role ===
+                    'student' &&
                 $student &&
-                $student->verification_status !==
+                $student
+                    ->verification_status !==
                     'verified'
             ) {
                 return redirect()
@@ -214,6 +392,7 @@ Route::middleware(['auth'])->group(function () {
             /*
              * Private face-photo URL.
              */
+
             if ($student) {
                 $student->face_photo_url =
                     $student->face_photo_path
@@ -221,7 +400,8 @@ Route::middleware(['auth'])->group(function () {
                             'student.face-photo',
                             [
                                 'student' =>
-                                    $student->student_id,
+                                    $student
+                                        ->student_id,
                             ]
                         )
                         : null;
@@ -230,12 +410,14 @@ Route::middleware(['auth'])->group(function () {
             /*
              * Current date.
              */
+
             $today =
                 now()->toDateString();
 
             /*
              * Events happening today.
              */
+
             $activeEvents =
                 Event::query()
                     ->where(
@@ -254,6 +436,7 @@ Route::middleware(['auth'])->group(function () {
             /*
              * Upcoming events.
              */
+
             $upcomingEvents =
                 Event::query()
                     ->where(
@@ -277,6 +460,7 @@ Route::middleware(['auth'])->group(function () {
             /*
              * Render student dashboard.
              */
+
             return Inertia::render(
                 'dashboard',
                 [
@@ -295,7 +479,9 @@ Route::middleware(['auth'])->group(function () {
                 ]
             );
         }
-    )->name('dashboard');
+    )->name(
+        'dashboard'
+    );
 
 
     /*
@@ -387,16 +573,21 @@ Route::middleware(['auth'])->group(function () {
 
     Route::get(
         '/student/{student:student_id}/face-photo',
-        function (Student $student) {
+        function (
+            Student $student
+        ) {
 
-            $user = Auth::user();
+            $user =
+                Auth::user();
 
             /*
              * Student owns the image OR user is an admin.
              */
+
             $isOwner =
                 (int) $user->student_id ===
-                (int) $student->student_id;
+                (int) $student
+                    ->student_id;
 
             $isAdmin =
                 method_exists(
@@ -404,15 +595,18 @@ Route::middleware(['auth'])->group(function () {
                     'isAdmin'
                 )
                     ? $user->isAdmin()
-                    : $user->role === 'admin';
+                    : $user->role ===
+                        'admin';
 
             abort_unless(
-                $isOwner || $isAdmin,
+                $isOwner ||
+                    $isAdmin,
                 403
             );
 
             if (
-                !$student->face_photo_path
+                !$student
+                    ->face_photo_path
             ) {
                 abort(404);
             }
@@ -426,6 +620,7 @@ Route::middleware(['auth'])->group(function () {
              *
              * /storage/profile_photos/file.jpg
              */
+
             $relativePath =
                 ltrim(
                     str_replace(
@@ -441,8 +636,11 @@ Route::middleware(['auth'])->group(function () {
                 );
 
             if (
-                !Storage::disk('private')
-                    ->exists($relativePath)
+                !Storage::disk(
+                    'private'
+                )->exists(
+                    $relativePath
+                )
             ) {
                 abort(404);
             }
@@ -457,5 +655,6 @@ Route::middleware(['auth'])->group(function () {
         'student.face-photo'
     );
 });
+
 
 require __DIR__.'/settings.php';
