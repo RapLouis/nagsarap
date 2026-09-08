@@ -2,7 +2,6 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 
-import '../core/api_config.dart';
 import '../core/api_endpoints.dart';
 import 'api_service.dart';
 
@@ -32,6 +31,50 @@ class RegistrationResult {
   });
 }
 
+class LivenessFrameResult {
+  final bool success;
+  final String message;
+  final String? code;
+
+  final bool faceDetected;
+
+  final double? yaw;
+  final double? eyeOpenness;
+  final double? mouthWidth;
+
+  final double? blurScore;
+  final double? detectionScore;
+
+  final Map<String, dynamic>? data;
+
+  const LivenessFrameResult({
+    required this.success,
+    required this.message,
+    this.code,
+    this.faceDetected = false,
+    this.yaw,
+    this.eyeOpenness,
+    this.mouthWidth,
+    this.blurScore,
+    this.detectionScore,
+    this.data,
+  });
+}
+
+class BiometricVerificationResult {
+  final bool success;
+  final String message;
+  final String? code;
+  final Map<String, dynamic>? data;
+
+  const BiometricVerificationResult({
+    required this.success,
+    required this.message,
+    this.code,
+    this.data,
+  });
+}
+
 class RegistrationService {
   RegistrationService._();
 
@@ -39,20 +82,9 @@ class RegistrationService {
 
   final ApiService _api = ApiService.instance;
 
-  /*
-  |--------------------------------------------------------------------------
-  | VALIDATE REFERENCE PHOTO
-  |--------------------------------------------------------------------------
-  |
-  | Flutter
-  |   ↓
-  | Laravel API
-  |   ↓
-  | existing FaceService
-  |   ↓
-  | existing OpenCV + InsightFace service
-  |
-  */
+  // ===========================================================================
+  // REFERENCE PHOTO
+  // ===========================================================================
 
   Future<ReferencePhotoValidationResult> validateReferencePhoto({
     required XFile profilePhoto,
@@ -71,21 +103,19 @@ class RegistrationService {
         options: Options(contentType: 'multipart/form-data'),
       );
 
-      final dynamic raw = response.data;
+      final map = _asMap(response.data);
 
-      if (raw is! Map) {
+      if (map == null) {
         return const ReferencePhotoValidationResult(
           success: false,
           message: 'Invalid response from the server.',
         );
       }
 
-      final data = Map<String, dynamic>.from(raw);
-
       return ReferencePhotoValidationResult(
-        success: data['success'] == true,
-        code: data['code']?.toString(),
-        message: data['message']?.toString() ?? 'Photo validation completed.',
+        success: map['success'] == true,
+        code: map['code']?.toString(),
+        message: map['message']?.toString() ?? 'Photo validation completed.',
       );
     } on DioException catch (e) {
       return ReferencePhotoValidationResult(
@@ -94,7 +124,7 @@ class RegistrationService {
         message: _extractErrorMessage(e),
       );
     } catch (e) {
-      debugPrint('Reference photo validation error: $e');
+      debugPrint('REFERENCE PHOTO ERROR: $e');
 
       return const ReferencePhotoValidationResult(
         success: false,
@@ -103,24 +133,9 @@ class RegistrationService {
     }
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | REGISTER
-  |--------------------------------------------------------------------------
-  |
-  | Uses SAME Laravel CreateNewUser.php used by the web app.
-  |
-  | Therefore Laravel continues to perform:
-  |
-  | - student validation
-  | - college mapping
-  | - Form 5 verification
-  | - OCR / Tesseract
-  | - FaceService processing
-  | - database transaction
-  | - Student + User creation
-  |
-  */
+  // ===========================================================================
+  // REGISTER
+  // ===========================================================================
 
   Future<RegistrationResult> register({
     required String studentNumber,
@@ -171,40 +186,32 @@ class RegistrationService {
         options: Options(contentType: 'multipart/form-data'),
       );
 
-      final dynamic raw = response.data;
+      final responseMap = _asMap(response.data);
 
-      if (raw is! Map) {
+      if (responseMap == null) {
         return const RegistrationResult(
           success: false,
           message: 'Invalid response from server.',
         );
       }
 
-      final responseMap = Map<String, dynamic>.from(raw);
+      final data = _asMap(responseMap['data']) ?? <String, dynamic>{};
 
-      Map<String, dynamic> data = {};
+      final token = data['token']?.toString();
 
-      if (responseMap['data'] is Map) {
-        data = Map<String, dynamic>.from(responseMap['data'] as Map);
+      if (token != null && token.isNotEmpty) {
+        await _api.saveToken(token);
       }
 
-      /*
-      |--------------------------------------------------------------------------
-      | SAVE SANCTUM TOKEN
-      |--------------------------------------------------------------------------
-      */
-
-      final dynamic token = data['token'];
-
-      if (token != null && token.toString().isNotEmpty) {
-        await _api.saveToken(token.toString());
-      }
+      final success =
+          responseMap['success'] == true || response.statusCode == 201;
 
       return RegistrationResult(
-        success: responseMap['success'] == true || response.statusCode == 201,
+        success: success,
         code: responseMap['code']?.toString(),
         message:
-            responseMap['message']?.toString() ?? 'Registration successful.',
+            responseMap['message']?.toString() ??
+            (success ? 'Registration successful.' : 'Registration failed.'),
         data: data,
       );
     } on DioException catch (e) {
@@ -214,7 +221,7 @@ class RegistrationService {
         message: _extractErrorMessage(e),
       );
     } catch (e) {
-      debugPrint('Registration error: $e');
+      debugPrint('REGISTRATION ERROR: $e');
 
       return const RegistrationResult(
         success: false,
@@ -223,140 +230,248 @@ class RegistrationService {
     }
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | GET EXISTING WEB VERIFICATION URL
-  |--------------------------------------------------------------------------
-  |
-  | This is now the ONLY Stage 14 service method.
-  |
-  | Flutter Sanctum
-  |      ↓
-  | Laravel API
-  |      ↓
-  | temporary signed URL
-  |      ↓
-  | Flutter WebView
-  |      ↓
-  | existing Laravel /register/verify-face
-  |      ↓
-  | existing React + MediaPipe
-  |      ↓
-  | existing FaceVerificationController
-  |
-  */
+  // ===========================================================================
+  // ANALYZE LIVE FRAME
+  // ===========================================================================
 
-  Future<String?> getWebVerificationUrl() async {
+  Future<LivenessFrameResult> analyzeLivenessFrame({
+    required XFile frame,
+  }) async {
     try {
-      final response = await _api.dio.post(ApiEndpoints.webVerificationUrl);
+      final formData = FormData.fromMap({
+        'frame': await MultipartFile.fromFile(
+          frame.path,
+          filename: 'liveness-frame.jpg',
+        ),
+      });
 
-      final dynamic raw = response.data;
+      final response = await _api.dio.post(
+        ApiEndpoints.analyzeRegistrationLivenessFrame,
+        data: formData,
+        options: Options(
+          contentType: 'multipart/form-data',
+          sendTimeout: const Duration(seconds: 20),
+          receiveTimeout: const Duration(seconds: 20),
+        ),
+      );
 
-      debugPrint('WEB VERIFY RESPONSE: $raw');
+      final responseMap = _asMap(response.data);
 
-      if (raw is! Map) {
-        return null;
-      }
-
-      final responseMap = Map<String, dynamic>.from(raw);
-
-      if (responseMap['success'] != true) {
-        debugPrint(
-          'WEB VERIFY FAILED: '
-          '${responseMap['message']}',
+      if (responseMap == null) {
+        return const LivenessFrameResult(
+          success: false,
+          message: 'Invalid liveness response.',
         );
-
-        return null;
       }
 
-      if (responseMap['data'] is! Map) {
-        return null;
-      }
+      final data = _asMap(responseMap['data']) ?? <String, dynamic>{};
 
-      final data = Map<String, dynamic>.from(responseMap['data'] as Map);
+      final success = responseMap['success'] == true;
 
-      /*
-    |--------------------------------------------------------------------------
-    | ALREADY VERIFIED
-    |--------------------------------------------------------------------------
-    */
+      final result = LivenessFrameResult(
+        success: success,
 
-      if (data['verified'] == true) {
-        return 'ALREADY_VERIFIED';
-      }
+        code: responseMap['code']?.toString(),
 
-      /*
-    |--------------------------------------------------------------------------
-    | SIGNED RELATIVE PATH
-    |--------------------------------------------------------------------------
-    */
+        message:
+            responseMap['message']?.toString() ??
+            (success ? 'Live frame analyzed.' : 'Unable to analyze frame.'),
 
-      final path = data['url']?.toString();
+        faceDetected: _boolValue(data['face_detected']),
 
-      if (path == null || path.isEmpty) {
-        return null;
-      }
+        yaw: _doubleValue(data['yaw']),
 
-      /*
-    |--------------------------------------------------------------------------
-    | FALLBACK
-    |--------------------------------------------------------------------------
-    |
-    | If Laravel somehow returns an absolute URL, use it.
-    |
-    */
+        eyeOpenness: _doubleValue(data['eye_openness']),
 
-      if (path.startsWith('http://') || path.startsWith('https://')) {
-        return path;
-      }
+        mouthWidth: _doubleValue(data['mouth_width']),
 
-      final normalizedPath = path.startsWith('/') ? path : '/$path';
+        blurScore: _doubleValue(data['blur_score']),
 
-      /*
-    |--------------------------------------------------------------------------
-    | IMPORTANT
-    |--------------------------------------------------------------------------
-    |
-    | Do NOT use Dio's 10.0.2.2 base URL for the WebView.
-    |
-    | Use localhost + adb reverse so the existing browser MediaPipe
-    | page gets the same kind of localhost environment as your
-    | desktop web application.
-    |
-    */
+        detectionScore: _doubleValue(data['detection_score']),
 
-      final url = '${ApiConfig.webBaseUrl}$normalizedPath';
+        data: data,
+      );
 
-      debugPrint('WEB VERIFY FINAL URL: $url');
+      debugPrint(
+        'LIVENESS FRAME: '
+        'face=${result.faceDetected} '
+        'yaw=${result.yaw} '
+        'eye=${result.eyeOpenness} '
+        'mouth=${result.mouthWidth}',
+      );
 
-      return url;
+      return result;
     } on DioException catch (e) {
-      debugPrint(
-        'WEB VERIFY HTTP STATUS: '
-        '${e.response?.statusCode}',
+      return LivenessFrameResult(
+        success: false,
+        code: _extractCode(e),
+        message: _extractErrorMessage(e),
       );
-
-      debugPrint(
-        'WEB VERIFY ERROR RESPONSE: '
-        '${e.response?.data}',
-      );
-
-      return null;
     } catch (e) {
-      debugPrint('WEB VERIFY ERROR: $e');
+      debugPrint('LIVENESS FRAME ERROR: $e');
 
-      return null;
+      return const LivenessFrameResult(
+        success: false,
+        message: 'Unable to analyze the camera frame.',
+      );
     }
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | ERROR CODE
-  |--------------------------------------------------------------------------
-  */
+  // ===========================================================================
+  // FINAL VERIFICATION
+  // ===========================================================================
+
+  Future<BiometricVerificationResult> verifyRegistrationFace({
+    required XFile centerFrame,
+    required XFile blinkFrame,
+    required XFile turnedFrame,
+    required XFile smileFrame,
+    required XFile returnedFrame,
+  }) async {
+    try {
+      /*
+       * returnedFrame is also the final live_camera_frame.
+       *
+       * Laravel requires:
+       *
+       * center_frame
+       * blink_frame
+       * turned_frame
+       * smile_frame
+       * returned_frame
+       * live_camera_frame
+       */
+
+      final formData = FormData.fromMap({
+        'center_frame': await MultipartFile.fromFile(
+          centerFrame.path,
+          filename: 'center.jpg',
+        ),
+
+        'blink_frame': await MultipartFile.fromFile(
+          blinkFrame.path,
+          filename: 'blink.jpg',
+        ),
+
+        'turned_frame': await MultipartFile.fromFile(
+          turnedFrame.path,
+          filename: 'turned.jpg',
+        ),
+
+        'smile_frame': await MultipartFile.fromFile(
+          smileFrame.path,
+          filename: 'smile.jpg',
+        ),
+
+        'returned_frame': await MultipartFile.fromFile(
+          returnedFrame.path,
+          filename: 'returned.jpg',
+        ),
+
+        'live_camera_frame': await MultipartFile.fromFile(
+          returnedFrame.path,
+          filename: 'live-camera.jpg',
+        ),
+      });
+
+      final response = await _api.dio.post(
+        ApiEndpoints.verifyRegistrationFace,
+        data: formData,
+        options: Options(
+          contentType: 'multipart/form-data',
+          sendTimeout: const Duration(seconds: 60),
+          receiveTimeout: const Duration(seconds: 120),
+        ),
+      );
+
+      final responseMap = _asMap(response.data);
+
+      if (responseMap == null) {
+        return const BiometricVerificationResult(
+          success: false,
+          message: 'Invalid biometric verification response.',
+        );
+      }
+
+      debugPrint('FINAL BIOMETRIC RESPONSE: $responseMap');
+
+      return BiometricVerificationResult(
+        success: responseMap['success'] == true,
+
+        code: responseMap['code']?.toString(),
+
+        message:
+            responseMap['message']?.toString() ??
+            'Biometric verification completed.',
+
+        data: _asMap(responseMap['data']),
+      );
+    } on DioException catch (e) {
+      debugPrint(
+        'FINAL VERIFY HTTP ERROR: '
+        '${e.response?.statusCode} '
+        '${e.response?.data}',
+      );
+
+      return BiometricVerificationResult(
+        success: false,
+        code: _extractCode(e),
+        message: _extractErrorMessage(e),
+      );
+    } catch (e) {
+      debugPrint('FINAL VERIFY ERROR: $e');
+
+      return const BiometricVerificationResult(
+        success: false,
+        message: 'Unable to complete biometric verification.',
+      );
+    }
+  }
+
+  // ===========================================================================
+  // HELPERS
+  // ===========================================================================
+
+  Map<String, dynamic>? _asMap(dynamic value) {
+    if (value is Map) {
+      return Map<String, dynamic>.from(value);
+    }
+
+    return null;
+  }
+
+  bool _boolValue(dynamic value) {
+    if (value is bool) {
+      return value;
+    }
+
+    if (value is num) {
+      return value != 0;
+    }
+
+    if (value is String) {
+      final normalized = value.trim().toLowerCase();
+
+      return normalized == 'true' || normalized == '1';
+    }
+
+    return false;
+  }
+
+  double? _doubleValue(dynamic value) {
+    if (value is num) {
+      return value.toDouble();
+    }
+
+    if (value is String) {
+      return double.tryParse(value);
+    }
+
+    return null;
+  }
 
   String? _extractCode(DioException exception) {
-    final dynamic raw = exception.response?.data;
+    final raw = exception.response?.data;
 
     if (raw is Map) {
       return raw['code']?.toString();
@@ -365,20 +480,14 @@ class RegistrationService {
     return null;
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | ERROR MESSAGE
-  |--------------------------------------------------------------------------
-  */
-
   String _extractErrorMessage(DioException exception) {
     final response = exception.response;
 
     if (response == null) {
-      return 'Unable to connect to the server. Make sure Laravel and the required backend services are running.';
+      return 'Unable to connect to the server. Make sure Laravel and the Python biometric service are running.';
     }
 
-    final dynamic raw = response.data;
+    final raw = response.data;
 
     if (raw is Map) {
       final data = Map<String, dynamic>.from(raw);
@@ -387,7 +496,7 @@ class RegistrationService {
         final errors = Map<String, dynamic>.from(data['errors'] as Map);
 
         if (errors.isNotEmpty) {
-          final dynamic first = errors.values.first;
+          final first = errors.values.first;
 
           if (first is List && first.isNotEmpty) {
             return first.first.toString();
@@ -400,29 +509,12 @@ class RegistrationService {
       if (data['message'] != null) {
         return data['message'].toString();
       }
+
+      if (data['detail'] != null) {
+        return data['detail'].toString();
+      }
     }
 
-    switch (response.statusCode) {
-      case 401:
-        return 'Authentication is required.';
-
-      case 403:
-        return 'You are not allowed to perform this action.';
-
-      case 409:
-        return 'This information is already registered.';
-
-      case 413:
-        return 'The selected file is too large.';
-
-      case 422:
-        return 'The supplied information could not be validated.';
-
-      case 500:
-        return 'The server encountered an error.';
-
-      default:
-        return 'Unable to complete the request.';
-    }
+    return 'Request failed with HTTP ${response.statusCode}.';
   }
 }

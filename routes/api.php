@@ -4,7 +4,6 @@ use App\Http\Controllers\Api\AttendanceController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\EventController;
 use App\Http\Controllers\Api\RegistrationController;
-use App\Http\Controllers\Api\WebVerificationController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function () {
@@ -61,6 +60,12 @@ Route::prefix('v1')->group(function () {
         'auth:sanctum'
     )->group(function () {
 
+        /*
+        |--------------------------------------------------------------------------
+        | AUTHENTICATED USER
+        |--------------------------------------------------------------------------
+        */
+
         Route::get(
             '/me',
             [
@@ -79,15 +84,25 @@ Route::prefix('v1')->group(function () {
 
         /*
         |--------------------------------------------------------------------------
-        | MOBILE → EXISTING WEB LIVENESS
+        | REGISTRATION BIOMETRICS
         |--------------------------------------------------------------------------
         */
 
         Route::post(
-            '/register/web-verification-url',
+            '/register/analyze-liveness-frame',
             [
-                WebVerificationController::class,
-                'createUrl',
+                RegistrationController::class,
+                'analyzeLivenessFrame',
+            ]
+        )->middleware(
+            'throttle:60,1'
+        );
+
+        Route::post(
+            '/register/verify-face',
+            [
+                RegistrationController::class,
+                'verifyFace',
             ]
         )->middleware(
             'throttle:10,1'

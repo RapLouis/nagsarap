@@ -10,6 +10,8 @@ class ApiService {
 
   static const FlutterSecureStorage _storage = FlutterSecureStorage();
 
+  static const String _tokenKey = 'auth_token';
+
   late final Dio dio =
       Dio(
           BaseOptions(
@@ -18,6 +20,9 @@ class ApiService {
             receiveTimeout: ApiConfig.receiveTimeout,
             sendTimeout: ApiConfig.sendTimeout,
             headers: const {'Accept': 'application/json'},
+            validateStatus: (status) {
+              return status != null && status < 500;
+            },
           ),
         )
         ..interceptors.add(
@@ -33,22 +38,15 @@ class ApiService {
                     options.headers['Authorization'] = 'Bearer $token';
                   }
 
+                  options.headers['Accept'] = 'application/json';
+
                   handler.next(options);
                 },
-
             onError: (DioException error, ErrorInterceptorHandler handler) {
               handler.next(error);
             },
           ),
         );
-
-  /*
-  |--------------------------------------------------------------------------
-  | TOKEN STORAGE
-  |--------------------------------------------------------------------------
-  */
-
-  static const String _tokenKey = 'auth_token';
 
   Future<void> saveToken(String token) async {
     await _storage.write(key: _tokenKey, value: token);
