@@ -7,63 +7,221 @@ use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
+    /**
+     * Mobile student login.
+     *
+     * Flutter sends:
+     *
+     * {
+     *     "student_number": "23-140012",
+     *     "password": "Password123!"
+     * }
+     */
     public function login(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'email' => ['required', 'email'],
-            'password' => ['required', 'string'],
-            'device_name' => ['required', 'string', 'max:100'],
+            'student_number' => [
+                'required',
+                'string',
+                'max:20',
+            ],
+
+            'password' => [
+                'required',
+                'string',
+            ],
         ]);
 
-        $user = User::with('student')->where('email', $validated['email'])->first();
+        $studentNumber = trim(
+            $validated['student_number']
+        );
 
-        if (!$user || !Hash::check($validated['password'], $user->password)) {
-            return response()->json([
-                'success' => false,
-                'code' => 'INVALID_CREDENTIALS',
-                'message' => 'The provided credentials are incorrect.',
-            ], 422);
+        /*
+        |--------------------------------------------------------------------------
+        | Find the USER through the linked STUDENT
+        |--------------------------------------------------------------------------
+        |
+        | users.student_id -> students.student_id
+        |
+        | We are NOT authenticating directly against the students table
+        | because the password belongs to the users table.
+        |
+        */
+
+        $user = User::query()
+            ->with('student')
+            ->whereHas(
+                'student',
+                function ($query) use ($studentNumber) {
+                    $query->where(
+                        'student_number',
+                        $studentNumber
+                    );
+                }
+            )
+            ->first();
+
+        /*
+        |--------------------------------------------------------------------------
+        | Validate credentials
+        |--------------------------------------------------------------------------
+        */
+
+        if (
+            !$user ||
+            !Hash::check(
+                $validated['password'],
+                $user->password
+            )
+        ) {
+            throw ValidationException::withMessages([
+                'student_number' =>
+                    'The student number or password is incorrect.',
+            ]);
         }
 
-        if (!$user->isStudent()) {
+        /*
+        |--------------------------------------------------------------------------
+        | Student-only mobile authentication
+        |--------------------------------------------------------------------------
+        */
+
+        if ($user->role !== 'student') {
             return response()->json([
                 'success' => false,
-                'code' => 'STUDENT_ACCOUNT_REQUIRED',
-                'message' => 'The mobile attendance application is for student accounts.',
+                'message' =>
+                    'This account cannot use the student mobile application.',
             ], 403);
         }
 
-        $token = $user->createToken($validated['device_name'], ['student'])->plainTextToken;
+        /*
+        |--------------------------------------------------------------------------
+        | Remove old mobile token for this device
+        |--------------------------------------------------------------------------
+        |
+        | This avoids filling personal_access_tokens with duplicate
+        | "Flutter Android" tokens every time the student logs in.
+        |
+        */
+
+        $user->tokens()
+            ->where(
+                'name',
+                'Flutter Android'
+            )
+            ->delete();
+
+        /*
+        |--------------------------------------------------------------------------
+        | Create Sanctum token
+        |--------------------------------------------------------------------------
+        */
+
+        $token = $user
+            ->createToken(
+                'Flutter Android'
+            )
+            ->plainTextToken;
+
+        /*
+        |--------------------------------------------------------------------------
+        | Response
+        |--------------------------------------------------------------------------
+        |
+        | This response matches the Flutter AuthService.
+        |
+        */
 
         return response()->json([
             'success' => true,
-            'message' => 'Login successful.',
+
+            'message' =>
+                'Login successful.',
+
+            'token' =>
+                $token,
+
+            'user' => [
+                'id' =>
+                    $user->id,
+
+                'student_id' =>
+                    $user->student_id,
+
+                'name' =>
+                    $user->name,
+
+                'email' =>
+                    $user->email,
+
+                'role' =>
+                    $user->role,
+            ],
+
+            'student' =>
+                $user->student,
+        ]);
+    }
+
+    /**
+     * Return the currently authenticated student.
+     */
+    public function me(Request $request): JsonResponse
+    {
+        $user = $request
+            ->user()
+            ->load('student');
+
+        return response()->json([
+            'success' => true,
+
             'data' => [
-                'token' => $token,
-                'token_type' => 'Bearer',
-                'user' => $user,
+                'user' => [
+                    'id' =>
+                        $user->id,
+
+                    'student_id' =>
+                        $user->student_id,
+
+                    'name' =>
+                        $user->name,
+
+                    'email' =>
+                        $user->email,
+
+                    'role' =>
+                        $user->role,
+                ],
+
+                'student' =>
+                    $user->student,
             ],
         ]);
     }
 
-    public function me(Request $request): JsonResponse
-    {
-        return response()->json([
-            'success' => true,
-            'data' => $request->user()->load('student'),
-        ]);
-    }
-
+    /**
+     * Logout current mobile device.
+     */
     public function logout(Request $request): JsonResponse
     {
-        $request->user()->currentAccessToken()?->delete();
+        $token =
+            $request
+                ->user()
+                ?->currentAccessToken();
+
+        if ($token !== null) {
+            $token->delete();
+        }
 
         return response()->json([
             'success' => true,
-            'message' => 'Logged out successfully.',
+
+            'message' =>
+                'Logged out successfully.',
         ]);
     }
 }
