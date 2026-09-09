@@ -10,19 +10,14 @@ Route::prefix('v1')->group(function () {
 
     /*
     |--------------------------------------------------------------------------
-    | AUTH
+    | PUBLIC AUTHENTICATION
     |--------------------------------------------------------------------------
     */
 
     Route::post(
         '/auth/login',
-        [
-            AuthController::class,
-            'login',
-        ]
-    )->middleware(
-        'throttle:10,1'
-    );
+        [AuthController::class, 'login']
+    )->middleware('throttle:10,1');
 
     /*
     |--------------------------------------------------------------------------
@@ -32,136 +27,144 @@ Route::prefix('v1')->group(function () {
 
     Route::post(
         '/register',
-        [
-            RegistrationController::class,
-            'register',
-        ]
-    )->middleware(
-        'throttle:5,1'
-    );
+        [RegistrationController::class, 'register']
+    )->middleware('throttle:5,1');
 
     Route::post(
         '/register/validate-photo',
-        [
-            RegistrationController::class,
-            'validatePhoto',
-        ]
-    )->middleware(
-        'throttle:20,1'
-    );
+        [RegistrationController::class, 'validatePhoto']
+    )->middleware('throttle:20,1');
 
     /*
     |--------------------------------------------------------------------------
-    | PROTECTED STUDENT API
+    | AUTHENTICATED API
     |--------------------------------------------------------------------------
     */
 
-    Route::middleware(
-        'auth:sanctum'
-    )->group(function () {
+    Route::middleware('auth:sanctum')
+        ->group(function () {
 
-        /*
-        |--------------------------------------------------------------------------
-        | AUTHENTICATED USER
-        |--------------------------------------------------------------------------
-        */
+            /*
+            |--------------------------------------------------------------------------
+            | USER
+            |--------------------------------------------------------------------------
+            */
 
-        Route::get(
-            '/me',
-            [
-                AuthController::class,
-                'me',
-            ]
-        );
+            Route::get(
+                '/me',
+                [AuthController::class, 'me']
+            );
 
-        Route::post(
-            '/auth/logout',
-            [
-                AuthController::class,
-                'logout',
-            ]
-        );
+            Route::post(
+                '/auth/logout',
+                [AuthController::class, 'logout']
+            );
 
-        /*
-        |--------------------------------------------------------------------------
-        | REGISTRATION BIOMETRICS
-        |--------------------------------------------------------------------------
-        */
+            /*
+            |--------------------------------------------------------------------------
+            | REGISTRATION BIOMETRICS
+            |--------------------------------------------------------------------------
+            |
+            | Used ONLY while enrolling/registering the student's biometrics.
+            |
+            */
 
-        Route::post(
-            '/register/analyze-liveness-frame',
-            [
-                RegistrationController::class,
-                'analyzeLivenessFrame',
-            ]
-        )->middleware(
-            'throttle:60,1'
-        );
+            Route::post(
+                '/register/analyze-liveness-frame',
+                [
+                    RegistrationController::class,
+                    'analyzeLivenessFrame',
+                ]
+            )->middleware('throttle:60,1');
 
-        Route::post(
-            '/register/verify-face',
-            [
-                RegistrationController::class,
-                'verifyFace',
-            ]
-        )->middleware(
-            'throttle:10,1'
-        );
+            Route::post(
+                '/register/verify-face',
+                [
+                    RegistrationController::class,
+                    'verifyFace',
+                ]
+            )->middleware('throttle:10,1');
 
-        /*
-        |--------------------------------------------------------------------------
-        | EVENTS
-        |--------------------------------------------------------------------------
-        */
+            /*
+            |--------------------------------------------------------------------------
+            | EVENTS
+            |--------------------------------------------------------------------------
+            */
 
-        Route::get(
-            '/events',
-            [
-                EventController::class,
-                'index',
-            ]
-        );
+            Route::get(
+                '/events',
+                [EventController::class, 'index']
+            );
 
-        Route::get(
-            '/events/{event}',
-            [
-                EventController::class,
-                'show',
-            ]
-        );
+            Route::get(
+                '/events/{event}',
+                [EventController::class, 'show']
+            );
 
-        /*
-        |--------------------------------------------------------------------------
-        | ATTENDANCE
-        |--------------------------------------------------------------------------
-        */
+            /*
+            |--------------------------------------------------------------------------
+            | ATTENDANCE
+            |--------------------------------------------------------------------------
+            */
 
-        Route::get(
-            '/attendance/history',
-            [
-                AttendanceController::class,
-                'history',
-            ]
-        );
+            Route::get(
+                '/attendance/history',
+                [AttendanceController::class, 'history']
+            );
 
-        Route::post(
-            '/attendance/check-in',
-            [
-                AttendanceController::class,
-                'checkIn',
-            ]
-        )->middleware(
-            'throttle:30,1'
-        );
+            /*
+             * Existing route.
+             *
+             * Keep for compatibility with the existing web/backend flow.
+             */
+            Route::post(
+                '/attendance/check-in',
+                [AttendanceController::class, 'checkIn']
+            )->middleware('throttle:30,1');
 
-        Route::post(
-            '/attendance/sync',
-            [
-                AttendanceController::class,
-                'sync',
-            ]
-        )->middleware(
-            'throttle:60,1'
-        );
-    });
+            /*
+             * MOBILE ATTENDANCE FRAME ANALYSIS
+             *
+             * Important:
+             * This is NOT RegistrationController.
+             *
+             * It uses:
+             *
+             * AttendanceController
+             *      ↓
+             * FaceService
+             *      ↓
+             * existing Python service
+             *      ↓
+             * MediaPipe / OpenCV / InsightFace
+             */
+            Route::post(
+                '/attendance/analyze-liveness-frame',
+                [
+                    AttendanceController::class,
+                    'analyzeLivenessFrame',
+                ]
+            )->middleware('throttle:120,1');
+
+            /*
+             * SECURE MOBILE ATTENDANCE SUBMISSION
+             *
+             * Receives all five challenge frames plus GPS.
+             */
+            Route::post(
+                '/attendance/mobile-check-in',
+                [
+                    AttendanceController::class,
+                    'mobileCheckIn',
+                ]
+            )->middleware('throttle:30,1');
+
+            /*
+             * Existing offline synchronization route.
+             */
+            Route::post(
+                '/attendance/sync',
+                [AttendanceController::class, 'sync']
+            )->middleware('throttle:60,1');
+        });
 });
