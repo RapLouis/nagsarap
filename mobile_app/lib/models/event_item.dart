@@ -7,74 +7,127 @@ class EventItem {
     return EventItem(raw: json);
   }
 
-  int? get id => _intValue(['id', 'event_id']);
+  // ===========================================================================
+  // BASIC FIELDS
+  // ===========================================================================
 
-  String get name => _stringValue(['event_name', 'name', 'title']) ?? 'Event';
-
-  String get description =>
-      _stringValue(['description', 'event_description']) ?? '';
-
-  String get eventDate => _stringValue(['event_date', 'date']) ?? '';
-
-  String get startTime =>
-      _stringValue(['start_time', 'time_in', 'attendance_start']) ?? '';
-
-  String get endTime =>
-      _stringValue(['end_time', 'time_out', 'attendance_end']) ?? '';
-
-  String get venue =>
-      _stringValue(['venue', 'location', 'location_name', 'event_location']) ??
-      '';
-
-  bool get isActive {
-    final value = raw['is_active'];
-
-    if (value is bool) {
-      return value;
-    }
-
-    if (value is num) {
-      return value == 1;
-    }
-
-    final text = value?.toString().toLowerCase();
-
-    return text == '1' || text == 'true';
+  int? get id {
+    return _readInt(['event_id', 'id']);
   }
 
-  DateTime? get date {
+  String get name {
+    return _readString(['title', 'event_name', 'name']) ?? 'Event';
+  }
+
+  String get description {
+    return _readString(['description', 'event_description']) ?? '';
+  }
+
+  String get eventDate {
+    return _readString(['event_date', 'date']) ?? '';
+  }
+
+  String get startTime {
+    return _readString(['start_time', 'time_in', 'attendance_start']) ?? '';
+  }
+
+  String get endTime {
+    return _readString(['end_time', 'time_out', 'attendance_end']) ?? '';
+  }
+
+  String get venue {
+    return _readString([
+          'location',
+          'venue',
+          'location_name',
+          'event_location',
+        ]) ??
+        '';
+  }
+
+  // ===========================================================================
+  // GEOFENCE
+  // ===========================================================================
+
+  double? get latitude {
+    return _readDouble(['latitude']);
+  }
+
+  double? get longitude {
+    return _readDouble(['longitude']);
+  }
+
+  int get geofenceRadius {
+    return _readInt(['geofence_radius']) ?? 0;
+  }
+
+  bool get geofenceEnabled {
+    return _readBool(raw['geofence_enabled']);
+  }
+
+  int get lateAfterMinutes {
+    return _readInt(['late_after_minutes']) ?? 0;
+  }
+
+  bool get isActive {
+    return _readBool(raw['is_active']);
+  }
+
+  // ===========================================================================
+  // DATE
+  // ===========================================================================
+
+  /*
+   * Laravel may send:
+   *
+   * 2026-09-09
+   *
+   * OR:
+   *
+   * 2026-09-09T00:00:00.000000Z
+   *
+   * We normalize both to YYYY-MM-DD.
+   */
+
+  String get normalizedDate {
     final value = eventDate.trim();
 
     if (value.isEmpty) {
-      return null;
-    }
-
-    final parsed = DateTime.tryParse(value);
-
-    if (parsed != null) {
-      return DateTime(parsed.year, parsed.month, parsed.day);
+      return '';
     }
 
     if (value.length >= 10) {
-      final shortened = value.substring(0, 10);
-      return DateTime.tryParse(shortened);
+      return value.substring(0, 10);
     }
 
-    return null;
+    return value;
   }
 
-  bool get isToday {
-    final event = date;
+  DateTime? get date {
+    final normalized = normalizedDate;
 
-    if (event == null) {
-      return false;
+    if (normalized.isEmpty) {
+      return null;
     }
 
+    return DateTime.tryParse(normalized);
+  }
+
+  /*
+   * Compare YYYY-MM-DD directly.
+   *
+   * This avoids UTC/local timezone conversion problems.
+   */
+
+  bool get isToday {
     final now = DateTime.now();
 
-    return event.year == now.year &&
-        event.month == now.month &&
-        event.day == now.day;
+    final today =
+        '${now.year.toString().padLeft(4, '0')}-'
+        '${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')}';
+
+    return normalizedDate == today;
   }
 
   bool get isUpcoming {
@@ -91,7 +144,11 @@ class EventItem {
     return event.isAfter(today);
   }
 
-  String? _stringValue(List<String> keys) {
+  // ===========================================================================
+  // PARSING
+  // ===========================================================================
+
+  String? _readString(List<String> keys) {
     for (final key in keys) {
       final value = raw[key];
 
@@ -109,7 +166,7 @@ class EventItem {
     return null;
   }
 
-  int? _intValue(List<String> keys) {
+  int? _readInt(List<String> keys) {
     for (final key in keys) {
       final value = raw[key];
 
@@ -131,5 +188,47 @@ class EventItem {
     }
 
     return null;
+  }
+
+  double? _readDouble(List<String> keys) {
+    for (final key in keys) {
+      final value = raw[key];
+
+      if (value is double) {
+        return value;
+      }
+
+      if (value is num) {
+        return value.toDouble();
+      }
+
+      if (value != null) {
+        final parsed = double.tryParse(value.toString());
+
+        if (parsed != null) {
+          return parsed;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  bool _readBool(dynamic value) {
+    if (value is bool) {
+      return value;
+    }
+
+    if (value is num) {
+      return value != 0;
+    }
+
+    if (value is String) {
+      final normalized = value.trim().toLowerCase();
+
+      return normalized == 'true' || normalized == '1';
+    }
+
+    return false;
   }
 }

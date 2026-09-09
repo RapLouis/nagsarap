@@ -43,7 +43,7 @@ TURN_YAW_DELTA = 0.06
 RETURN_YAW_DELTA = 0.06
 
 # Blink must significantly reduce eye openness.
-BLINK_RATIO = 0.72
+BLINK_RATIO = 0.88
 
 # Smile should widen the mouth compared with neutral frame.
 SMILE_RATIO = 1.04

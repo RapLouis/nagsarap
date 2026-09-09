@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
@@ -18,7 +16,9 @@ enum _ChallengeStep {
 }
 
 class RegistrationFaceVerificationScreen extends StatefulWidget {
-  const RegistrationFaceVerificationScreen({super.key});
+  const RegistrationFaceVerificationScreen({
+    super.key,
+  });
 
   @override
   State<RegistrationFaceVerificationScreen> createState() =>
@@ -27,12 +27,20 @@ class RegistrationFaceVerificationScreen extends StatefulWidget {
 
 class _RegistrationFaceVerificationScreenState
     extends State<RegistrationFaceVerificationScreen> {
-  static const Color navy = Color(0xFF080878);
+  // ===========================================================================
+  // THEME
+  // ===========================================================================
 
+  static const Color navy = Color(0xFF080878);
   static const Color gold = Color(0xFFFFC800);
+  static const Color background = Color(0xFFF7F7FB);
+
+  // ===========================================================================
+  // LIVENESS THRESHOLDS
+  // ===========================================================================
 
   /*
-   * Match Python constants.
+   * Keep these aligned with the Python service.
    */
 
   static const double centerYawLimit = 0.08;
@@ -41,16 +49,68 @@ class _RegistrationFaceVerificationScreenState
 
   static const double returnYawDelta = 0.06;
 
-  static const double blinkRatio = 0.72;
+  /*
+   * Blink:
+   *
+   * Closed eye must fall below:
+   *
+   * centerEyeOpenness * 0.88
+   *
+   * Example:
+   *
+   * center = 0.100
+   * closed threshold = 0.088
+   *
+   * eye = 0.084
+   * -> CLOSED
+   */
+  static const double blinkRatio = 0.88;
+
+  /*
+   * Eyes must reopen close to the original
+   * center baseline before proceeding.
+   */
+  static const double blinkReopenRatio = 0.92;
 
   static const double smileRatio = 1.04;
 
+  // ===========================================================================
+  // CAPTURE SPEED
+  // ===========================================================================
+
   /*
-   * We intentionally do NOT call Laravel
-   * dozens of times every second.
+   * DO NOT use the old fixed 800 ms delay.
+   *
+   * Blink is a very short gesture, so Blink gets
+   * the fastest sampling interval.
+   *
+   * Actual throughput is still limited by:
+   *
+   * Camera
+   * -> Laravel
+   * -> Python
+   * -> response
+   *
+   * but this removes unnecessary waiting.
    */
 
-  static const Duration captureInterval = Duration(milliseconds: 800);
+  static const Duration normalCaptureInterval =
+      Duration(milliseconds: 250);
+
+  static const Duration blinkCaptureInterval =
+      Duration(milliseconds: 80);
+
+  Duration get _currentCaptureInterval {
+    if (_step == _ChallengeStep.blink) {
+      return blinkCaptureInterval;
+    }
+
+    return normalCaptureInterval;
+  }
+
+  // ===========================================================================
+  // CAMERA / STATE
+  // ===========================================================================
 
   CameraController? _camera;
 
@@ -66,22 +126,73 @@ class _RegistrationFaceVerificationScreenState
 
   _ChallengeStep _step = _ChallengeStep.preparing;
 
+  // ===========================================================================
+  // ACCEPTED CHALLENGE FRAMES
+  // ===========================================================================
+
   XFile? _centerFrame;
+
   XFile? _blinkFrame;
+
   XFile? _turnedFrame;
+
   XFile? _smileFrame;
+
   XFile? _returnedFrame;
 
-  /*
-   * Baseline values from the accepted
-   * CENTER frame.
-   */
+  // ===========================================================================
+  // CENTER BASELINE
+  // ===========================================================================
 
   double? _centerYaw;
+
   double? _centerEyeOpenness;
+
   double? _centerMouthWidth;
 
+  // ===========================================================================
+  // BLINK STATE MACHINE
+  // ===========================================================================
+
+  /*
+   * Blink MUST happen in two phases:
+   *
+   * OPEN
+   *   ↓
+   * CLOSED
+   *   ↓
+   * OPEN
+   *
+   * This variable remembers that the CLOSED
+   * state has already happened.
+   */
+  bool _blinkClosedDetected = false;
+
+  /*
+   * UI helper.
+   *
+   * false:
+   * "Blink both eyes naturally"
+   *
+   * true:
+   * "Open your eyes"
+   */
+  bool get _waitingForBlinkReopen {
+    return _step == _ChallengeStep.blink &&
+        _blinkClosedDetected;
+  }
+
+  // ===========================================================================
+  // BAD FRAME HANDLING
+  // ===========================================================================
+
   int _badFrames = 0;
+
+  static const int maxBadFramesBeforeMessage = 6;
+
+  // ===========================================================================
+  // INIT
+  // ===========================================================================
 
   @override
   void initState() {
@@ -95,21 +206,33 @@ class _RegistrationFaceVerificationScreenState
   // ===========================================================================
 
   Future<void> _initializeCamera() async {
+    if (_disposed) {
+      return;
+    }
+
     try {
       final cameras = await availableCameras();
 
       if (cameras.isEmpty) {
-        throw StateError('No camera is available.');
+        throw StateError(
+          'No camera is available.',
+        );
       }
 
       CameraDescription selected = cameras.first;
 
       for (final camera in cameras) {
-        if (camera.lensDirection == CameraLensDirection.front) {
+        if (camera.lensDirection ==
+            CameraLensDirection.front) {
           selected = camera;
-
           break;
         }
+      }
+
+      final oldCamera = _camera;
+
+      if (oldCamera != null) {
+        await oldCamera.dispose();
       }
 
       final controller = CameraController(
@@ -123,7 +246,6 @@ class _RegistrationFaceVerificationScreenState
 
       if (!mounted || _disposed) {
         await controller.dispose();
-
         return;
       }
 
@@ -131,18 +253,20 @@ class _RegistrationFaceVerificationScreenState
 
       setState(() {
         _initializing = false;
-
         _error = null;
-
         _step = _ChallengeStep.preparing;
       });
 
       /*
-       * Give the student two seconds
-       * to position their face.
+       * Short preparation window.
+       *
+       * The previous version waited two seconds.
+       * 900 ms feels significantly more responsive
+       * while still allowing the preview to settle.
        */
-
-      await Future<void>.delayed(const Duration(seconds: 2));
+      await Future<void>.delayed(
+        const Duration(milliseconds: 900),
+      );
 
       if (!mounted || _disposed) {
         return;
@@ -168,33 +292,48 @@ class _RegistrationFaceVerificationScreenState
 
       setState(() {
         _initializing = false;
-
         _error = 'Unable to start the camera.';
       });
     }
   }
 
   // ===========================================================================
-  // START / RESET
+  // START
   // ===========================================================================
 
   Future<void> _startChallenge() async {
     final controller = _camera;
 
-    if (_running || controller == null || !controller.value.isInitialized) {
+    if (_running ||
+        controller == null ||
+        !controller.value.isInitialized ||
+        _disposed) {
       return;
     }
 
     _resetChallenge();
 
+    if (!mounted) {
+      return;
+    }
+
     setState(() {
       _running = true;
-
       _error = null;
-
       _step = _ChallengeStep.center;
     });
 
+    /*
+     * One sequential analysis request at a time.
+     *
+     * This prevents overlapping:
+     *
+     * takePicture()
+     * -> Laravel
+     * -> Python
+     *
+     * requests.
+     */
     while (mounted &&
         !_disposed &&
         _running &&
@@ -202,9 +341,23 @@ class _RegistrationFaceVerificationScreenState
         _step != _ChallengeStep.failed) {
       await _captureAndAnalyze();
 
-      await Future<void>.delayed(captureInterval);
+      if (!mounted ||
+          _disposed ||
+          !_running ||
+          _step == _ChallengeStep.verifying ||
+          _step == _ChallengeStep.failed) {
+        break;
+      }
+
+      await Future<void>.delayed(
+        _currentCaptureInterval,
+      );
     }
   }
+
+  // ===========================================================================
+  // RESET
+  // ===========================================================================
 
   void _resetChallenge() {
     _centerFrame = null;
@@ -223,15 +376,24 @@ class _RegistrationFaceVerificationScreenState
 
     _centerMouthWidth = null;
 
+    /*
+     * IMPORTANT:
+     *
+     * This was missing from the old code.
+     */
+    _blinkClosedDetected = false;
+
     _badFrames = 0;
   }
 
   // ===========================================================================
-  // CAPTURE + LARAVEL ANALYSIS
+  // CAPTURE + ANALYZE
   // ===========================================================================
 
   Future<void> _captureAndAnalyze() async {
-    if (_analyzing || !_running || _disposed) {
+    if (_analyzing ||
+        !_running ||
+        _disposed) {
       return;
     }
 
@@ -246,32 +408,48 @@ class _RegistrationFaceVerificationScreenState
     _analyzing = true;
 
     try {
-      final frame = await controller.takePicture();
+      final frame =
+          await controller.takePicture();
 
-      if (!mounted || _disposed || !_running) {
+      if (!mounted ||
+          _disposed ||
+          !_running) {
         return;
       }
 
-      final result = await RegistrationService.instance.analyzeLivenessFrame(
+      final result =
+          await RegistrationService.instance
+              .analyzeLivenessFrame(
         frame: frame,
       );
 
-      if (!mounted || _disposed || !_running) {
+      if (!mounted ||
+          _disposed ||
+          !_running) {
         return;
       }
 
       /*
-       * Python rejects frames with no face,
-       * multiple faces, severe blur, etc.
+       * 422 / temporary bad camera frame should
+       * NOT instantly interrupt the challenge.
+       *
+       * A blink itself may temporarily reduce
+       * face confidence.
        */
-
-      if (!result.success || !result.faceDetected) {
+      if (!result.success ||
+          !result.faceDetected) {
         _badFrames++;
 
-        if (_badFrames >= 4) {
-          setState(() {
-            _error = result.message;
-          });
+        if (_badFrames >=
+            maxBadFramesBeforeMessage) {
+          if (mounted) {
+            setState(() {
+              _error =
+                  result.message.isNotEmpty
+                      ? result.message
+                      : 'Keep one face clearly visible inside the guide.';
+            });
+          }
         }
 
         return;
@@ -283,10 +461,18 @@ class _RegistrationFaceVerificationScreenState
 
       final mouth = result.mouthWidth;
 
-      if (yaw == null || eye == null || mouth == null) {
-        setState(() {
-          _error = 'Biometric service returned incomplete facial measurements.';
-        });
+      if (yaw == null ||
+          eye == null ||
+          mouth == null) {
+        _badFrames++;
+
+        if (_badFrames >=
+            maxBadFramesBeforeMessage) {
+          setState(() {
+            _error =
+                'Unable to read facial measurements. Keep your face clearly visible.';
+          });
+        }
 
         return;
       }
@@ -306,28 +492,41 @@ class _RegistrationFaceVerificationScreenState
         mouthWidth: mouth,
       );
     } on CameraException catch (e) {
-      if (!mounted || _disposed) {
+      if (!mounted ||
+          _disposed) {
         return;
       }
 
       setState(() {
-        _error = 'Camera capture failed: ${e.description ?? e.code}';
+        _error =
+            'Camera capture failed: ${e.description ?? e.code}';
       });
     } catch (e) {
-      if (!mounted || _disposed) {
+      if (!mounted ||
+          _disposed) {
         return;
       }
 
-      setState(() {
-        _error = 'Unable to analyze the camera frame.';
-      });
+      /*
+       * Do not fail the entire challenge because
+       * one frame could not be analyzed.
+       */
+      _badFrames++;
+
+      if (_badFrames >=
+          maxBadFramesBeforeMessage) {
+        setState(() {
+          _error =
+              'Unable to analyze the camera frame. Keep your face inside the guide.';
+        });
+      }
     } finally {
       _analyzing = false;
     }
   }
 
   // ===========================================================================
-  // CHALLENGE LOGIC
+  // CHALLENGE PROCESSING
   // ===========================================================================
 
   Future<void> _processMeasurement({
@@ -337,14 +536,9 @@ class _RegistrationFaceVerificationScreenState
     required double mouthWidth,
   }) async {
     switch (_step) {
-      /*
-       * --------------------------------------------------------
-       * CENTER
-       * --------------------------------------------------------
-       *
-       * Python:
-       * abs(center.yaw) <= 0.08
-       */
+      // =======================================================================
+      // CENTER
+      // =======================================================================
 
       case _ChallengeStep.center:
         if (yaw.abs() <= centerYawLimit) {
@@ -352,136 +546,241 @@ class _RegistrationFaceVerificationScreenState
 
           _centerYaw = yaw;
 
-          _centerEyeOpenness = eyeOpenness;
+          _centerEyeOpenness =
+              eyeOpenness;
 
-          _centerMouthWidth = mouthWidth;
+          _centerMouthWidth =
+              mouthWidth;
+
+          _blinkClosedDetected =
+              false;
+
+          if (!mounted) {
+            return;
+          }
 
           setState(() {
-            _step = _ChallengeStep.blink;
+            _step =
+                _ChallengeStep.blink;
           });
         }
 
         break;
 
-      /*
-       * --------------------------------------------------------
-       * BLINK
-       * --------------------------------------------------------
-       *
-       * Python:
-       *
-       * blinkEye <= centerEye * 0.72
-       */
+      // =======================================================================
+      // BLINK
+      // =======================================================================
 
       case _ChallengeStep.blink:
-        final baseline = _centerEyeOpenness;
+        final baseline =
+            _centerEyeOpenness;
 
-        if (baseline == null) {
-          _fail('Center measurements were lost. Please try again.');
+        if (baseline == null ||
+            baseline <= 0) {
+          _fail(
+            'Center eye measurement was lost. Please try again.',
+          );
 
           return;
         }
 
-        final required = baseline * blinkRatio;
+        /*
+         * CLOSED THRESHOLD
+         *
+         * Example:
+         *
+         * baseline = 0.100
+         *
+         * closed <= 0.088
+         */
+        final closedThreshold =
+            baseline * blinkRatio;
 
-        if (eyeOpenness <= required) {
-          _blinkFrame = frame;
+        /*
+         * REOPEN THRESHOLD
+         *
+         * Example:
+         *
+         * baseline = 0.100
+         *
+         * reopened >= 0.092
+         */
+        final reopenThreshold =
+            baseline *
+                blinkReopenRatio;
+
+        // ---------------------------------------------------------------
+        // PHASE 1: DETECT CLOSED EYES
+        // ---------------------------------------------------------------
+
+        if (!_blinkClosedDetected) {
+          if (eyeOpenness <=
+              closedThreshold) {
+            /*
+             * THIS MUST BE TRUE.
+             *
+             * Your previous code incorrectly
+             * assigned false here.
+             */
+            _blinkClosedDetected =
+                true;
+
+            /*
+             * Save the genuinely closed-eye frame.
+             *
+             * Python will validate this again
+             * during final verification.
+             */
+            _blinkFrame = frame;
+
+            if (mounted) {
+              setState(() {
+                /*
+                 * Rebuild immediately so UI changes
+                 * from:
+                 *
+                 * Blink both eyes naturally
+                 *
+                 * to:
+                 *
+                 * Open your eyes
+                 */
+              });
+            }
+          }
+
+          break;
+        }
+
+        // ---------------------------------------------------------------
+        // PHASE 2: DETECT EYES REOPENING
+        // ---------------------------------------------------------------
+
+        if (eyeOpenness >=
+            reopenThreshold) {
+          if (!mounted) {
+            return;
+          }
 
           setState(() {
-            _step = _ChallengeStep.turn;
+            _step =
+                _ChallengeStep.turn;
           });
         }
 
         break;
 
-      /*
-       * --------------------------------------------------------
-       * HEAD TURN
-       * --------------------------------------------------------
-       *
-       * Python:
-       *
-       * abs(turnYaw - centerYaw) >= 0.06
-       */
+      // =======================================================================
+      // TURN
+      // =======================================================================
 
       case _ChallengeStep.turn:
-        final baseline = _centerYaw;
+        final centerYaw =
+            _centerYaw;
 
-        if (baseline == null) {
-          _fail('Center measurements were lost. Please try again.');
+        if (centerYaw == null) {
+          _fail(
+            'Center measurements were lost. Please try again.',
+          );
 
           return;
         }
 
-        final delta = (yaw - baseline).abs();
+        final delta =
+            (yaw - centerYaw).abs();
 
-        if (delta >= turnYawDelta) {
+        if (delta >=
+            turnYawDelta) {
           _turnedFrame = frame;
 
+          if (!mounted) {
+            return;
+          }
+
           setState(() {
-            _step = _ChallengeStep.smile;
+            _step =
+                _ChallengeStep.smile;
           });
         }
 
         break;
 
-      /*
-       * --------------------------------------------------------
-       * SMILE
-       * --------------------------------------------------------
-       *
-       * Python:
-       *
-       * smileMouth >= centerMouth * 1.04
-       */
+      // =======================================================================
+      // SMILE
+      // =======================================================================
 
       case _ChallengeStep.smile:
-        final baseline = _centerMouthWidth;
+        final centerMouth =
+            _centerMouthWidth;
 
-        if (baseline == null) {
-          _fail('Center measurements were lost. Please try again.');
+        if (centerMouth == null ||
+            centerMouth <= 0) {
+          _fail(
+            'Center measurements were lost. Please try again.',
+          );
 
           return;
         }
 
-        final required = baseline * smileRatio;
+        final requiredSmile =
+            centerMouth *
+                smileRatio;
 
-        if (mouthWidth >= required) {
+        if (mouthWidth >=
+            requiredSmile) {
           _smileFrame = frame;
 
+          if (!mounted) {
+            return;
+          }
+
           setState(() {
-            _step = _ChallengeStep.returnCenter;
+            _step =
+                _ChallengeStep
+                    .returnCenter;
           });
         }
 
         break;
 
-      /*
-       * --------------------------------------------------------
-       * RETURN TO CENTER
-       * --------------------------------------------------------
-       */
+      // =======================================================================
+      // RETURN CENTER
+      // =======================================================================
 
       case _ChallengeStep.returnCenter:
-        final original = _centerYaw;
+        final originalYaw =
+            _centerYaw;
 
-        if (original == null) {
-          _fail('Center measurements were lost. Please try again.');
+        if (originalYaw == null) {
+          _fail(
+            'Center measurements were lost. Please try again.',
+          );
 
           return;
         }
 
-        final centered = yaw.abs() <= centerYawLimit;
+        final centered =
+            yaw.abs() <=
+                centerYawLimit;
 
-        final returned = (yaw - original).abs() <= returnYawDelta;
+        final returned =
+            (yaw - originalYaw)
+                    .abs() <=
+                returnYawDelta;
 
-        if (centered && returned) {
-          _returnedFrame = frame;
+        if (centered &&
+            returned) {
+          _returnedFrame =
+              frame;
 
           await _verifyFinalFrames();
         }
 
         break;
+
+      // =======================================================================
+      // NO PROCESSING
+      // =======================================================================
 
       case _ChallengeStep.preparing:
       case _ChallengeStep.verifying:
@@ -491,7 +790,7 @@ class _RegistrationFaceVerificationScreenState
   }
 
   // ===========================================================================
-  // FINAL VERIFY
+  // FINAL LARAVEL / PYTHON VERIFICATION
   // ===========================================================================
 
   Future<void> _verifyFinalFrames() async {
@@ -500,37 +799,64 @@ class _RegistrationFaceVerificationScreenState
         _turnedFrame == null ||
         _smileFrame == null ||
         _returnedFrame == null) {
-      _fail('Some biometric frames were not captured. Please try again.');
+      _fail(
+        'Some biometric frames were not captured. Please try again.',
+      );
 
+      return;
+    }
+
+    if (!mounted ||
+        _disposed) {
       return;
     }
 
     setState(() {
       _running = false;
 
-      _step = _ChallengeStep.verifying;
+      _step =
+          _ChallengeStep.verifying;
 
       _error = null;
     });
 
-    final result = await RegistrationService.instance.verifyRegistrationFace(
+    /*
+     * Final server-side verification remains.
+     *
+     * This protects against:
+     *
+     * - gesture spoofing
+     * - wrong person
+     * - identical twin mismatch
+     * - frame substitution
+     *
+     * Laravel:
+     * -> FaceService
+     *
+     * Python:
+     * -> MediaPipe
+     * -> OpenCV
+     * -> InsightFace
+     */
+    final result =
+        await RegistrationService.instance
+            .verifyRegistrationFace(
       centerFrame: _centerFrame!,
-
       blinkFrame: _blinkFrame!,
-
       turnedFrame: _turnedFrame!,
-
       smileFrame: _smileFrame!,
-
       returnedFrame: _returnedFrame!,
     );
 
-    if (!mounted || _disposed) {
+    if (!mounted ||
+        _disposed) {
       return;
     }
 
     if (!result.success) {
-      _fail(result.message);
+      _fail(
+        result.message,
+      );
 
       return;
     }
@@ -545,69 +871,175 @@ class _RegistrationFaceVerificationScreenState
   Future<void> _showSuccess() async {
     await showDialog<void>(
       context: context,
-
       barrierDismissible: false,
-
-      builder: (BuildContext dialogContext) {
+      builder:
+          (BuildContext dialogContext) {
         return AlertDialog(
-          icon: const Icon(
-            Icons.verified_user_rounded,
-            size: 48,
-            color: Colors.green,
-          ),
-
-          title: const Text('Identity Verified', textAlign: TextAlign.center),
-
-          content: const Text(
-            'Liveness and facial identity verification completed successfully.',
-            textAlign: TextAlign.center,
-          ),
-
-          actionsAlignment: MainAxisAlignment.center,
-
-          actions: [
-            FilledButton(
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
-              },
-              style: FilledButton.styleFrom(backgroundColor: navy),
-              child: const Text('Continue'),
+          backgroundColor:
+              Colors.white,
+          shape:
+              RoundedRectangleBorder(
+            borderRadius:
+                BorderRadius.circular(
+              28,
             ),
-          ],
+          ),
+          contentPadding:
+              const EdgeInsets.fromLTRB(
+            28,
+            30,
+            28,
+            26,
+          ),
+          content: Column(
+            mainAxisSize:
+                MainAxisSize.min,
+            children: [
+              Container(
+                width: 70,
+                height: 70,
+                decoration:
+                    const BoxDecoration(
+                  color:
+                      Color(
+                    0xFF00B934,
+                  ),
+                  shape:
+                      BoxShape.circle,
+                ),
+                child:
+                    const Icon(
+                  Icons.check_rounded,
+                  color:
+                      Colors.white,
+                  size: 45,
+                ),
+              ),
+              const SizedBox(
+                height: 22,
+              ),
+              const Text(
+                'Identity Verified',
+                textAlign:
+                    TextAlign.center,
+                style:
+                    TextStyle(
+                  color:
+                      Color(
+                    0xFF1E1E24,
+                  ),
+                  fontSize: 26,
+                  fontWeight:
+                      FontWeight.w500,
+                ),
+              ),
+              const SizedBox(
+                height: 14,
+              ),
+              const Text(
+                'Liveness and facial identity verification completed successfully.',
+                textAlign:
+                    TextAlign.center,
+                style:
+                    TextStyle(
+                  color:
+                      Color(
+                    0xFF38383E,
+                  ),
+                  height: 1.45,
+                  fontSize: 14,
+                ),
+              ),
+              const SizedBox(
+                height: 26,
+              ),
+              SizedBox(
+                width:
+                    double.infinity,
+                height: 54,
+                child:
+                    FilledButton(
+                  onPressed: () {
+                    Navigator.of(
+                      dialogContext,
+                    ).pop();
+                  },
+                  style:
+                      FilledButton
+                          .styleFrom(
+                    backgroundColor:
+                        navy,
+                    foregroundColor:
+                        Colors.white,
+                    shape:
+                        RoundedRectangleBorder(
+                      borderRadius:
+                          BorderRadius.circular(
+                        14,
+                      ),
+                    ),
+                  ),
+                  child:
+                      const Text(
+                    'Continue',
+                    style:
+                        TextStyle(
+                      fontSize: 16,
+                      fontWeight:
+                          FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         );
       },
     );
 
-    if (!mounted || _disposed) {
+    if (!mounted ||
+        _disposed) {
       return;
     }
 
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const AuthGate()),
+    Navigator.of(context)
+        .pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (_) =>
+            const AuthGate(),
+      ),
       (_) => false,
     );
   }
 
   // ===========================================================================
-  // FAILURE / RETRY
+  // FAIL
   // ===========================================================================
 
   void _fail(String message) {
-    if (!mounted || _disposed) {
+    if (!mounted ||
+        _disposed) {
       return;
     }
 
     setState(() {
       _running = false;
 
-      _step = _ChallengeStep.failed;
+      _step =
+          _ChallengeStep.failed;
 
       _error = message;
     });
   }
 
+  // ===========================================================================
+  // RETRY
+  // ===========================================================================
+
   Future<void> _retry() async {
-    if (_running || _analyzing) {
+    if (_running ||
+        _analyzing ||
+        _disposed) {
       return;
     }
 
@@ -616,12 +1048,18 @@ class _RegistrationFaceVerificationScreenState
     setState(() {
       _error = null;
 
-      _step = _ChallengeStep.preparing;
+      _step =
+          _ChallengeStep.preparing;
     });
 
-    await Future<void>.delayed(const Duration(seconds: 1));
+    await Future<void>.delayed(
+      const Duration(
+        milliseconds: 500,
+      ),
+    );
 
-    if (!mounted || _disposed) {
+    if (!mounted ||
+        _disposed) {
       return;
     }
 
@@ -629,7 +1067,7 @@ class _RegistrationFaceVerificationScreenState
   }
 
   // ===========================================================================
-  // UI STRINGS
+  // UI TEXT
   // ===========================================================================
 
   String get _instruction {
@@ -641,6 +1079,10 @@ class _RegistrationFaceVerificationScreenState
         return 'Look directly at the camera';
 
       case _ChallengeStep.blink:
+        if (_waitingForBlinkReopen) {
+          return 'Open your eyes';
+        }
+
         return 'Blink both eyes naturally';
 
       case _ChallengeStep.turn:
@@ -719,22 +1161,28 @@ class _RegistrationFaceVerificationScreenState
       case _ChallengeStep.preparing:
       case _ChallengeStep.center:
       case _ChallengeStep.returnCenter:
-        return Icons.face_retouching_natural_rounded;
+        return Icons
+            .face_retouching_natural_rounded;
 
       case _ChallengeStep.blink:
-        return Icons.visibility_off_rounded;
+        return _waitingForBlinkReopen
+            ? Icons.visibility_rounded
+            : Icons.visibility_off_rounded;
 
       case _ChallengeStep.turn:
         return Icons.sync_alt_rounded;
 
       case _ChallengeStep.smile:
-        return Icons.sentiment_very_satisfied_rounded;
+        return Icons
+            .sentiment_very_satisfied_rounded;
 
       case _ChallengeStep.verifying:
-        return Icons.verified_user_rounded;
+        return Icons
+            .verified_user_rounded;
 
       case _ChallengeStep.failed:
-        return Icons.error_outline_rounded;
+        return Icons
+            .error_outline_rounded;
     }
   }
 
@@ -748,9 +1196,11 @@ class _RegistrationFaceVerificationScreenState
 
     _running = false;
 
-    _camera?.dispose();
+    final camera = _camera;
 
     _camera = null;
+
+    camera?.dispose();
 
     super.dispose();
   }
@@ -763,58 +1213,86 @@ class _RegistrationFaceVerificationScreenState
   Widget build(BuildContext context) {
     return PopScope(
       canPop: !_running,
-
       child: Scaffold(
-        backgroundColor: const Color(0xFFF7F7FB),
-
+        backgroundColor:
+            background,
         appBar: AppBar(
-          backgroundColor: Colors.white,
-
-          foregroundColor: navy,
-
+          backgroundColor:
+              Colors.white,
+          foregroundColor:
+              navy,
           elevation: 0,
-
           title: const Text(
             'Live Face Verification',
-            style: TextStyle(fontWeight: FontWeight.w700),
+            style: TextStyle(
+              fontWeight:
+                  FontWeight.w700,
+            ),
           ),
         ),
-
         body: SafeArea(
           child: _initializing
-              ? const Center(child: CircularProgressIndicator())
+              ? const Center(
+                  child:
+                      CircularProgressIndicator(
+                    color: navy,
+                  ),
+                )
               : _camera == null
-              ? _fatalError()
-              : _challenge(),
+                  ? _fatalError()
+                  : _challenge(),
         ),
       ),
     );
   }
 
+  // ===========================================================================
+  // FATAL CAMERA ERROR
+  // ===========================================================================
+
   Widget _fatalError() {
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(24),
+        padding:
+            const EdgeInsets.all(
+          24,
+        ),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
-
+          mainAxisSize:
+              MainAxisSize.min,
           children: [
             const Icon(
-              Icons.error_outline_rounded,
+              Icons
+                  .error_outline_rounded,
               size: 56,
-              color: Colors.red,
+              color:
+                  Colors.red,
             ),
-
-            const SizedBox(height: 16),
-
-            Text(_error ?? 'Camera unavailable.', textAlign: TextAlign.center),
-
-            const SizedBox(height: 20),
-
+            const SizedBox(
+              height: 16,
+            ),
+            Text(
+              _error ??
+                  'Camera unavailable.',
+              textAlign:
+                  TextAlign.center,
+            ),
+            const SizedBox(
+              height: 20,
+            ),
             FilledButton(
-              onPressed: _initializeCamera,
-              style: FilledButton.styleFrom(backgroundColor: navy),
-              child: const Text('Try Again'),
+              onPressed:
+                  _initializeCamera,
+              style:
+                  FilledButton
+                      .styleFrom(
+                backgroundColor:
+                    navy,
+              ),
+              child:
+                  const Text(
+                'Try Again',
+              ),
             ),
           ],
         ),
@@ -822,12 +1300,22 @@ class _RegistrationFaceVerificationScreenState
     );
   }
 
+  // ===========================================================================
+  // CHALLENGE UI
+  // ===========================================================================
+
   Widget _challenge() {
-    final controller = _camera!;
+    final controller =
+        _camera!;
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-
+      padding:
+          const EdgeInsets.fromLTRB(
+        20,
+        18,
+        20,
+        20,
+      ),
       child: Column(
         children: [
           const Text(
@@ -835,56 +1323,97 @@ class _RegistrationFaceVerificationScreenState
             style: TextStyle(
               color: navy,
               fontSize: 22,
-              fontWeight: FontWeight.w800,
+              fontWeight:
+                  FontWeight.w800,
             ),
           ),
 
-          const SizedBox(height: 6),
+          const SizedBox(
+            height: 6,
+          ),
 
           Text(
             _subtitle,
-            style: const TextStyle(color: Colors.black54, fontSize: 12),
+            style:
+                const TextStyle(
+              color:
+                  Colors.black54,
+              fontSize: 12,
+            ),
           ),
 
-          const SizedBox(height: 18),
+          const SizedBox(
+            height: 18,
+          ),
 
           Expanded(
             child: Center(
               child: Container(
-                constraints: const BoxConstraints(
+                constraints:
+                    const BoxConstraints(
                   maxWidth: 310,
                   maxHeight: 390,
                 ),
-
-                clipBehavior: Clip.antiAlias,
-
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(160),
-
-                  border: Border.all(
-                    color: _step == _ChallengeStep.verifying
+                clipBehavior:
+                    Clip.antiAlias,
+                decoration:
+                    BoxDecoration(
+                  borderRadius:
+                      BorderRadius.circular(
+                    160,
+                  ),
+                  border:
+                      Border.all(
+                    color: _step ==
+                            _ChallengeStep
+                                .verifying
                         ? Colors.green
                         : gold,
                     width: 4,
                   ),
-
-                  color: Colors.black,
+                  color:
+                      Colors.black,
                 ),
-
                 child: Stack(
-                  fit: StackFit.expand,
-
+                  fit:
+                      StackFit.expand,
                   children: [
                     Transform.scale(
                       scaleX: -1,
-                      child: CameraPreview(controller),
+                      child:
+                          CameraPreview(
+                        controller,
+                      ),
                     ),
 
-                    if (_step == _ChallengeStep.verifying)
+                    /*
+                     * Small visual confirmation
+                     * when closed eyes have been
+                     * detected.
+                     */
+                    if (_waitingForBlinkReopen)
                       Container(
-                        color: Colors.black.withValues(alpha: 0.35),
-                        child: const Center(
-                          child: CircularProgressIndicator(color: Colors.white),
+                        color: gold
+                            .withValues(
+                          alpha: 0.08,
+                        ),
+                      ),
+
+                    if (_step ==
+                        _ChallengeStep
+                            .verifying)
+                      Container(
+                        color: Colors.black
+                            .withValues(
+                          alpha: 0.35,
+                        ),
+                        child:
+                            const Center(
+                          child:
+                              CircularProgressIndicator(
+                            color:
+                                Colors.white,
+                          ),
                         ),
                       ),
                   ],
@@ -893,68 +1422,137 @@ class _RegistrationFaceVerificationScreenState
             ),
           ),
 
-          const SizedBox(height: 16),
-
-          Icon(
-            _stepIcon,
-            size: 30,
-            color: _step == _ChallengeStep.failed ? Colors.red : navy,
+          const SizedBox(
+            height: 16,
           ),
 
-          const SizedBox(height: 8),
+          AnimatedSwitcher(
+            duration:
+                const Duration(
+              milliseconds: 150,
+            ),
+            child: Icon(
+              _stepIcon,
+              key: ValueKey(
+                '${_step.name}-$_blinkClosedDetected',
+              ),
+              size: 30,
+              color: _step ==
+                      _ChallengeStep
+                          .failed
+                  ? Colors.red
+                  : navy,
+            ),
+          ),
 
-          Text(
-            _instruction,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: navy,
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
+          const SizedBox(
+            height: 8,
+          ),
+
+          AnimatedSwitcher(
+            duration:
+                const Duration(
+              milliseconds: 150,
+            ),
+            child: Text(
+              _instruction,
+              key: ValueKey(
+                '$_instruction-${_step.name}',
+              ),
+              textAlign:
+                  TextAlign.center,
+              style:
+                  const TextStyle(
+                color: navy,
+                fontSize: 16,
+                fontWeight:
+                    FontWeight.w700,
+              ),
             ),
           ),
 
           if (_error != null) ...[
-            const SizedBox(height: 10),
-
+            const SizedBox(
+              height: 8,
+            ),
             Text(
               _error!,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Colors.red,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
+              textAlign:
+                  TextAlign.center,
+              style:
+                  const TextStyle(
+                color:
+                    Colors.red,
+                fontSize: 11,
+                fontWeight:
+                    FontWeight.w600,
               ),
             ),
           ],
 
-          const SizedBox(height: 18),
+          const SizedBox(
+            height: 18,
+          ),
 
           Row(
             children: [
-              _progress('Center', 0),
-              _progress('Blink', 1),
-              _progress('Turn', 2),
-              _progress('Smile', 3),
-              _progress('Center', 4),
+              _progress(
+                'Center',
+                0,
+              ),
+              _progress(
+                'Blink',
+                1,
+              ),
+              _progress(
+                'Turn',
+                2,
+              ),
+              _progress(
+                'Smile',
+                3,
+              ),
+              _progress(
+                'Center',
+                4,
+              ),
             ],
           ),
 
-          if (_step == _ChallengeStep.failed) ...[
-            const SizedBox(height: 18),
-
+          if (_step ==
+              _ChallengeStep
+                  .failed) ...[
+            const SizedBox(
+              height: 18,
+            ),
             SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: _retry,
-
-                icon: const Icon(Icons.refresh_rounded),
-
-                style: FilledButton.styleFrom(
-                  backgroundColor: navy,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
+              width:
+                  double.infinity,
+              child:
+                  FilledButton.icon(
+                onPressed:
+                    _retry,
+                icon:
+                    const Icon(
+                  Icons
+                      .refresh_rounded,
                 ),
-
-                label: const Text('Try Again'),
+                style:
+                    FilledButton
+                        .styleFrom(
+                  backgroundColor:
+                      navy,
+                  foregroundColor:
+                      Colors.white,
+                  padding:
+                      const EdgeInsets.symmetric(
+                    vertical: 14,
+                  ),
+                ),
+                label:
+                    const Text(
+                  'Try Again',
+                ),
               ),
             ),
           ],
@@ -963,51 +1561,72 @@ class _RegistrationFaceVerificationScreenState
     );
   }
 
-  Widget _progress(String label, int index) {
-    final active = index == _activeIndex;
+  // ===========================================================================
+  // PROGRESS
+  // ===========================================================================
 
-    final completed = _activeIndex > index;
+  Widget _progress(
+    String label,
+    int index,
+  ) {
+    final active =
+        index == _activeIndex;
+
+    final completed =
+        _activeIndex > index;
 
     return Expanded(
       child: Column(
         children: [
           AnimatedContainer(
-            duration: const Duration(milliseconds: 250),
-
+            duration:
+                const Duration(
+              milliseconds: 180,
+            ),
             width: 25,
-
             height: 25,
-
-            alignment: Alignment.center,
-
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-
+            alignment:
+                Alignment.center,
+            decoration:
+                BoxDecoration(
+              shape:
+                  BoxShape.circle,
               color: completed
                   ? Colors.green
                   : active
-                  ? gold
-                  : Colors.grey.shade300,
+                      ? gold
+                      : Colors.grey
+                          .shade300,
             ),
-
             child: completed
-                ? const Icon(Icons.check, size: 15, color: Colors.white)
+                ? const Icon(
+                    Icons.check,
+                    size: 15,
+                    color:
+                        Colors.white,
+                  )
                 : Text(
                     '${index + 1}',
-                    style: const TextStyle(
+                    style:
+                        const TextStyle(
                       color: navy,
                       fontSize: 9,
-                      fontWeight: FontWeight.bold,
+                      fontWeight:
+                          FontWeight.bold,
                     ),
                   ),
           ),
-
-          const SizedBox(height: 5),
-
+          const SizedBox(
+            height: 5,
+          ),
           Text(
             label,
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 9),
+            textAlign:
+                TextAlign.center,
+            style:
+                const TextStyle(
+              fontSize: 9,
+            ),
           ),
         ],
       ),

@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 
 import '../core/api_endpoints.dart';
 import '../models/event_item.dart';
@@ -6,7 +7,9 @@ import 'api_service.dart';
 
 class EventResult {
   final bool success;
+
   final String message;
+
   final List<EventItem> events;
 
   const EventResult({
@@ -23,9 +26,23 @@ class EventService {
 
   final ApiService _api = ApiService.instance;
 
+  // ===========================================================================
+  // GET EVENTS
+  // ===========================================================================
+
   Future<EventResult> getEvents() async {
     try {
       final response = await _api.dio.get(ApiEndpoints.events);
+
+      if (kDebugMode) {
+        debugPrint('========== EVENTS API ==========');
+
+        debugPrint('STATUS: ${response.statusCode}');
+
+        debugPrint('DATA: ${response.data}');
+
+        debugPrint('================================');
+      }
 
       if (response.statusCode == 401) {
         return const EventResult(
@@ -34,27 +51,37 @@ class EventService {
         );
       }
 
+      if (response.statusCode == null ||
+          response.statusCode! < 200 ||
+          response.statusCode! >= 300) {
+        return EventResult(
+          success: false,
+          message: 'Unable to load events. HTTP ${response.statusCode}.',
+        );
+      }
+
       final raw = response.data;
 
       if (raw is! Map) {
         return const EventResult(
           success: false,
-          message: 'Invalid response from the server.',
+          message: 'Invalid event response from server.',
         );
       }
 
-      final data = Map<String, dynamic>.from(raw);
+      final responseMap = Map<String, dynamic>.from(raw);
 
-      if (data['success'] == false) {
+      if (responseMap['success'] != true) {
         return EventResult(
           success: false,
-          message: data['message']?.toString() ?? 'Unable to load events.',
+          message:
+              responseMap['message']?.toString() ?? 'Unable to load events.',
         );
       }
 
-      final rawEvents = data['data'];
+      final rawEvents = responseMap['data'];
 
-      if (rawEvents is! List) {
+      if (rawEvents == null) {
         return const EventResult(
           success: true,
           message: 'No events available.',
@@ -62,71 +89,110 @@ class EventService {
         );
       }
 
+      if (rawEvents is! List) {
+        return const EventResult(
+          success: false,
+          message: 'The event API returned an invalid data format.',
+        );
+      }
+
       final events = <EventItem>[];
 
       for (final item in rawEvents) {
         if (item is Map) {
-          events.add(EventItem.fromJson(Map<String, dynamic>.from(item)));
+          final map = Map<String, dynamic>.from(item);
+
+          events.add(EventItem.fromJson(map));
         }
       }
 
-      events.sort((a, b) {
-        final aDate = a.date;
-        final bDate = b.date;
+      events.sort((EventItem first, EventItem second) {
+        final firstDate = first.date;
 
-        if (aDate == null && bDate == null) {
-          return 0;
+        final secondDate = second.date;
+
+        if (firstDate == null && secondDate == null) {
+          return first.startTime.compareTo(second.startTime);
         }
 
-        if (aDate == null) {
+        if (firstDate == null) {
           return 1;
         }
 
-        if (bDate == null) {
+        if (secondDate == null) {
           return -1;
         }
 
-        final dateResult = aDate.compareTo(bDate);
+        final dateComparison = firstDate.compareTo(secondDate);
 
-        if (dateResult != 0) {
-          return dateResult;
+        if (dateComparison != 0) {
+          return dateComparison;
         }
 
-        return a.startTime.compareTo(b.startTime);
+        return first.startTime.compareTo(second.startTime);
       });
+
+      if (kDebugMode) {
+        debugPrint('PARSED EVENTS: ${events.length}');
+
+        for (final event in events) {
+          debugPrint(
+            'EVENT ${event.id}: '
+            '${event.name} | '
+            '${event.normalizedDate} | '
+            'today=${event.isToday} | '
+            'active=${event.isActive}',
+          );
+        }
+      }
 
       return EventResult(
         success: true,
-        message: 'Events loaded.',
+        message: 'Events loaded successfully.',
         events: events,
       );
-    } on DioException catch (e) {
-      final response = e.response;
+    } on DioException catch (exception) {
+      if (kDebugMode) {
+        debugPrint('EVENT DIO ERROR');
 
-      if (response?.statusCode == 401) {
+        debugPrint('STATUS: ${exception.response?.statusCode}');
+
+        debugPrint('DATA: ${exception.response?.data}');
+      }
+
+      if (exception.response?.statusCode == 401) {
         return const EventResult(
           success: false,
           message: 'Your login session has expired.',
         );
       }
 
-      if (response?.data is Map) {
-        final data = Map<String, dynamic>.from(response!.data as Map);
+      final raw = exception.response?.data;
 
-        return EventResult(
+      if (raw is Map && raw['message'] != null) {
+        return EventResult(success: false, message: raw['message'].toString());
+      }
+
+      if (exception.response == null) {
+        return const EventResult(
           success: false,
-          message: data['message']?.toString() ?? 'Unable to load events.',
+          message: 'Unable to connect to Laravel.',
         );
+      }
+
+      return EventResult(
+        success: false,
+        message:
+            'Unable to load events. HTTP ${exception.response?.statusCode}.',
+      );
+    } catch (exception) {
+      if (kDebugMode) {
+        debugPrint('EVENT PARSE ERROR: $exception');
       }
 
       return const EventResult(
         success: false,
-        message: 'Unable to connect to the server.',
-      );
-    } catch (_) {
-      return const EventResult(
-        success: false,
-        message: 'Unable to load events.',
+        message: 'Unable to process the event data.',
       );
     }
   }
