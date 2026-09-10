@@ -9,6 +9,7 @@ import '../attendance/attendance_history_screen.dart';
 import '../auth/auth_gate.dart';
 import '../calendar/calendar_screen.dart';
 import '../sanctions/sanctions_screen.dart';
+import '../profile/profile_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final Map<String, dynamic>? user;
@@ -918,22 +919,30 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ],
                               ),
                             ),
+
                             _profileMenuItem(
                               icon: Icons.history_rounded,
                               label: 'Attendance History',
                               onTap: () {
                                 Navigator.pop(dialogContext);
-
                                 _openAttendanceHistory();
                               },
                             ),
+
                             _profileMenuItem(
                               icon: Icons.person_outline_rounded,
                               label: 'Personal Information',
                               onTap: () {
                                 Navigator.pop(dialogContext);
+
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => const ProfileScreen(),
+                                  ),
+                                );
                               },
                             ),
+
                             _profileMenuItem(
                               icon: Icons.settings_outlined,
                               label: 'Settings',
@@ -941,6 +950,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 Navigator.pop(dialogContext);
                               },
                             ),
+
                             _profileMenuItem(
                               icon: Icons.info_outline_rounded,
                               label: 'About',
@@ -948,11 +958,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                 Navigator.pop(dialogContext);
                               },
                             ),
+
                             const Divider(height: 1),
+
                             InkWell(
                               onTap: () {
                                 Navigator.pop(dialogContext);
-
                                 _confirmLogout();
                               },
                               child: const Padding(
