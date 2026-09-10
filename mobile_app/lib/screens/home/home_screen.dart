@@ -2,15 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../models/event_item.dart';
+import '../../services/attendance_history_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/event_service.dart';
+import '../../services/notification_service.dart';
 import '../attendance/attendance_face_verification_screen.dart';
 import '../attendance/attendance_history_screen.dart';
 import '../auth/auth_gate.dart';
 import '../calendar/calendar_screen.dart';
-import '../sanctions/sanctions_screen.dart';
-import '../profile/profile_screen.dart';
 import '../notifications/notifications_screen.dart';
+import '../profile/profile_screen.dart';
+import '../sanctions/sanctions_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final Map<String, dynamic>? user;
@@ -23,34 +25,36 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  static const Color _navy = Color(0xFF080878);
-  static const Color _gold = Color(0xFFFFC800);
-  static const Color _background = Color(0xFFF6F6F6);
-  static const Color _muted = Color(0xFF808080);
-  static const Color _softGold = Color(0xFFFFE9A3);
+  static const Color navy = Color(0xFF080878);
+  static const Color gold = Color(0xFFFFC800);
+  static const Color background = Color(0xFFF6F6F6);
+  static const Color muted = Color(0xFF808080);
 
   bool _loading = true;
   String? _error;
 
   List<EventItem> _events = const [];
 
-  int? _expandedEventId;
+  int _attendanceCount = 0;
+  int _unreadCount = 0;
+
+  String _latestAttendanceStatus = 'No record';
 
   @override
   void initState() {
     super.initState();
-    _loadEvents();
+    _loadDashboard();
   }
 
   // ===========================================================================
-  // STUDENT INFORMATION
+  // STUDENT
   // ===========================================================================
 
   String get _firstName {
-    final firstName = _readStudent(['firstname', 'first_name']);
+    final value = _readStudent(['firstname', 'first_name']);
 
-    if (firstName.isNotEmpty) {
-      return firstName.split(RegExp(r'\s+')).first;
+    if (value.isNotEmpty) {
+      return value.split(RegExp(r'\s+')).first;
     }
 
     final userName = widget.user?['name']?.toString().trim();
@@ -67,19 +71,19 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final middle = _readStudent(['middlename', 'middle_name']);
 
-    final last = _readStudent(['lastname', 'last_name', 'surname']);
+    final last = _readStudent(['surname', 'lastname', 'last_name']);
 
     final extension = _readStudent(['ext', 'extension']);
 
-    final name = [
+    final result = [
       first,
       middle,
       last,
       extension,
     ].where((value) => value.isNotEmpty).join(' ');
 
-    if (name.isNotEmpty) {
-      return name;
+    if (result.isNotEmpty) {
+      return result;
     }
 
     final userName = widget.user?['name']?.toString().trim();
@@ -108,10 +112,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // ===========================================================================
-  // EVENTS
+  // DASHBOARD DATA
   // ===========================================================================
 
-  Future<void> _loadEvents() async {
+  Future<void> _loadDashboard() async {
     if (mounted) {
       setState(() {
         _loading = true;
@@ -119,7 +123,12 @@ class _HomeScreenState extends State<HomeScreen> {
       });
     }
 
-    final result = await EventService.instance.getEvents();
+    final eventResult = await EventService.instance.getEvents();
+
+    final historyResult = await AttendanceHistoryService.instance.getHistory();
+
+    final notificationResult = await NotificationService.instance
+        .getNotifications();
 
     if (!mounted) {
       return;
@@ -128,12 +137,34 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _loading = false;
 
-      if (result.success) {
-        _events = result.events;
-        _error = null;
-      } else {
+      if (!eventResult.success) {
         _events = const [];
-        _error = result.message;
+        _error = eventResult.message;
+        return;
+      }
+
+      _events = eventResult.events;
+      _error = null;
+
+      if (historyResult.success) {
+        _attendanceCount = historyResult.records.length;
+
+        if (historyResult.records.isEmpty) {
+          _latestAttendanceStatus = 'No record';
+        } else {
+          _latestAttendanceStatus = _formatStatus(
+            historyResult.records.first.status,
+          );
+        }
+      } else {
+        _attendanceCount = 0;
+        _latestAttendanceStatus = 'Unavailable';
+      }
+
+      if (notificationResult.success) {
+        _unreadCount = notificationResult.unreadCount;
+      } else {
+        _unreadCount = 0;
       }
     });
   }
@@ -147,17 +178,45 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // ===========================================================================
-  // STAGE 17 - ATTENDANCE HISTORY
+  // NAVIGATION
   // ===========================================================================
 
-  Future<void> _openAttendanceHistory() async {
+  Future<void> _openHistory() async {
     await Navigator.of(
       context,
     ).push(MaterialPageRoute(builder: (_) => const AttendanceHistoryScreen()));
+
+    if (mounted) {
+      await _loadDashboard();
+    }
+  }
+
+  Future<void> _openNotifications() async {
+    await Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const NotificationsScreen()));
+
+    if (mounted) {
+      await _loadDashboard();
+    }
+  }
+
+  Future<void> _openCalendar() async {
+    await Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const CalendarScreen()));
+  }
+
+  Future<void> _openSanctions() async {
+    await Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const SanctionsScreen()));
+  }
+
+  Future<void> _openProfile() async {
+    await Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const ProfileScreen()));
   }
 
   // ===========================================================================
-  // STAGE 16 - RECORD ATTENDANCE
+  // ATTENDANCE
   // ===========================================================================
 
   Future<void> _openAttendanceScanner() async {
@@ -187,7 +246,7 @@ class _HomeScreenState extends State<HomeScreen> {
         shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
         ),
-        builder: (BuildContext sheetContext) {
+        builder: (sheetContext) {
           return SafeArea(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
@@ -197,23 +256,19 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   const Text(
                     'Select Event',
-                    style: TextStyle(
-                      color: Colors.black,
-                      fontSize: 21,
-                      fontWeight: FontWeight.w800,
-                    ),
+                    style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800),
                   ),
                   const SizedBox(height: 6),
                   const Text(
-                    'Choose the event where you want to record attendance.',
-                    style: TextStyle(color: _muted, fontSize: 13),
+                    'Choose an event to record attendance.',
+                    style: TextStyle(color: muted, fontSize: 13),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 14),
                   for (final event in today)
                     ListTile(
                       contentPadding: EdgeInsets.zero,
                       leading: const CircleAvatar(
-                        backgroundColor: _gold,
+                        backgroundColor: gold,
                         foregroundColor: Colors.black,
                         child: Icon(Icons.event_available_rounded),
                       ),
@@ -221,12 +276,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         event.name,
                         style: const TextStyle(fontWeight: FontWeight.w700),
                       ),
-                      subtitle: Text(
-                        [
-                          _formatTimeRange(event),
-                          if (event.venue.isNotEmpty) event.venue,
-                        ].join(' • '),
-                      ),
+                      subtitle: Text(_eventSubtitle(event)),
                       trailing: const Icon(Icons.chevron_right_rounded),
                       onTap: () {
                         Navigator.pop(sheetContext, event);
@@ -251,7 +301,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     if (recorded == true && mounted) {
-      await _loadEvents();
+      await _loadDashboard();
     }
   }
 
@@ -262,57 +312,55 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _background,
+      backgroundColor: background,
       body: SafeArea(
         child: Column(
           children: [
             _buildHeader(),
             Expanded(
               child: RefreshIndicator(
-                color: _navy,
-                onRefresh: _loadEvents,
-                child: CustomScrollView(
+                color: navy,
+                onRefresh: _loadDashboard,
+                child: ListView(
                   physics: const AlwaysScrollableScrollPhysics(),
-                  slivers: [
-                    SliverPadding(
-                      padding: const EdgeInsets.fromLTRB(18, 30, 18, 115),
-                      sliver: SliverList(
-                        delegate: SliverChildListDelegate([
-                          Row(
-                            children: [
-                              const Expanded(
-                                child: Text(
-                                  "Today's Activity",
-                                  style: TextStyle(
-                                    color: Colors.black,
-                                    fontSize: 28,
-                                    height: 1.1,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                              ),
-                              IconButton(
-                                tooltip: 'Attendance History',
-                                onPressed: _openAttendanceHistory,
-                                icon: const Icon(
-                                  Icons.history_rounded,
-                                  color: _navy,
-                                  size: 29,
-                                ),
-                              ),
-                            ],
-                          ),
-
-                          const SizedBox(height: 12),
-
-                          _buildHistoryButton(),
-
-                          const SizedBox(height: 25),
-
-                          _buildContent(),
-                        ]),
+                  padding: const EdgeInsets.fromLTRB(18, 26, 18, 115),
+                  children: [
+                    const Text(
+                      "Today's Activity",
+                      style: TextStyle(
+                        color: Colors.black,
+                        fontSize: 28,
+                        fontWeight: FontWeight.w800,
                       ),
                     ),
+
+                    const SizedBox(height: 18),
+
+                    if (_loading)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 80),
+                        child: Center(
+                          child: CircularProgressIndicator(color: navy),
+                        ),
+                      )
+                    else if (_error != null)
+                      _buildError()
+                    else ...[
+                      _buildSummary(),
+
+                      const SizedBox(height: 16),
+
+                      _buildHistoryCard(),
+
+                      const SizedBox(height: 22),
+
+                      _buildTodaySection(),
+
+                      if (_upcomingEvents.isNotEmpty) ...[
+                        const SizedBox(height: 28),
+                        _buildUpcomingSection(),
+                      ],
+                    ],
                   ],
                 ),
               ),
@@ -332,10 +380,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildHeader() {
     return Container(
-      width: double.infinity,
       height: 82,
       padding: const EdgeInsets.symmetric(horizontal: 14),
-      color: _navy,
+      color: navy,
       child: Row(
         children: [
           const CircleAvatar(
@@ -347,7 +394,9 @@ class _HomeScreenState extends State<HomeScreen> {
               size: 30,
             ),
           ),
+
           const SizedBox(width: 14),
+
           Expanded(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -360,7 +409,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 16,
-                    height: 1.1,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -368,8 +416,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   const SizedBox(height: 4),
                   Text(
                     _studentNumber,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       color: Color(0xFF9999C8),
                       fontSize: 12,
@@ -379,19 +425,13 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
-          Material(
-            color: Colors.transparent,
-            child: InkWell(
-              borderRadius: BorderRadius.circular(30),
-              onTap: _showProfileMenu,
-              child: const Padding(
-                padding: EdgeInsets.all(3),
-                child: Icon(
-                  Icons.account_circle_outlined,
-                  color: _gold,
-                  size: 44,
-                ),
-              ),
+
+          InkWell(
+            borderRadius: BorderRadius.circular(30),
+            onTap: _showProfileMenu,
+            child: const Padding(
+              padding: EdgeInsets.all(3),
+              child: Icon(Icons.account_circle_outlined, color: gold, size: 44),
             ),
           ),
         ],
@@ -400,58 +440,124 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // ===========================================================================
-  // ATTENDANCE HISTORY BUTTON
+  // SUMMARY
   // ===========================================================================
 
-  Widget _buildHistoryButton() {
+  Widget _buildSummary() {
+    return Row(
+      children: [
+        Expanded(
+          child: _summaryCard(
+            icon: Icons.event_available_outlined,
+            value: '${_todayEvents.length}',
+            label: 'Today',
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _summaryCard(
+            icon: Icons.upcoming_outlined,
+            value: '${_upcomingEvents.length}',
+            label: 'Upcoming',
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _summaryCard(
+            icon: Icons.how_to_reg_outlined,
+            value: '$_attendanceCount',
+            label: 'Attendance',
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _summaryCard({
+    required IconData icon,
+    required String value,
+    required String label,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: const Color(0xFFE1E1E8)),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: navy, size: 22),
+          const SizedBox(height: 7),
+          Text(
+            value,
+            style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: muted, fontSize: 10),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ===========================================================================
+  // HISTORY
+  // ===========================================================================
+
+  Widget _buildHistoryCard() {
     return Material(
       color: Colors.white,
       borderRadius: BorderRadius.circular(15),
       child: InkWell(
-        onTap: _openAttendanceHistory,
+        onTap: _openHistory,
         borderRadius: BorderRadius.circular(15),
         child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          padding: const EdgeInsets.all(15),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(15),
             border: Border.all(color: const Color(0xFFE1E1E8)),
           ),
-          child: const Row(
+          child: Row(
             children: [
-              SizedBox(
+              Container(
                 width: 42,
                 height: 42,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: Color(0xFFFFF4C8),
-                    borderRadius: BorderRadius.all(Radius.circular(11)),
-                  ),
-                  child: Icon(Icons.history_rounded, color: _navy, size: 24),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF4C8),
+                  borderRadius: BorderRadius.circular(11),
                 ),
+                child: const Icon(Icons.history_rounded, color: navy, size: 24),
               ),
-              SizedBox(width: 13),
+
+              const SizedBox(width: 13),
+
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
+                    const Text(
                       'Attendance History',
                       style: TextStyle(
-                        color: Colors.black,
                         fontSize: 14,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                    SizedBox(height: 3),
+                    const SizedBox(height: 3),
                     Text(
-                      'View your recorded attendance',
-                      style: TextStyle(color: _muted, fontSize: 11),
+                      'Latest: $_latestAttendanceStatus',
+                      style: const TextStyle(color: muted, fontSize: 11),
                     ),
                   ],
                 ),
               ),
-              Icon(Icons.chevron_right_rounded, color: Colors.black54),
+
+              const Icon(Icons.chevron_right_rounded, color: Colors.black54),
             ],
           ),
         ),
@@ -460,322 +566,172 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // ===========================================================================
-  // HOME CONTENT
+  // TODAY
   // ===========================================================================
 
-  Widget _buildContent() {
-    if (_loading) {
-      return const Padding(
-        padding: EdgeInsets.only(top: 70),
-        child: Center(child: CircularProgressIndicator(color: _navy)),
+  Widget _buildTodaySection() {
+    if (_todayEvents.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(25),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(17),
+          border: Border.all(color: const Color(0xFFD4D4D4)),
+        ),
+        child: const Column(
+          children: [
+            Icon(Icons.event_busy_outlined, color: navy, size: 42),
+            SizedBox(height: 10),
+            Text(
+              'No activity today',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+            ),
+            SizedBox(height: 5),
+            Text(
+              'There are no events scheduled for today.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: muted, fontSize: 13),
+            ),
+          ],
+        ),
       );
     }
-
-    if (_error != null) {
-      return _buildErrorState();
-    }
-
-    final today = _todayEvents;
-
-    if (today.isEmpty) {
-      return _buildNoEventsState();
-    }
-
-    return Column(
-      children: [
-        for (final event in today) ...[
-          _buildTodayEventCard(event),
-          const SizedBox(height: 23),
-        ],
-      ],
-    );
-  }
-
-  // ===========================================================================
-  // TODAY EVENT
-  // ===========================================================================
-
-  Widget _buildTodayEventCard(EventItem event) {
-    final expanded = _expandedEventId == event.id;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Material(
-          color: Colors.transparent,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(17),
-            onTap: () {
-              setState(() {
-                _expandedEventId = expanded ? null : event.id;
-              });
-            },
-            child: Container(
-              width: double.infinity,
-              constraints: const BoxConstraints(minHeight: 96),
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 17),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(17),
-                border: Border.all(color: Colors.black, width: 1),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          event.name,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.black,
-                            fontSize: 18,
-                            height: 1.25,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          _formatDate(event),
-                          style: const TextStyle(
-                            color: Colors.black,
-                            fontSize: 17,
-                            height: 1.2,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 15),
-                  Container(
-                    constraints: const BoxConstraints(minWidth: 95),
-                    height: 34,
-                    padding: const EdgeInsets.symmetric(horizontal: 15),
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: _softGold,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: const Text(
-                      'Ongoing',
-                      style: TextStyle(
-                        color: Color(0xFFFF8A00),
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+        const Text(
+          "Today's Events",
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
         ),
-        AnimatedSwitcher(
-          duration: const Duration(milliseconds: 200),
-          child: expanded
-              ? _buildExpandedEvent(event)
-              : const SizedBox.shrink(),
-        ),
+
+        const SizedBox(height: 12),
+
+        for (final event in _todayEvents) ...[
+          _buildEventCard(event, today: true),
+          const SizedBox(height: 12),
+        ],
       ],
     );
   }
 
   // ===========================================================================
-  // EXPANDED EVENT
+  // UPCOMING
   // ===========================================================================
 
-  Widget _buildExpandedEvent(EventItem selectedEvent) {
+  Widget _buildUpcomingSection() {
     final upcoming = _upcomingEvents.take(3).toList();
 
-    return Padding(
-      key: ValueKey('event-${selectedEvent.id}'),
-      padding: const EdgeInsets.fromLTRB(17, 18, 17, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (selectedEvent.startTime.isNotEmpty ||
-              selectedEvent.endTime.isNotEmpty ||
-              selectedEvent.venue.isNotEmpty)
-            _buildSelectedEventDetails(selectedEvent),
-          if (upcoming.isNotEmpty) ...[
-            const SizedBox(height: 22),
-            const Text(
-              'See Events',
-              style: TextStyle(
-                color: Colors.black,
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Expanded(
+              child: Text(
+                'Upcoming Events',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
               ),
             ),
-            const SizedBox(height: 17),
-            for (var index = 0; index < upcoming.length; index++) ...[
-              _buildSmallEventCard(upcoming[index], goldAccent: index.isEven),
-              if (index < upcoming.length - 1) const SizedBox(height: 16),
-            ],
+            TextButton(
+              onPressed: _openCalendar,
+              child: const Text(
+                'View Calendar',
+                style: TextStyle(color: navy, fontWeight: FontWeight.w700),
+              ),
+            ),
           ],
+        ),
+
+        const SizedBox(height: 8),
+
+        for (final event in upcoming) ...[
+          _buildEventCard(event),
+          const SizedBox(height: 12),
         ],
-      ),
+      ],
     );
   }
 
-  Widget _buildSelectedEventDetails(EventItem event) {
+  Widget _buildEventCard(EventItem event, {bool today = false}) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(15),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (event.startTime.isNotEmpty || event.endTime.isNotEmpty)
-            Row(
-              children: [
-                const Icon(Icons.access_time_rounded, color: _navy, size: 17),
-                const SizedBox(width: 7),
-                Expanded(
-                  child: Text(
-                    _formatTimeRange(event),
-                    style: const TextStyle(
-                      color: Colors.black,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          if (event.venue.isNotEmpty) ...[
-            if (event.startTime.isNotEmpty || event.endTime.isNotEmpty)
-              const SizedBox(height: 9),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Icon(Icons.location_on_outlined, color: _navy, size: 17),
-                const SizedBox(width: 7),
-                Expanded(
-                  child: Text(
-                    event.venue,
-                    style: const TextStyle(color: _muted, fontSize: 12),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  // ===========================================================================
-  // UPCOMING EVENT CARD
-  // ===========================================================================
-
-  Widget _buildSmallEventCard(EventItem event, {required bool goldAccent}) {
-    return Container(
-      width: double.infinity,
-      constraints: const BoxConstraints(minHeight: 96),
+      padding: const EdgeInsets.all(17),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(17),
+        border: Border.all(color: const Color(0xFFE1E1E8)),
       ),
       child: Row(
         children: [
           Container(
             width: 5,
-            height: 96,
+            height: 70,
             decoration: BoxDecoration(
-              color: goldAccent ? _gold : _navy,
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(17),
-                bottomLeft: Radius.circular(17),
-              ),
+              color: today ? gold : navy,
+              borderRadius: BorderRadius.circular(10),
             ),
           ),
-          const SizedBox(width: 20),
+
+          const SizedBox(width: 14),
+
           Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(4, 16, 16, 16),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    event.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.black,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                    ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  event.name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _formatDate(event),
-                    style: const TextStyle(
-                      color: Colors.black,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
+                ),
+
+                const SizedBox(height: 5),
+
+                Text(
+                  _formatDate(event),
+                  style: const TextStyle(color: muted, fontSize: 12),
+                ),
+
+                const SizedBox(height: 3),
+
+                Text(
+                  _formatTimeRange(event),
+                  style: const TextStyle(color: muted, fontSize: 11),
+                ),
+
+                if (event.venue.isNotEmpty) ...[
                   const SizedBox(height: 3),
                   Text(
-                    _formatTimeRange(event),
-                    style: const TextStyle(color: _muted, fontSize: 11),
+                    event.venue,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: muted, fontSize: 11),
                   ),
-                  if (event.venue.isNotEmpty) ...[
-                    const SizedBox(height: 3),
-                    Text(
-                      event.venue,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: _muted, fontSize: 11),
-                    ),
-                  ],
                 ],
+              ],
+            ),
+          ),
+
+          if (today)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFE9A3),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const Text(
+                'Today',
+                style: TextStyle(
+                  color: Color(0xFFFF8A00),
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ===========================================================================
-  // EMPTY
-  // ===========================================================================
-
-  Widget _buildNoEventsState() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 30),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(17),
-        border: Border.all(color: const Color(0xFFD4D4D4)),
-      ),
-      child: const Column(
-        children: [
-          Icon(Icons.event_busy_outlined, color: _navy, size: 42),
-          SizedBox(height: 12),
-          Text(
-            'No activity today',
-            style: TextStyle(
-              color: Colors.black,
-              fontSize: 17,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          SizedBox(height: 7),
-          Text(
-            'There are no active events scheduled for today.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: _muted, fontSize: 13, height: 1.4),
-          ),
         ],
       ),
     );
@@ -785,48 +741,35 @@ class _HomeScreenState extends State<HomeScreen> {
   // ERROR
   // ===========================================================================
 
-  Widget _buildErrorState() {
+  Widget _buildError() {
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(25),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(17),
-        border: Border.all(color: const Color(0xFFD4D4D4)),
       ),
       child: Column(
         children: [
           const Icon(Icons.error_outline_rounded, color: Colors.red, size: 42),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           const Text(
-            'Unable to load events',
-            style: TextStyle(
-              color: Colors.black,
-              fontSize: 17,
-              fontWeight: FontWeight.w700,
-            ),
+            'Unable to load dashboard',
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           Text(
             _error ?? 'Please try again.',
             textAlign: TextAlign.center,
-            style: const TextStyle(color: _muted, fontSize: 13),
+            style: const TextStyle(color: muted, fontSize: 13),
           ),
-          const SizedBox(height: 18),
-          SizedBox(
-            width: 150,
-            height: 42,
-            child: FilledButton(
-              onPressed: _loadEvents,
-              style: FilledButton.styleFrom(
-                backgroundColor: _navy,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(11),
-                ),
-              ),
-              child: const Text('Try Again'),
+          const SizedBox(height: 16),
+          FilledButton(
+            onPressed: _loadDashboard,
+            style: FilledButton.styleFrom(
+              backgroundColor: navy,
+              foregroundColor: Colors.white,
             ),
+            child: const Text('Try Again'),
           ),
         ],
       ),
@@ -838,288 +781,102 @@ class _HomeScreenState extends State<HomeScreen> {
   // ===========================================================================
 
   Future<void> _showProfileMenu() async {
-    await showGeneralDialog<void>(
+    await showModalBottomSheet<void>(
       context: context,
-      barrierDismissible: true,
-      barrierLabel: 'Profile',
-      barrierColor: Colors.black.withValues(alpha: 0.40),
-      transitionDuration: const Duration(milliseconds: 180),
-      pageBuilder:
-          (
-            BuildContext dialogContext,
-            Animation<double> animation,
-            Animation<double> secondaryAnimation,
-          ) {
-            final screenWidth = MediaQuery.sizeOf(dialogContext).width;
-
-            return SafeArea(
-              child: Stack(
-                children: [
-                  Positioned(
-                    top: 75,
-                    right: 12,
-                    child: Material(
-                      color: Colors.transparent,
-                      child: Container(
-                        width: screenWidth < 390 ? 245 : 255,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(8),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.10),
-                              blurRadius: 16,
-                              offset: const Offset(0, 5),
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(
-                                18,
-                                15,
-                                14,
-                                14,
-                              ),
-                              child: Row(
-                                children: [
-                                  const Icon(
-                                    Icons.person,
-                                    color: Colors.black,
-                                    size: 31,
-                                  ),
-                                  const SizedBox(width: 13),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          _fullName,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            color: Colors.black,
-                                            fontSize: 18,
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                        ),
-                                        if (_studentNumber.isNotEmpty)
-                                          Text(
-                                            _studentNumber,
-                                            style: const TextStyle(
-                                              color: _muted,
-                                              fontSize: 13,
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-
-                            _profileMenuItem(
-                              icon: Icons.history_rounded,
-                              label: 'Attendance History',
-                              onTap: () {
-                                Navigator.pop(dialogContext);
-                                _openAttendanceHistory();
-                              },
-                            ),
-
-                            _profileMenuItem(
-                              icon: Icons.person_outline_rounded,
-                              label: 'Personal Information',
-                              onTap: () {
-                                Navigator.pop(dialogContext);
-
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => const ProfileScreen(),
-                                  ),
-                                );
-                              },
-                            ),
-
-                            _profileMenuItem(
-                              icon: Icons.settings_outlined,
-                              label: 'Settings',
-                              onTap: () {
-                                Navigator.pop(dialogContext);
-                              },
-                            ),
-
-                            _profileMenuItem(
-                              icon: Icons.info_outline_rounded,
-                              label: 'About',
-                              onTap: () {
-                                Navigator.pop(dialogContext);
-                              },
-                            ),
-
-                            const Divider(height: 1),
-
-                            InkWell(
-                              onTap: () {
-                                Navigator.pop(dialogContext);
-                                _confirmLogout();
-                              },
-                              child: const Padding(
-                                padding: EdgeInsets.symmetric(
-                                  horizontal: 18,
-                                  vertical: 14,
-                                ),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Icon(
-                                      Icons.logout_rounded,
-                                      color: Color(0xFFFF3B30),
-                                      size: 19,
-                                    ),
-                                    SizedBox(width: 8),
-                                    Text(
-                                      'Log Out',
-                                      style: TextStyle(
-                                        color: Color(0xFFFF3B30),
-                                        fontSize: 14,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-    );
-  }
-
-  Widget _profileMenuItem({
-    required IconData icon,
-    required String label,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-        child: Row(
-          children: [
-            Icon(icon, color: Colors.black, size: 22),
-            const SizedBox(width: 15),
-            Expanded(
-              child: Text(
-                label,
-                style: const TextStyle(color: Color(0xFF333333), fontSize: 14),
-              ),
-            ),
-            const Icon(
-              Icons.chevron_right_rounded,
-              color: Colors.black,
-              size: 21,
-            ),
-          ],
-        ),
+      backgroundColor: Colors.white,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 4, 18, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const CircleAvatar(
+                    backgroundColor: Color(0xFFF0F0FA),
+                    child: Icon(Icons.person_rounded, color: navy),
+                  ),
+                  title: Text(
+                    _fullName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  subtitle: _studentNumber.isEmpty
+                      ? null
+                      : Text(_studentNumber),
+                ),
+
+                const Divider(),
+
+                ListTile(
+                  leading: const Icon(
+                    Icons.person_outline_rounded,
+                    color: navy,
+                  ),
+                  title: const Text('Personal Information'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _openProfile();
+                  },
+                ),
+
+                ListTile(
+                  leading: const Icon(Icons.history_rounded, color: navy),
+                  title: const Text('Attendance History'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _openHistory();
+                  },
+                ),
+
+                ListTile(
+                  leading: const Icon(Icons.logout_rounded, color: Colors.red),
+                  title: const Text(
+                    'Log Out',
+                    style: TextStyle(color: Colors.red),
+                  ),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _confirmLogout();
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
-
-  // ===========================================================================
-  // LOGOUT
-  // ===========================================================================
 
   Future<void> _confirmLogout() async {
     final confirmed = await showDialog<bool>(
       context: context,
-      barrierDismissible: false,
-      builder: (BuildContext dialogContext) {
+      builder: (dialogContext) {
         return AlertDialog(
-          backgroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(24),
-          ),
-          contentPadding: const EdgeInsets.fromLTRB(28, 25, 28, 24),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 54,
-                height: 54,
-                decoration: BoxDecoration(
-                  border: Border.all(color: const Color(0xFFE5E5E5)),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(
-                  Icons.logout_rounded,
-                  color: Color(0xFFFF3B30),
-                  size: 32,
-                ),
-              ),
-              const SizedBox(height: 13),
-              const Text(
-                'Log Out',
-                style: TextStyle(
-                  color: Colors.black,
-                  fontSize: 23,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              const SizedBox(height: 7),
-              const Text(
-                'Are you sure you want to log out?',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: _muted, fontSize: 12),
-              ),
-              const SizedBox(height: 22),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextButton(
-                      onPressed: () {
-                        Navigator.pop(dialogContext, false);
-                      },
-                      child: const Text(
-                        'Cancel',
-                        style: TextStyle(color: Colors.black, fontSize: 14),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: SizedBox(
-                      height: 42,
-                      child: FilledButton(
-                        onPressed: () {
-                          Navigator.pop(dialogContext, true);
-                        },
-                        style: FilledButton.styleFrom(
-                          backgroundColor: _navy,
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(7),
-                          ),
-                        ),
-                        child: const Text(
-                          'Yes',
-                          style: TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
+          title: const Text('Log Out'),
+          content: const Text('Are you sure you want to log out?'),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(dialogContext, false);
+              },
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(dialogContext, true);
+              },
+              style: FilledButton.styleFrom(backgroundColor: navy),
+              child: const Text('Yes'),
+            ),
+          ],
         );
       },
     );
@@ -1143,6 +900,7 @@ class _HomeScreenState extends State<HomeScreen> {
   // ===========================================================================
   // BOTTOM NAVIGATION
   // ===========================================================================
+
   Widget _buildBottomNavigation() {
     return BottomAppBar(
       height: 83,
@@ -1157,52 +915,36 @@ class _HomeScreenState extends State<HomeScreen> {
           Expanded(
             child: _bottomItem(
               icon: Icons.home_outlined,
-              selectedIcon: Icons.home_rounded,
               label: 'Home',
               selected: true,
               onTap: () {},
             ),
           ),
+
           Expanded(
             child: _bottomItem(
               icon: Icons.notifications_none_rounded,
-              selectedIcon: Icons.notifications_rounded,
               label: 'Notification',
-              selected: false,
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => const NotificationsScreen(),
-                  ),
-                );
-              },
+              badgeCount: _unreadCount,
+              onTap: _openNotifications,
             ),
           ),
+
           const SizedBox(width: 78),
+
           Expanded(
             child: _bottomItem(
               icon: Icons.calendar_today_outlined,
-              selectedIcon: Icons.calendar_today_rounded,
               label: 'Calendar',
-              selected: false,
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const CalendarScreen()),
-                );
-              },
+              onTap: _openCalendar,
             ),
           ),
+
           Expanded(
             child: _bottomItem(
               icon: Icons.event_note_outlined,
-              selectedIcon: Icons.event_note_rounded,
               label: 'Sanction',
-              selected: false,
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const SanctionsScreen()),
-                );
-              },
+              onTap: _openSanctions,
             ),
           ),
         ],
@@ -1212,29 +954,61 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _bottomItem({
     required IconData icon,
-    required IconData selectedIcon,
     required String label,
-    required bool selected,
     required VoidCallback onTap,
+    bool selected = false,
+    int badgeCount = 0,
   }) {
-    final color = selected ? Colors.black : _muted;
+    final color = selected ? Colors.black : muted;
 
     return InkWell(
       onTap: onTap,
       child: Padding(
-        padding: const EdgeInsets.only(top: 10, bottom: 7),
+        padding: const EdgeInsets.only(top: 9, bottom: 6),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(selected ? selectedIcon : icon, color: color, size: 25),
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Icon(icon, color: color, size: 25),
+                if (badgeCount > 0)
+                  Positioned(
+                    right: -10,
+                    top: -7,
+                    child: Container(
+                      constraints: const BoxConstraints(
+                        minWidth: 18,
+                        minHeight: 18,
+                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      alignment: Alignment.center,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFD32F2F),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Text(
+                        badgeCount > 99 ? '99+' : '$badgeCount',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+
             const SizedBox(height: 5),
+
             Text(
               label,
               maxLines: 1,
               style: TextStyle(
                 color: color,
                 fontSize: 11,
-                fontWeight: selected ? FontWeight.w500 : FontWeight.w400,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
               ),
             ),
           ],
@@ -1244,7 +1018,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // ===========================================================================
-  // CENTER ATTENDANCE SCANNER
+  // SCANNER
   // ===========================================================================
 
   Widget _buildScannerButton() {
@@ -1254,8 +1028,7 @@ class _HomeScreenState extends State<HomeScreen> {
       child: FloatingActionButton(
         heroTag: 'record-attendance',
         elevation: 0,
-        highlightElevation: 2,
-        backgroundColor: _gold,
+        backgroundColor: gold,
         foregroundColor: Colors.black,
         shape: const CircleBorder(),
         onPressed: _openAttendanceScanner,
@@ -1265,8 +1038,18 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // ===========================================================================
-  // DATE / TIME FORMATTERS
+  // FORMATTERS
   // ===========================================================================
+
+  String _eventSubtitle(EventItem event) {
+    final parts = <String>[_formatTimeRange(event)];
+
+    if (event.venue.isNotEmpty) {
+      parts.add(event.venue);
+    }
+
+    return parts.join(' • ');
+  }
 
   String _formatDate(EventItem event) {
     final date = event.date;
@@ -1322,5 +1105,22 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     return clean;
+  }
+
+  String _formatStatus(String value) {
+    final clean = value.trim();
+
+    if (clean.isEmpty) {
+      return 'Recorded';
+    }
+
+    return clean
+        .split(RegExp(r'[_\s]+'))
+        .where((word) => word.isNotEmpty)
+        .map(
+          (word) =>
+              '${word[0].toUpperCase()}${word.substring(1).toLowerCase()}',
+        )
+        .join(' ');
   }
 }
