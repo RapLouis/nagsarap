@@ -10,6 +10,7 @@ import '../auth/auth_gate.dart';
 import '../calendar/calendar_screen.dart';
 import '../sanctions/sanctions_screen.dart';
 import '../profile/profile_screen.dart';
+import '../notifications/notifications_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final Map<String, dynamic>? user;
@@ -1142,7 +1143,6 @@ class _HomeScreenState extends State<HomeScreen> {
   // ===========================================================================
   // BOTTOM NAVIGATION
   // ===========================================================================
-
   Widget _buildBottomNavigation() {
     return BottomAppBar(
       height: 83,
@@ -1170,7 +1170,11 @@ class _HomeScreenState extends State<HomeScreen> {
               label: 'Notification',
               selected: false,
               onTap: () {
-                _showComingSoon('Notification');
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const NotificationsScreen(),
+                  ),
+                );
               },
             ),
           ),
@@ -1257,45 +1261,6 @@ class _HomeScreenState extends State<HomeScreen> {
         onPressed: _openAttendanceScanner,
         child: const Icon(Icons.center_focus_strong_rounded, size: 37),
       ),
-    );
-  }
-
-  // ===========================================================================
-  // TEMPORARY PLACEHOLDER
-  // ===========================================================================
-
-  Future<void> _showComingSoon(String title) {
-    return showDialog<void>(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          backgroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
-          title: Text(
-            title,
-            style: const TextStyle(
-              color: Colors.black,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          content: const Text(
-            'This function will be connected in the next implementation stage.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(dialogContext);
-              },
-              child: const Text(
-                'OK',
-                style: TextStyle(color: _navy, fontWeight: FontWeight.w700),
-              ),
-            ),
-          ],
-        );
-      },
     );
   }
 

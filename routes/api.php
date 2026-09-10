@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\AttendanceController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\EventController;
+use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\RegistrationController;
 use App\Http\Controllers\Api\SanctionController;
 use Illuminate\Support\Facades\Route;
@@ -64,9 +65,6 @@ Route::prefix('v1')->group(function () {
         |--------------------------------------------------------------------------
         | REGISTRATION BIOMETRICS
         |--------------------------------------------------------------------------
-        |
-        | Used only during biometric enrollment.
-        |
         */
 
         Route::post(
@@ -112,26 +110,10 @@ Route::prefix('v1')->group(function () {
             [AttendanceController::class, 'history']
         );
 
-        /*
-         * Existing attendance check-in route.
-         */
-
         Route::post(
             '/attendance/check-in',
             [AttendanceController::class, 'checkIn']
         )->middleware('throttle:30,1');
-
-        /*
-         * Mobile attendance frame analysis.
-         *
-         * Flutter
-         *   ↓
-         * AttendanceController
-         *   ↓
-         * FaceService
-         *   ↓
-         * Python MediaPipe / OpenCV / InsightFace
-         */
 
         Route::post(
             '/attendance/analyze-liveness-frame',
@@ -141,10 +123,6 @@ Route::prefix('v1')->group(function () {
             ]
         )->middleware('throttle:120,1');
 
-        /*
-         * Secure mobile attendance submission.
-         */
-
         Route::post(
             '/attendance/mobile-check-in',
             [
@@ -152,10 +130,6 @@ Route::prefix('v1')->group(function () {
                 'mobileCheckIn',
             ]
         )->middleware('throttle:30,1');
-
-        /*
-         * Offline attendance synchronization.
-         */
 
         Route::post(
             '/attendance/sync',
@@ -166,10 +140,6 @@ Route::prefix('v1')->group(function () {
         |--------------------------------------------------------------------------
         | SANCTIONS
         |--------------------------------------------------------------------------
-        |
-        | Must stay inside auth:sanctum so the controller can identify
-        | the currently logged-in student.
-        |
         */
 
         Route::get(
@@ -179,5 +149,35 @@ Route::prefix('v1')->group(function () {
                 'index',
             ]
         );
+
+        /*
+        |--------------------------------------------------------------------------
+        | NOTIFICATIONS
+        |--------------------------------------------------------------------------
+        */
+
+        Route::get(
+            '/notifications',
+            [
+                NotificationController::class,
+                'index',
+            ]
+        );
+
+        Route::patch(
+            '/notifications/read-all',
+            [
+                NotificationController::class,
+                'markAllAsRead',
+            ]
+        );
+
+        Route::patch(
+            '/notifications/{notificationId}/read',
+            [
+                NotificationController::class,
+                'markAsRead',
+            ]
+        )->whereNumber('notificationId');
     });
 });
