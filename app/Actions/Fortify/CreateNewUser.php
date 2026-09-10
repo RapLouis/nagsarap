@@ -105,7 +105,7 @@ class CreateNewUser implements CreatesNewUsers
             Storage::disk('private')->delete($photoPath);
             Storage::disk('private')->delete($pdfPath);
 
-            $errorMessage = 'Form 5 verification failed. Ensure the document contains your name and student number, and belongs to the current academic term.';
+            $errorMessage = 'Form 5 verification failed. The name on the document does not match your inpuuted name. Kindly ensure that the name on your Form 5 matches the name you provided during registration.';
             if (!$verificationResult['is_latest_term']) {
                 $errorMessage = 'The uploaded Form 5 is not valid for the current academic year/semester.';
             }

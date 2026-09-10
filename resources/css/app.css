@@ -130,6 +130,11 @@
     --sidebar-ring: #C9973E;
 }
 
+.custom-vertex-marker {
+    background: transparent !important;
+    border: none !important;
+}
+
 @layer base {
     * {
         @apply border-border;

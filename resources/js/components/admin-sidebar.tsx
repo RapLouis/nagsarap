@@ -27,7 +27,7 @@ export function AdminSidebar() {
         },
         {
             title: 'Events',
-            href: '/events',
+            href: '/admin/events',
             icon: Calendar,
         },
         {

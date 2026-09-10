@@ -120,7 +120,6 @@ class Form5VerificationService
         return [$academicYear, $semesterTokens];
     }
 
-
     /**
      * Validate extracted text against input identity parameters.
      * Requires ALL entered name parts (Firstname, Surname, and Middlename) to match strictly.
@@ -170,20 +169,40 @@ class Form5VerificationService
             'academic_year' => null,
         ];
 
+        // 1. DEGREE EXTRACTION
         if (preg_match('/Degree\s*:\s*(.+)/i', $text, $matches)) {
-            $data['degree'] = trim(explode("\n", $matches[1])[0]);
+            // Isolate the first line of the matched block
+            $firstLine = trim(explode("\n", $matches[1])[0]);
+
+            // Separate tabbed column headers (e.g. "BS in Computer Science\tYear / Section: 4 - A")
+            $firstColumn = explode("\t", $firstLine)[0];
+
+            // Strip "Year / Section:" if separated by space instead of tab
+            if (str_contains($firstColumn, 'Year / Section:')) {
+                [$degreePart] = explode('Year / Section:', $firstColumn, 2);
+                $firstColumn = $degreePart;
+            }
+
+            // Collapse multiple spaces and save clean degree string
+            $data['degree'] = trim(preg_replace('/\s+/', ' ', $firstColumn));
         }
 
+        // 2. YEAR & SECTION EXTRACTION
         if (preg_match('/Year\s*\/\s*Section\s*:\s*(.+)/i', $text, $matches)) {
-            $data['year_section'] = trim(explode("\n", $matches[1])[0]);
+            $rawSection = trim(explode("\n", $matches[1])[0]);
+            $data['year_section'] = trim(preg_replace('/\s+/', ' ', $rawSection));
         }
 
+        // 3. SEMESTER EXTRACTION
         if (preg_match('/Semester\s*:\s*(.+)/i', $text, $matches)) {
-            $data['semester'] = trim(explode("\n", $matches[1])[0]);
+            $rawSemester = trim(explode("\n", $matches[1])[0]);
+            $data['semester'] = trim(preg_replace('/\s+/', ' ', $rawSemester));
         }
 
+        // 4. ACADEMIC YEAR EXTRACTION
         if (preg_match('/Academic\s*Year\s*:\s*(.+)/i', $text, $matches)) {
-            $data['academic_year'] = trim(explode("\n", $matches[1])[0]);
+            $rawAY = trim(explode("\n", $matches[1])[0]);
+            $data['academic_year'] = trim(preg_replace('/\s+/', ' ', $rawAY));
         }
 
         return $data;
