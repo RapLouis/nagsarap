@@ -19,72 +19,49 @@ class ProfileResult {
 class ProfileService {
   ProfileService._();
 
-  static final ProfileService instance =
-      ProfileService._();
+  static final ProfileService instance = ProfileService._();
 
-  final ApiService _api =
-      ApiService.instance;
+  final ApiService _api = ApiService.instance;
 
   Future<ProfileResult> getProfile() async {
     try {
-      final response =
-          await _api.dio.get(
-        '/api/v1/me',
-      );
+      final response = await _api.dio.get('/api/v1/me');
 
-      final raw =
-          response.data;
+      final raw = response.data;
 
       if (raw is! Map) {
         return const ProfileResult(
           success: false,
-          message:
-              'Invalid response from the server.',
+          message: 'Invalid response from the server.',
           profile: null,
         );
       }
 
-      final body =
-          Map<String, dynamic>.from(
-        raw,
-      );
+      final body = Map<String, dynamic>.from(raw);
 
       if (body['success'] == false) {
         return ProfileResult(
           success: false,
-          message:
-              body['message']
-                      ?.toString() ??
-                  'Unable to load profile.',
+          message: body['message']?.toString() ?? 'Unable to load profile.',
           profile: null,
         );
       }
 
-      final dynamic rawData =
-          body['data'];
+      final dynamic rawData = body['data'];
 
       Map<String, dynamic> data;
 
       if (rawData is Map) {
-        data =
-            Map<String, dynamic>.from(
-          rawData,
-        );
+        data = Map<String, dynamic>.from(rawData);
       } else {
         data = body;
       }
 
-      final profile =
-          StudentProfile.fromJson(
-        data,
-      );
+      final profile = StudentProfile.fromJson(data);
 
       return ProfileResult(
         success: true,
-        message:
-            body['message']
-                    ?.toString() ??
-                'Profile loaded successfully.',
+        message: body['message']?.toString() ?? 'Profile loaded successfully.',
         profile: profile,
       );
     } on DioException catch (e) {
@@ -94,44 +71,31 @@ class ProfileService {
         profile: null,
       );
     } catch (e) {
-      debugPrint(
-        'PROFILE ERROR: $e',
-      );
+      debugPrint('PROFILE ERROR: $e');
 
       return const ProfileResult(
         success: false,
-        message:
-            'Unable to load your profile.',
+        message: 'Unable to load your profile.',
         profile: null,
       );
     }
   }
 
-  String _errorMessage(
-    DioException exception,
-  ) {
-    final response =
-        exception.response;
+  String _errorMessage(DioException exception) {
+    final response = exception.response;
 
     if (response == null) {
       return 'Unable to connect to Laravel.';
     }
 
-    final raw =
-        response.data;
+    final raw = response.data;
 
     if (raw is Map) {
-      final body =
-          Map<String, dynamic>.from(
-        raw,
-      );
+      final body = Map<String, dynamic>.from(raw);
 
-      final message =
-          body['message']
-              ?.toString();
+      final message = body['message']?.toString();
 
-      if (message != null &&
-          message.trim().isNotEmpty) {
+      if (message != null && message.trim().isNotEmpty) {
         return message;
       }
     }

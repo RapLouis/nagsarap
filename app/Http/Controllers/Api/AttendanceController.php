@@ -29,12 +29,39 @@ class AttendanceController extends Controller
     }
 
     /**
-     * Existing offline synchronization.
+     * Offline synchronization.
+     *
+     * New Flutter offline records send all five
+     * liveness challenge frames.
+     *
+     * Legacy callers that do not send the five
+     * challenge frames continue using the old
+     * process() path for compatibility.
      */
     public function sync(
         Request $request,
-        AttendanceService $attendanceService
+        AttendanceService $attendanceService,
+        FaceService $faceService
     ): JsonResponse {
+        $hasSecureMobileFrames =
+            $request->hasFile('center_frame') ||
+            $request->hasFile('blink_frame') ||
+            $request->hasFile('turned_frame') ||
+            $request->hasFile('smile_frame') ||
+            $request->hasFile('returned_frame');
+
+        if ($hasSecureMobileFrames) {
+            return $this->syncSecureMobileAttendance(
+                $request,
+                $attendanceService,
+                $faceService
+            );
+        }
+
+        /*
+         * Preserve the existing Laravel/web
+         * offline contract.
+         */
         return $this->process(
             $request,
             $attendanceService,
@@ -43,15 +70,7 @@ class AttendanceController extends Controller
     }
 
     /**
-     * Analyze ONE attendance liveness frame.
-     *
-     * Flutter
-     *   -> Laravel
-     *   -> existing FaceService
-     *   -> existing Python service
-     *   -> MediaPipe / OpenCV / InsightFace
-     *
-     * This intentionally does NOT use RegistrationController.
+     * Analyze one attendance liveness frame.
      */
     public function analyzeLivenessFrame(
         Request $request,
@@ -67,213 +86,469 @@ class AttendanceController extends Controller
         ]);
 
         try {
-            $analysis = $faceService->analyzeLivenessFrame(
-                $request->file('frame')
-            );
+            $analysis =
+                $faceService->analyzeLivenessFrame(
+                    $request->file('frame')
+                );
         } catch (RuntimeException $e) {
             return response()->json([
                 'success' => false,
-                'code' => 'LIVENESS_FRAME_FAILED',
-                'message' => $e->getMessage(),
+                'code' =>
+                    'LIVENESS_FRAME_FAILED',
+                'message' =>
+                    $e->getMessage(),
             ], 422);
         }
 
         return response()->json([
             'success' => true,
-            'code' => 'LIVENESS_FRAME_ANALYZED',
-            'message' => 'Attendance liveness frame analyzed.',
-            'data' => $analysis,
+            'code' =>
+                'LIVENESS_FRAME_ANALYZED',
+            'message' =>
+                'Attendance liveness frame analyzed.',
+            'data' =>
+                $analysis,
         ]);
     }
 
     /**
-     * Secure Flutter attendance check-in.
-     *
-     * The mobile app sends all five challenge frames.
-     *
-     * Server performs:
-     * 1. final liveness verification
-     * 2. same-person verification across challenge frames
-     * 3. event validation
-     * 4. geofence validation
-     * 5. registered-face comparison
-     * 6. duplicate-attendance validation
-     * 7. Present/Late calculation
-     * 8. database insert
+     * Secure Flutter online attendance check-in.
      */
     public function mobileCheckIn(
         Request $request,
         AttendanceService $attendanceService,
         FaceService $faceService
     ): JsonResponse {
-        $validated = $request->validate([
-            'event_id' => [
-                'required',
-                'integer',
-                'exists:events,event_id',
-            ],
+        $validated =
+            $request->validate([
+                'event_id' => [
+                    'required',
+                    'integer',
+                    'exists:events,event_id',
+                ],
 
-            'latitude' => [
-                'required',
-                'numeric',
-                'between:-90,90',
-            ],
+                'latitude' => [
+                    'required',
+                    'numeric',
+                    'between:-90,90',
+                ],
 
-            'longitude' => [
-                'required',
-                'numeric',
-                'between:-180,180',
-            ],
+                'longitude' => [
+                    'required',
+                    'numeric',
+                    'between:-180,180',
+                ],
 
-            'location_accuracy' => [
-                'nullable',
-                'numeric',
-                'min:0',
-                'max:10000',
-            ],
+                'location_accuracy' => [
+                    'nullable',
+                    'numeric',
+                    'min:0',
+                    'max:10000',
+                ],
 
-            'center_frame' => [
-                'required',
-                'image',
-                'mimes:jpeg,jpg,png',
-                'max:5048',
-            ],
+                'center_frame' => [
+                    'required',
+                    'image',
+                    'mimes:jpeg,jpg,png',
+                    'max:5048',
+                ],
 
-            'blink_frame' => [
-                'required',
-                'image',
-                'mimes:jpeg,jpg,png',
-                'max:5048',
-            ],
+                'blink_frame' => [
+                    'required',
+                    'image',
+                    'mimes:jpeg,jpg,png',
+                    'max:5048',
+                ],
 
-            'turned_frame' => [
-                'required',
-                'image',
-                'mimes:jpeg,jpg,png',
-                'max:5048',
-            ],
+                'turned_frame' => [
+                    'required',
+                    'image',
+                    'mimes:jpeg,jpg,png',
+                    'max:5048',
+                ],
 
-            'smile_frame' => [
-                'required',
-                'image',
-                'mimes:jpeg,jpg,png',
-                'max:5048',
-            ],
+                'smile_frame' => [
+                    'required',
+                    'image',
+                    'mimes:jpeg,jpg,png',
+                    'max:5048',
+                ],
 
-            'returned_frame' => [
-                'required',
-                'image',
-                'mimes:jpeg,jpg,png',
-                'max:5048',
-            ],
-        ]);
+                'returned_frame' => [
+                    'required',
+                    'image',
+                    'mimes:jpeg,jpg,png',
+                    'max:5048',
+                ],
+            ]);
 
-        $event = Event::findOrFail(
-            $validated['event_id']
-        );
+        $event =
+            Event::findOrFail(
+                $validated['event_id']
+            );
 
         /*
-        |--------------------------------------------------------------------------
-        | SERVER-SIDE LIVENESS VERIFICATION
-        |--------------------------------------------------------------------------
-        |
-        | Never trust Flutter to say that liveness passed.
-        |
-        | Existing FaceService forwards these frames to the existing
-        | Python /verify-liveness endpoint.
-        |
-        */
+         * Never trust Flutter to state that
+         * liveness passed.
+         */
         try {
-            $liveness = $faceService->verifyLiveness(
-                $request->file('center_frame'),
-                $request->file('blink_frame'),
-                $request->file('turned_frame'),
-                $request->file('smile_frame'),
-                $request->file('returned_frame')
-            );
+            $liveness =
+                $faceService->verifyLiveness(
+                    $request->file(
+                        'center_frame'
+                    ),
+                    $request->file(
+                        'blink_frame'
+                    ),
+                    $request->file(
+                        'turned_frame'
+                    ),
+                    $request->file(
+                        'smile_frame'
+                    ),
+                    $request->file(
+                        'returned_frame'
+                    )
+                );
         } catch (RuntimeException $e) {
             return response()->json([
                 'success' => false,
-                'code' => 'LIVENESS_FAILED',
-                'message' => $e->getMessage(),
+                'code' =>
+                    'LIVENESS_FAILED',
+                'message' =>
+                    $e->getMessage(),
             ], 422);
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | ATTENDANCE BUSINESS LOGIC
-        |--------------------------------------------------------------------------
-        |
-        | Existing AttendanceService handles:
-        |
-        | - verified student requirement
-        | - event time
-        | - geofence
-        | - GPS accuracy
-        | - duplicate attendance
-        | - InsightFace embedding extraction
-        | - registered-face comparison
-        | - Present/Late
-        | - database insertion
-        |
-        */
         try {
-            $attendance = $attendanceService->record(
-                user: $request->user(),
-                event: $event,
+            $attendance =
+                $attendanceService->record(
+                    user:
+                        $request->user(),
 
-                // Final centered live frame is used for identity comparison.
-                liveCameraFrame: $request->file('returned_frame'),
+                    event:
+                        $event,
 
-                latitude: (float) $validated['latitude'],
-                longitude: (float) $validated['longitude'],
+                    liveCameraFrame:
+                        $request->file(
+                            'returned_frame'
+                        ),
 
-                locationAccuracy:
-                    isset($validated['location_accuracy'])
-                        ? (float) $validated['location_accuracy']
-                        : null,
+                    latitude:
+                        (float)
+                        $validated['latitude'],
 
-                livenessPassed: true,
+                    longitude:
+                        (float)
+                        $validated['longitude'],
 
-                source: 'mobile_online',
-                isOfflineSync: false
-            );
+                    locationAccuracy:
+                        isset(
+                            $validated[
+                                'location_accuracy'
+                            ]
+                        )
+                            ? (float)
+                                $validated[
+                                    'location_accuracy'
+                                ]
+                            : null,
+
+                    livenessPassed:
+                        true,
+
+                    source:
+                        'mobile_online',
+
+                    isOfflineSync:
+                        false
+                );
         } catch (AttendanceException $e) {
             return response()->json([
                 'success' => false,
-                'code' => $e->errorCode,
-                'message' => $e->getMessage(),
-                'data' => $e->data,
+                'code' =>
+                    $e->errorCode,
+                'message' =>
+                    $e->getMessage(),
+                'data' =>
+                    $e->data,
             ], $e->httpStatus);
         } catch (RuntimeException $e) {
             return response()->json([
                 'success' => false,
-                'code' => 'FACE_VERIFICATION_FAILED',
-                'message' => $e->getMessage(),
+                'code' =>
+                    'FACE_VERIFICATION_FAILED',
+                'message' =>
+                    $e->getMessage(),
             ], 422);
         }
 
         return response()->json([
             'success' => true,
-            'code' => 'ATTENDANCE_RECORDED',
-            'message' => 'Attendance recorded successfully.',
+            'code' =>
+                'ATTENDANCE_RECORDED',
+            'message' =>
+                'Attendance recorded successfully.',
 
             'data' => [
-                'attendance' => $attendance->load('event'),
+                'attendance' =>
+                    $attendance->load('event'),
 
-                'liveness' => $liveness,
+                'liveness' =>
+                    $liveness,
 
                 'geofence' => [
-                    'passed' => true,
+                    'passed' =>
+                        true,
 
                     'distance_meters' =>
-                        $attendance->distance_from_event,
+                        $attendance
+                            ->distance_from_event,
 
                     'allowed_radius_meters' =>
-                        $attendance->event->geofence_radius,
+                        $attendance
+                            ->event
+                            ->geofence_radius,
                 ],
             ],
         ], 201);
+    }
+
+    /**
+     * Secure synchronization for a Flutter
+     * attendance recorded while offline.
+     *
+     * The stored five frames are verified now,
+     * but Present/Late is calculated from the
+     * original attendance_time.
+     */
+    private function syncSecureMobileAttendance(
+        Request $request,
+        AttendanceService $attendanceService,
+        FaceService $faceService
+    ): JsonResponse {
+        $validated =
+            $request->validate([
+                'event_id' => [
+                    'required',
+                    'integer',
+                    'exists:events,event_id',
+                ],
+
+                'attendance_uuid' => [
+                    'required',
+                    'uuid',
+                ],
+
+                'attendance_time' => [
+                    'required',
+                    'date',
+                ],
+
+                'latitude' => [
+                    'required',
+                    'numeric',
+                    'between:-90,90',
+                ],
+
+                'longitude' => [
+                    'required',
+                    'numeric',
+                    'between:-180,180',
+                ],
+
+                'location_accuracy' => [
+                    'nullable',
+                    'numeric',
+                    'min:0',
+                    'max:10000',
+                ],
+
+                'center_frame' => [
+                    'required',
+                    'image',
+                    'mimes:jpeg,jpg,png',
+                    'max:5048',
+                ],
+
+                'blink_frame' => [
+                    'required',
+                    'image',
+                    'mimes:jpeg,jpg,png',
+                    'max:5048',
+                ],
+
+                'turned_frame' => [
+                    'required',
+                    'image',
+                    'mimes:jpeg,jpg,png',
+                    'max:5048',
+                ],
+
+                'smile_frame' => [
+                    'required',
+                    'image',
+                    'mimes:jpeg,jpg,png',
+                    'max:5048',
+                ],
+
+                'returned_frame' => [
+                    'required',
+                    'image',
+                    'mimes:jpeg,jpg,png',
+                    'max:5048',
+                ],
+            ]);
+
+        $event =
+            Event::findOrFail(
+                $validated['event_id']
+            );
+
+        /*
+         * The device does not decide whether
+         * liveness succeeded.
+         *
+         * Laravel/Python performs the same
+         * five-frame verification used online.
+         */
+        try {
+            $liveness =
+                $faceService->verifyLiveness(
+                    $request->file(
+                        'center_frame'
+                    ),
+                    $request->file(
+                        'blink_frame'
+                    ),
+                    $request->file(
+                        'turned_frame'
+                    ),
+                    $request->file(
+                        'smile_frame'
+                    ),
+                    $request->file(
+                        'returned_frame'
+                    )
+                );
+        } catch (RuntimeException $e) {
+            return response()->json([
+                'success' => false,
+                'code' =>
+                    'LIVENESS_FAILED',
+                'message' =>
+                    $e->getMessage(),
+            ], 422);
+        }
+
+        try {
+            $attendance =
+                $attendanceService->record(
+                    user:
+                        $request->user(),
+
+                    event:
+                        $event,
+
+                    /*
+                     * Final centered image is
+                     * the live identity frame.
+                     */
+                    liveCameraFrame:
+                        $request->file(
+                            'returned_frame'
+                        ),
+
+                    latitude:
+                        (float)
+                        $validated['latitude'],
+
+                    longitude:
+                        (float)
+                        $validated['longitude'],
+
+                    locationAccuracy:
+                        isset(
+                            $validated[
+                                'location_accuracy'
+                            ]
+                        )
+                            ? (float)
+                                $validated[
+                                    'location_accuracy'
+                                ]
+                            : null,
+
+                    livenessPassed:
+                        true,
+
+                    attendanceUuid:
+                        $validated[
+                            'attendance_uuid'
+                        ],
+
+                    attendanceTime:
+                        $validated[
+                            'attendance_time'
+                        ],
+
+                    source:
+                        'mobile_offline',
+
+                    isOfflineSync:
+                        true
+                );
+        } catch (AttendanceException $e) {
+            return response()->json([
+                'success' => false,
+                'code' =>
+                    $e->errorCode,
+                'message' =>
+                    $e->getMessage(),
+                'data' =>
+                    $e->data,
+            ], $e->httpStatus);
+        } catch (RuntimeException $e) {
+            return response()->json([
+                'success' => false,
+                'code' =>
+                    'FACE_VERIFICATION_FAILED',
+                'message' =>
+                    $e->getMessage(),
+            ], 422);
+        }
+
+        return response()->json([
+            'success' => true,
+
+            'code' =>
+                'OFFLINE_ATTENDANCE_SYNCED',
+
+            'message' =>
+                'Offline attendance verified and synchronized successfully.',
+
+            'data' => [
+                'attendance' =>
+                    $attendance->load('event'),
+
+                'liveness' =>
+                    $liveness,
+
+                'geofence' => [
+                    'passed' =>
+                        true,
+
+                    'distance_meters' =>
+                        $attendance
+                            ->distance_from_event,
+
+                    'allowed_radius_meters' =>
+                        $attendance
+                            ->event
+                            ->geofence_radius,
+                ],
+            ],
+        ]);
     }
 
     /**
@@ -282,32 +557,40 @@ class AttendanceController extends Controller
     public function history(
         Request $request
     ): JsonResponse {
-        $student = $request->user()->student;
+        $student =
+            $request->user()->student;
 
         if (!$student) {
             return response()->json([
                 'success' => false,
-                'code' => 'STUDENT_REQUIRED',
-                'message' => 'A student account is required.',
+                'code' =>
+                    'STUDENT_REQUIRED',
+                'message' =>
+                    'A student account is required.',
             ], 403);
         }
 
-        $records = $student
-            ->attendances()
-            ->with('event')
-            ->orderByDesc('attendance_time')
-            ->paginate(30);
+        $records =
+            $student
+                ->attendances()
+                ->with('event')
+                ->orderByDesc(
+                    'attendance_time'
+                )
+                ->paginate(30);
 
         return response()->json([
             'success' => true,
-            'data' => $records,
+            'data' =>
+                $records,
         ]);
     }
 
     /**
-     * Existing web/offline attendance processor.
+     * Existing web attendance processor.
      *
-     * Do not remove because the existing Laravel/web system may use it.
+     * Kept for compatibility with the
+     * existing Laravel/web application.
      */
     private function process(
         Request $request,
@@ -321,12 +604,16 @@ class AttendanceController extends Controller
             ],
 
             'attendance_uuid' => [
-                $offline ? 'required' : 'nullable',
+                $offline
+                    ? 'required'
+                    : 'nullable',
                 'uuid',
             ],
 
             'attendance_time' => [
-                $offline ? 'required' : 'nullable',
+                $offline
+                    ? 'required'
+                    : 'nullable',
                 'date',
             ],
 
@@ -362,20 +649,24 @@ class AttendanceController extends Controller
             ],
         ];
 
-        $validated = $request->validate(
-            $rules
-        );
+        $validated =
+            $request->validate(
+                $rules
+            );
 
-        $event = Event::findOrFail(
-            $validated['event_id']
-        );
+        $event =
+            Event::findOrFail(
+                $validated['event_id']
+            );
 
         try {
             $attendance =
                 $attendanceService->record(
-                    user: $request->user(),
+                    user:
+                        $request->user(),
 
-                    event: $event,
+                    event:
+                        $event,
 
                     liveCameraFrame:
                         $request->file(
@@ -383,10 +674,12 @@ class AttendanceController extends Controller
                         ),
 
                     latitude:
-                        (float) $validated['latitude'],
+                        (float)
+                        $validated['latitude'],
 
                     longitude:
-                        (float) $validated['longitude'],
+                        (float)
+                        $validated['longitude'],
 
                     locationAccuracy:
                         isset(
@@ -400,7 +693,8 @@ class AttendanceController extends Controller
                                 ]
                             : null,
 
-                    livenessPassed: true,
+                    livenessPassed:
+                        true,
 
                     attendanceUuid:
                         $validated[
@@ -417,14 +711,18 @@ class AttendanceController extends Controller
                             ? 'mobile_offline'
                             : 'mobile_online',
 
-                    isOfflineSync: $offline
+                    isOfflineSync:
+                        $offline
                 );
         } catch (AttendanceException $e) {
             return response()->json([
                 'success' => false,
-                'code' => $e->errorCode,
-                'message' => $e->getMessage(),
-                'data' => $e->data,
+                'code' =>
+                    $e->errorCode,
+                'message' =>
+                    $e->getMessage(),
+                'data' =>
+                    $e->data,
             ], $e->httpStatus);
         }
 
@@ -446,7 +744,8 @@ class AttendanceController extends Controller
                     $attendance->load('event'),
 
                 'geofence' => [
-                    'passed' => true,
+                    'passed' =>
+                        true,
 
                     'distance_meters' =>
                         $attendance

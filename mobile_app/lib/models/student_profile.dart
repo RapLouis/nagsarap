@@ -31,30 +31,22 @@ class StudentProfile {
     required this.verificationStatus,
   });
 
-  factory StudentProfile.fromJson(
-    Map<String, dynamic> json,
-  ) {
-    final user = _mapValue(
-      json['user'],
-    );
+  factory StudentProfile.fromJson(Map<String, dynamic> json) {
+    final user = _mapValue(json['user']);
 
-    final student = _mapValue(
-      json['student'],
-    );
+    final student = _mapValue(json['student']);
 
     // Some /me implementations return the user/student
     // directly inside data rather than under user/student.
     final source = student.isNotEmpty
         ? student
         : user.isNotEmpty
-            ? user
-            : json;
+        ? user
+        : json;
 
     return StudentProfile(
       studentId: _intValue(
-        source['student_id'] ??
-            user['student_id'] ??
-            json['student_id'],
+        source['student_id'] ?? user['student_id'] ?? json['student_id'],
       ),
       studentNumber: _stringValue(
         source['student_number'] ??
@@ -93,15 +85,9 @@ class StudentProfile {
             json['ext'] ??
             json['extension'],
       ),
-      email: _stringValue(
-        source['email'] ??
-            user['email'] ??
-            json['email'],
-      ),
+      email: _stringValue(source['email'] ?? user['email'] ?? json['email']),
       degree: _stringValue(
-        source['degree'] ??
-            user['degree'] ??
-            json['degree'],
+        source['degree'] ?? user['degree'] ?? json['degree'],
       ),
       yearSection: _stringValue(
         source['year_section'] ??
@@ -112,9 +98,7 @@ class StudentProfile {
             json['year_and_section'],
       ),
       semester: _stringValue(
-        source['semester'] ??
-            user['semester'] ??
-            json['semester'],
+        source['semester'] ?? user['semester'] ?? json['semester'],
       ),
       academicYear: _stringValue(
         source['academic_year'] ??
@@ -135,9 +119,7 @@ class StudentProfile {
       middleName,
       surname,
       extension,
-    ].where(
-      (value) => value.trim().isNotEmpty,
-    );
+    ].where((value) => value.trim().isNotEmpty);
 
     return parts.join(' ');
   }
@@ -155,29 +137,20 @@ class StudentProfile {
   }
 
   bool get isVerified {
-    final value =
-        verificationStatus.trim().toLowerCase();
+    final value = verificationStatus.trim().toLowerCase();
 
-    return value == 'verified' ||
-        value == 'complete' ||
-        value == 'completed';
+    return value == 'verified' || value == 'complete' || value == 'completed';
   }
 
-  static Map<String, dynamic> _mapValue(
-    dynamic value,
-  ) {
+  static Map<String, dynamic> _mapValue(dynamic value) {
     if (value is Map) {
-      return Map<String, dynamic>.from(
-        value,
-      );
+      return Map<String, dynamic>.from(value);
     }
 
     return <String, dynamic>{};
   }
 
-  static int _intValue(
-    dynamic value,
-  ) {
+  static int _intValue(dynamic value) {
     if (value is int) {
       return value;
     }
@@ -186,24 +159,17 @@ class StudentProfile {
       return value.toInt();
     }
 
-    return int.tryParse(
-          value?.toString() ?? '',
-        ) ??
-        0;
+    return int.tryParse(value?.toString() ?? '') ?? 0;
   }
 
-  static String _stringValue(
-    dynamic value,
-  ) {
+  static String _stringValue(dynamic value) {
     if (value == null) {
       return '';
     }
 
-    final text =
-        value.toString().trim();
+    final text = value.toString().trim();
 
-    if (text.isEmpty ||
-        text.toLowerCase() == 'null') {
+    if (text.isEmpty || text.toLowerCase() == 'null') {
       return '';
     }
 
