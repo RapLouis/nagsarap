@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\AttendanceController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\EventController;
 use App\Http\Controllers\Api\RegistrationController;
+use App\Http\Controllers\Api\SanctionController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function () {
@@ -41,130 +42,142 @@ Route::prefix('v1')->group(function () {
     |--------------------------------------------------------------------------
     */
 
-    Route::middleware('auth:sanctum')
-        ->group(function () {
+    Route::middleware('auth:sanctum')->group(function () {
 
-            /*
-            |--------------------------------------------------------------------------
-            | USER
-            |--------------------------------------------------------------------------
-            */
+        /*
+        |--------------------------------------------------------------------------
+        | USER
+        |--------------------------------------------------------------------------
+        */
 
-            Route::get(
-                '/me',
-                [AuthController::class, 'me']
-            );
+        Route::get(
+            '/me',
+            [AuthController::class, 'me']
+        );
 
-            Route::post(
-                '/auth/logout',
-                [AuthController::class, 'logout']
-            );
+        Route::post(
+            '/auth/logout',
+            [AuthController::class, 'logout']
+        );
 
-            /*
-            |--------------------------------------------------------------------------
-            | REGISTRATION BIOMETRICS
-            |--------------------------------------------------------------------------
-            |
-            | Used ONLY while enrolling/registering the student's biometrics.
-            |
-            */
+        /*
+        |--------------------------------------------------------------------------
+        | REGISTRATION BIOMETRICS
+        |--------------------------------------------------------------------------
+        |
+        | Used only during biometric enrollment.
+        |
+        */
 
-            Route::post(
-                '/register/analyze-liveness-frame',
-                [
-                    RegistrationController::class,
-                    'analyzeLivenessFrame',
-                ]
-            )->middleware('throttle:60,1');
+        Route::post(
+            '/register/analyze-liveness-frame',
+            [
+                RegistrationController::class,
+                'analyzeLivenessFrame',
+            ]
+        )->middleware('throttle:60,1');
 
-            Route::post(
-                '/register/verify-face',
-                [
-                    RegistrationController::class,
-                    'verifyFace',
-                ]
-            )->middleware('throttle:10,1');
+        Route::post(
+            '/register/verify-face',
+            [
+                RegistrationController::class,
+                'verifyFace',
+            ]
+        )->middleware('throttle:10,1');
 
-            /*
-            |--------------------------------------------------------------------------
-            | EVENTS
-            |--------------------------------------------------------------------------
-            */
+        /*
+        |--------------------------------------------------------------------------
+        | EVENTS
+        |--------------------------------------------------------------------------
+        */
 
-            Route::get(
-                '/events',
-                [EventController::class, 'index']
-            );
+        Route::get(
+            '/events',
+            [EventController::class, 'index']
+        );
 
-            Route::get(
-                '/events/{event}',
-                [EventController::class, 'show']
-            );
+        Route::get(
+            '/events/{event}',
+            [EventController::class, 'show']
+        );
 
-            /*
-            |--------------------------------------------------------------------------
-            | ATTENDANCE
-            |--------------------------------------------------------------------------
-            */
+        /*
+        |--------------------------------------------------------------------------
+        | ATTENDANCE
+        |--------------------------------------------------------------------------
+        */
 
-            Route::get(
-                '/attendance/history',
-                [AttendanceController::class, 'history']
-            );
+        Route::get(
+            '/attendance/history',
+            [AttendanceController::class, 'history']
+        );
 
-            /*
-             * Existing route.
-             *
-             * Keep for compatibility with the existing web/backend flow.
-             */
-            Route::post(
-                '/attendance/check-in',
-                [AttendanceController::class, 'checkIn']
-            )->middleware('throttle:30,1');
+        /*
+         * Existing attendance check-in route.
+         */
 
-            /*
-             * MOBILE ATTENDANCE FRAME ANALYSIS
-             *
-             * Important:
-             * This is NOT RegistrationController.
-             *
-             * It uses:
-             *
-             * AttendanceController
-             *      ↓
-             * FaceService
-             *      ↓
-             * existing Python service
-             *      ↓
-             * MediaPipe / OpenCV / InsightFace
-             */
-            Route::post(
-                '/attendance/analyze-liveness-frame',
-                [
-                    AttendanceController::class,
-                    'analyzeLivenessFrame',
-                ]
-            )->middleware('throttle:120,1');
+        Route::post(
+            '/attendance/check-in',
+            [AttendanceController::class, 'checkIn']
+        )->middleware('throttle:30,1');
 
-            /*
-             * SECURE MOBILE ATTENDANCE SUBMISSION
-             *
-             * Receives all five challenge frames plus GPS.
-             */
-            Route::post(
-                '/attendance/mobile-check-in',
-                [
-                    AttendanceController::class,
-                    'mobileCheckIn',
-                ]
-            )->middleware('throttle:30,1');
+        /*
+         * Mobile attendance frame analysis.
+         *
+         * Flutter
+         *   ↓
+         * AttendanceController
+         *   ↓
+         * FaceService
+         *   ↓
+         * Python MediaPipe / OpenCV / InsightFace
+         */
 
-            /*
-             * Existing offline synchronization route.
-             */
-            Route::post(
-                '/attendance/sync',
-                [AttendanceController::class, 'sync']
-            )->middleware('throttle:60,1');
-        });
+        Route::post(
+            '/attendance/analyze-liveness-frame',
+            [
+                AttendanceController::class,
+                'analyzeLivenessFrame',
+            ]
+        )->middleware('throttle:120,1');
+
+        /*
+         * Secure mobile attendance submission.
+         */
+
+        Route::post(
+            '/attendance/mobile-check-in',
+            [
+                AttendanceController::class,
+                'mobileCheckIn',
+            ]
+        )->middleware('throttle:30,1');
+
+        /*
+         * Offline attendance synchronization.
+         */
+
+        Route::post(
+            '/attendance/sync',
+            [AttendanceController::class, 'sync']
+        )->middleware('throttle:60,1');
+
+        /*
+        |--------------------------------------------------------------------------
+        | SANCTIONS
+        |--------------------------------------------------------------------------
+        |
+        | Must stay inside auth:sanctum so the controller can identify
+        | the currently logged-in student.
+        |
+        */
+
+        Route::get(
+            '/sanctions',
+            [
+                SanctionController::class,
+                'index',
+            ]
+        );
+    });
 });

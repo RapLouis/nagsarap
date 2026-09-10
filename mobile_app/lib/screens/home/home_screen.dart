@@ -8,6 +8,7 @@ import '../attendance/attendance_face_verification_screen.dart';
 import '../attendance/attendance_history_screen.dart';
 import '../auth/auth_gate.dart';
 import '../calendar/calendar_screen.dart';
+import '../sanctions/sanctions_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final Map<String, dynamic>? user;
@@ -1183,7 +1184,9 @@ class _HomeScreenState extends State<HomeScreen> {
               label: 'Sanction',
               selected: false,
               onTap: () {
-                _showComingSoon('Sanction');
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const SanctionsScreen()),
+                );
               },
             ),
           ),
