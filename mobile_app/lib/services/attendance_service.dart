@@ -15,8 +15,15 @@ class AttendanceService {
 
   final OfflineStorageService _offlineStorage = OfflineStorageService.instance;
 
+  // Must match Python final verification.
+  static const double _centerLimit = 0.08;
+  static const double _blinkRatio = 0.72;
+  static const double _turnDelta = 0.06;
+  static const double _smileRatio = 1.04;
+  static const double _returnDelta = 0.06;
+
   // ===========================================================================
-  // ANALYZE ATTENDANCE LIVENESS FRAME
+  // ANALYZE ONE FRAME
   // ===========================================================================
 
   Future<AttendanceLivenessFrameResult> analyzeLivenessFrame({
@@ -40,25 +47,21 @@ class AttendanceService {
         ),
       );
 
-      final responseMap = _asMap(response.data);
+      final map = _asMap(response.data);
 
-      if (responseMap == null) {
+      if (map == null) {
         return const AttendanceLivenessFrameResult(
           success: false,
           message: 'Invalid liveness response.',
         );
       }
 
-      final data = _asMap(responseMap['data']) ?? <String, dynamic>{};
-
-      final success = responseMap['success'] == true;
+      final data = _asMap(map['data']) ?? <String, dynamic>{};
 
       return AttendanceLivenessFrameResult(
-        success: success,
-        code: responseMap['code']?.toString(),
-        message:
-            responseMap['message']?.toString() ??
-            (success ? 'Live frame analyzed.' : 'Unable to analyze frame.'),
+        success: map['success'] == true,
+        code: map['code']?.toString(),
+        message: map['message']?.toString() ?? 'Frame analyzed.',
         faceDetected: _boolValue(data['face_detected']),
         yaw: _doubleValue(data['yaw']),
         eyeOpenness: _doubleValue(data['eye_openness']),
@@ -75,17 +78,17 @@ class AttendanceService {
         networkUnavailable: e.response == null,
       );
     } catch (e) {
-      debugPrint('ATTENDANCE LIVENESS FRAME ERROR: $e');
+      debugPrint('LIVENESS FRAME ERROR: $e');
 
       return const AttendanceLivenessFrameResult(
         success: false,
-        message: 'Unable to analyze the attendance camera frame.',
+        message: 'Unable to analyze camera frame.',
       );
     }
   }
 
   // ===========================================================================
-  // ONLINE MOBILE CHECK-IN
+  // NORMAL ONLINE ATTENDANCE
   // ===========================================================================
 
   Future<AttendanceResult> mobileCheckIn({
@@ -115,7 +118,7 @@ class AttendanceService {
         ),
         'turned_frame': await MultipartFile.fromFile(
           turnedFrame.path,
-          filename: 'attendance-turned.jpg',
+          filename: 'attendance-turn.jpg',
         ),
         'smile_frame': await MultipartFile.fromFile(
           smileFrame.path,
@@ -123,7 +126,7 @@ class AttendanceService {
         ),
         'returned_frame': await MultipartFile.fromFile(
           returnedFrame.path,
-          filename: 'attendance-returned.jpg',
+          filename: 'attendance-return.jpg',
         ),
       });
 
@@ -137,34 +140,17 @@ class AttendanceService {
         ),
       );
 
-      final responseMap = _asMap(response.data);
+      final map = _asMap(response.data);
 
-      if (responseMap == null) {
+      if (map == null) {
         return const AttendanceResult(
           success: false,
-          message: 'Invalid attendance response from server.',
+          message: 'Invalid attendance response.',
         );
       }
 
-      final success = responseMap['success'] == true;
-
-      return AttendanceResult(
-        success: success,
-        code: responseMap['code']?.toString(),
-        message:
-            responseMap['message']?.toString() ??
-            (success
-                ? 'Attendance recorded successfully.'
-                : 'Attendance verification failed.'),
-        data: _asMap(responseMap['data']),
-      );
+      return AttendanceResult.fromJson(map);
     } on DioException catch (e) {
-      debugPrint(
-        'ATTENDANCE CHECK-IN HTTP ERROR: '
-        '${e.response?.statusCode} '
-        '${e.response?.data}',
-      );
-
       return AttendanceResult(
         success: false,
         code: _extractCode(e),
@@ -173,17 +159,17 @@ class AttendanceService {
         networkUnavailable: e.response == null,
       );
     } catch (e) {
-      debugPrint('ATTENDANCE CHECK-IN ERROR: $e');
+      debugPrint('ATTENDANCE ERROR: $e');
 
       return const AttendanceResult(
         success: false,
-        message: 'Unable to complete attendance verification.',
+        message: 'Unable to record attendance.',
       );
     }
   }
 
   // ===========================================================================
-  // QUEUE OFFLINE ATTENDANCE
+  // STORE BURST OFFLINE
   // ===========================================================================
 
   Future<AttendanceResult> queueOfflineAttendance({
@@ -192,19 +178,19 @@ class AttendanceService {
     required double longitude,
     required double locationAccuracy,
     required DateTime attendanceTime,
-    required XFile centerFrame,
-    required XFile blinkFrame,
-    required XFile turnedFrame,
-    required XFile smileFrame,
-    required XFile returnedFrame,
+    required List<XFile> centerCandidates,
+    required List<XFile> blinkCandidates,
+    required List<XFile> turnedCandidates,
+    required List<XFile> smileCandidates,
+    required List<XFile> returnedCandidates,
   }) async {
     try {
-      final alreadyPending = await _offlineStorage.hasPendingForEvent(eventId);
+      final exists = await _offlineStorage.hasPendingForEvent(eventId);
 
-      if (alreadyPending) {
+      if (exists) {
         return const AttendanceResult(
           success: false,
-          code: 'OFFLINE_ATTENDANCE_ALREADY_PENDING',
+          code: 'OFFLINE_ALREADY_PENDING',
           message: 'An offline attendance for this event is already waiting to sync.',
         );
       }
@@ -215,17 +201,17 @@ class AttendanceService {
         longitude: longitude,
         locationAccuracy: locationAccuracy,
         attendanceTime: attendanceTime,
-        centerFrame: centerFrame,
-        blinkFrame: blinkFrame,
-        turnedFrame: turnedFrame,
-        smileFrame: smileFrame,
-        returnedFrame: returnedFrame,
+        centerCandidates: centerCandidates,
+        blinkCandidates: blinkCandidates,
+        turnedCandidates: turnedCandidates,
+        smileCandidates: smileCandidates,
+        returnedCandidates: returnedCandidates,
       );
 
       return AttendanceResult(
         success: true,
         code: 'OFFLINE_ATTENDANCE_QUEUED',
-        message: 'Attendance saved offline and is waiting for verification and synchronization.',
+        message: 'Attendance saved offline.',
         data: <String, dynamic>{
           'attendance_uuid': record.uuid,
           'attendance_time': record.attendanceTime,
@@ -233,18 +219,211 @@ class AttendanceService {
         },
       );
     } catch (e) {
-      debugPrint('QUEUE OFFLINE ATTENDANCE ERROR: $e');
+      debugPrint('QUEUE OFFLINE ERROR: $e');
 
       return const AttendanceResult(
         success: false,
         code: 'OFFLINE_SAVE_FAILED',
-        message: 'Unable to safely save the offline attendance record.',
+        message: 'Unable to save offline attendance.',
       );
     }
   }
 
   // ===========================================================================
-  // SYNC ONE OFFLINE RECORD
+  // ANALYZE ALL CANDIDATES
+  // ===========================================================================
+
+  Future<List<_AnalyzedCandidate>> _analyzeCandidates(
+    List<String> paths,
+    String step,
+  ) async {
+    final accepted = <_AnalyzedCandidate>[];
+
+    for (final path in paths) {
+      final result = await analyzeLivenessFrame(frame: XFile(path));
+
+      if (result.networkUnavailable) {
+        throw const _NetworkUnavailable();
+      }
+
+      if (!result.success ||
+          !result.faceDetected ||
+          result.yaw == null ||
+          result.eyeOpenness == null ||
+          result.mouthWidth == null) {
+        debugPrint(
+          'OFFLINE CANDIDATE REJECTED '
+          '[$step] ${result.message}',
+        );
+
+        continue;
+      }
+
+      accepted.add(_AnalyzedCandidate(path: path, result: result));
+    }
+
+    return accepted;
+  }
+
+  Future<_SelectedFrames> _selectBestFrames(
+    PendingAttendanceRecord record,
+  ) async {
+    // -------------------------------------------------------------------------
+    // CENTER
+    // -------------------------------------------------------------------------
+
+    final centerResults = await _analyzeCandidates(
+      record.centerCandidatePaths,
+      'CENTER',
+    );
+
+    final validCenters = centerResults
+        .where((candidate) => candidate.result.yaw!.abs() <= _centerLimit)
+        .toList();
+
+    validCenters.sort((a, b) {
+      final yawOrder = a.result.yaw!.abs().compareTo(b.result.yaw!.abs());
+
+      if (yawOrder != 0) {
+        return yawOrder;
+      }
+
+      return b.quality.compareTo(a.quality);
+    });
+
+    if (validCenters.isEmpty) {
+      throw const _SelectionFailed(
+        'No good centered frame was found. Keep your whole face inside the guide and look directly at the camera.',
+      );
+    }
+
+    final center = validCenters.first;
+
+    final centerYaw = center.result.yaw!;
+
+    final centerEye = center.result.eyeOpenness!;
+
+    final centerMouth = center.result.mouthWidth!;
+
+    // -------------------------------------------------------------------------
+    // BLINK
+    // -------------------------------------------------------------------------
+
+    final blinkResults = await _analyzeCandidates(
+      record.blinkCandidatePaths,
+      'BLINK',
+    );
+
+    final validBlinks = blinkResults
+        .where(
+          (candidate) =>
+              candidate.result.eyeOpenness! <= centerEye * _blinkRatio,
+        )
+        .toList();
+
+    validBlinks.sort(
+      (a, b) => a.result.eyeOpenness!.compareTo(b.result.eyeOpenness!),
+    );
+
+    if (validBlinks.isEmpty) {
+      throw const _SelectionFailed(
+        'No valid blink frame was found. Close BOTH eyes fully and keep them closed while the blink burst is captured.',
+      );
+    }
+
+    // -------------------------------------------------------------------------
+    // TURN
+    // -------------------------------------------------------------------------
+
+    final turnResults = await _analyzeCandidates(
+      record.turnedCandidatePaths,
+      'TURN',
+    );
+
+    final validTurns = turnResults
+        .where(
+          (candidate) =>
+              (candidate.result.yaw! - centerYaw).abs() >= _turnDelta,
+        )
+        .toList();
+
+    validTurns.sort(
+      (a, b) => (b.result.yaw! - centerYaw).abs().compareTo(
+        (a.result.yaw! - centerYaw).abs(),
+      ),
+    );
+
+    if (validTurns.isEmpty) {
+      throw const _SelectionFailed(
+        'No valid head-turn frame was found. Turn clearly left or right and hold the pose.',
+      );
+    }
+
+    // -------------------------------------------------------------------------
+    // SMILE
+    // -------------------------------------------------------------------------
+
+    final smileResults = await _analyzeCandidates(
+      record.smileCandidatePaths,
+      'SMILE',
+    );
+
+    final validSmiles = smileResults
+        .where(
+          (candidate) =>
+              candidate.result.mouthWidth! >= centerMouth * _smileRatio,
+        )
+        .toList();
+
+    validSmiles.sort(
+      (a, b) => b.result.mouthWidth!.compareTo(a.result.mouthWidth!),
+    );
+
+    if (validSmiles.isEmpty) {
+      throw const _SelectionFailed(
+        'No valid smile frame was found. Smile clearly and hold the expression.',
+      );
+    }
+
+    // -------------------------------------------------------------------------
+    // RETURN CENTER
+    // -------------------------------------------------------------------------
+
+    final returnResults = await _analyzeCandidates(
+      record.returnedCandidatePaths,
+      'RETURN CENTER',
+    );
+
+    final validReturns = returnResults.where((candidate) {
+      final yaw = candidate.result.yaw!;
+
+      return yaw.abs() <= _centerLimit &&
+          (yaw - centerYaw).abs() <= _returnDelta;
+    }).toList();
+
+    validReturns.sort(
+      (a, b) => (a.result.yaw! - centerYaw).abs().compareTo(
+        (b.result.yaw! - centerYaw).abs(),
+      ),
+    );
+
+    if (validReturns.isEmpty) {
+      throw const _SelectionFailed(
+        'No valid final centered frame was found. Return to the center and hold still.',
+      );
+    }
+
+    return _SelectedFrames(
+      centerPath: center.path,
+      blinkPath: validBlinks.first.path,
+      turnedPath: validTurns.first.path,
+      smilePath: validSmiles.first.path,
+      returnedPath: validReturns.first.path,
+    );
+  }
+
+  // ===========================================================================
+  // SYNC ONE RECORD
   // ===========================================================================
 
   Future<AttendanceResult> syncOfflineAttendance(
@@ -254,11 +433,17 @@ class AttendanceService {
       return const AttendanceResult(
         success: false,
         code: 'OFFLINE_FILES_MISSING',
-        message: 'One or more offline biometric files are missing.',
+        message: 'Offline biometric files are missing.',
       );
     }
 
     try {
+      debugPrint('Selecting best biometric frames...');
+
+      final selected = await _selectBestFrames(record);
+
+      debugPrint('OFFLINE BEST FRAMES SELECTED');
+
       final formData = FormData.fromMap({
         'event_id': record.eventId,
         'attendance_uuid': record.uuid,
@@ -268,28 +453,28 @@ class AttendanceService {
         'location_accuracy': record.locationAccuracy,
 
         'center_frame': await MultipartFile.fromFile(
-          record.centerFramePath,
+          selected.centerPath,
           filename: 'offline-center.jpg',
         ),
 
         'blink_frame': await MultipartFile.fromFile(
-          record.blinkFramePath,
+          selected.blinkPath,
           filename: 'offline-blink.jpg',
         ),
 
         'turned_frame': await MultipartFile.fromFile(
-          record.turnedFramePath,
-          filename: 'offline-turned.jpg',
+          selected.turnedPath,
+          filename: 'offline-turn.jpg',
         ),
 
         'smile_frame': await MultipartFile.fromFile(
-          record.smileFramePath,
+          selected.smilePath,
           filename: 'offline-smile.jpg',
         ),
 
         'returned_frame': await MultipartFile.fromFile(
-          record.returnedFramePath,
-          filename: 'offline-returned.jpg',
+          selected.returnedPath,
+          filename: 'offline-return.jpg',
         ),
       });
 
@@ -303,16 +488,29 @@ class AttendanceService {
         ),
       );
 
-      final responseMap = _asMap(response.data);
+      final map = _asMap(response.data);
 
-      if (responseMap == null) {
+      if (map == null) {
         return const AttendanceResult(
           success: false,
-          message: 'Invalid offline synchronization response.',
+          message: 'Invalid offline sync response.',
         );
       }
 
-      return AttendanceResult.fromJson(responseMap);
+      return AttendanceResult.fromJson(map);
+    } on _NetworkUnavailable {
+      return const AttendanceResult(
+        success: false,
+        code: 'NETWORK_UNAVAILABLE',
+        message: 'Server is unavailable.',
+        networkUnavailable: true,
+      );
+    } on _SelectionFailed catch (e) {
+      return AttendanceResult(
+        success: false,
+        code: 'OFFLINE_LIVENESS_EVIDENCE_FAILED',
+        message: e.message,
+      );
     } on DioException catch (e) {
       debugPrint(
         'OFFLINE SYNC HTTP ERROR: '
@@ -333,26 +531,37 @@ class AttendanceService {
       return const AttendanceResult(
         success: false,
         code: 'OFFLINE_SYNC_FAILED',
-        message: 'Unable to synchronize the offline attendance.',
+        message: 'Unable to synchronize offline attendance.',
       );
     }
   }
 
   // ===========================================================================
-  // SYNC ALL PENDING RECORDS
+  // SYNC ALL
   // ===========================================================================
 
   Future<OfflineSyncResult> syncPendingAttendances() async {
     final records = await _offlineStorage.getPendingAttendances();
 
+    debugPrint('==========================================');
+    debugPrint('OFFLINE SYNC START');
+    debugPrint('Pending records: ${records.length}');
+    debugPrint('==========================================');
+
     if (records.isEmpty) {
       return const OfflineSyncResult(total: 0, synced: 0, remaining: 0);
     }
 
-    int synced = 0;
+    var synced = 0;
 
     for (final record in records) {
       final result = await syncOfflineAttendance(record);
+
+      debugPrint('OFFLINE SYNC RESULT');
+      debugPrint('Success: ${result.success}');
+      debugPrint('Code: ${result.code}');
+      debugPrint('Message: ${result.message}');
+      debugPrint('Network unavailable: ${result.networkUnavailable}');
 
       if (result.success || result.code == 'ALREADY_CHECKED_IN') {
         await _offlineStorage.deletePending(record);
@@ -367,6 +576,13 @@ class AttendanceService {
     }
 
     final remaining = await _offlineStorage.pendingCount();
+
+    debugPrint('==========================================');
+    debugPrint('OFFLINE SYNC COMPLETE');
+    debugPrint('Total: ${records.length}');
+    debugPrint('Synced: $synced');
+    debugPrint('Remaining: $remaining');
+    debugPrint('==========================================');
 
     return OfflineSyncResult(
       total: records.length,
@@ -441,9 +657,9 @@ class AttendanceService {
     final raw = response.data;
 
     if (raw is Map) {
-      final data = Map<String, dynamic>.from(raw);
+      final map = Map<String, dynamic>.from(raw);
 
-      final errors = data['errors'];
+      final errors = map['errors'];
 
       if (errors is Map && errors.isNotEmpty) {
         final first = errors.values.first;
@@ -455,39 +671,29 @@ class AttendanceService {
         return first.toString();
       }
 
-      if (data['message'] != null) {
-        return data['message'].toString();
+      if (map['message'] != null) {
+        return map['message'].toString();
       }
     }
 
     switch (response.statusCode) {
       case 401:
-        return 'Your login session has expired. Please log in again.';
-
+        return 'Your login session has expired.';
       case 403:
-        return 'Your account is not allowed to record attendance.';
-
+        return 'Your account cannot record attendance.';
       case 404:
-        return 'The attendance event could not be found.';
-
+        return 'Event not found.';
       case 409:
-        return 'Attendance has already been recorded for this event.';
-
+        return 'Attendance has already been recorded.';
       case 422:
-        return 'Attendance verification failed. Please try again.';
-
+        return 'Attendance verification failed.';
       case 429:
-        return 'Too many verification requests. Please wait a moment and try again.';
-
+        return 'Too many requests. Please wait.';
       default:
-        return 'Attendance verification failed. Please try again.';
+        return 'Attendance verification failed.';
     }
   }
 }
-
-// =============================================================================
-// ATTENDANCE RESULT
-// =============================================================================
 
 class AttendanceResult {
   const AttendanceResult({
@@ -509,16 +715,12 @@ class AttendanceResult {
 
     return AttendanceResult(
       success: json['success'] == true,
-      message: json['message']?.toString() ?? 'Unknown attendance response.',
+      message: json['message']?.toString() ?? 'Unknown response.',
       code: json['code']?.toString(),
       data: rawData is Map ? Map<String, dynamic>.from(rawData) : null,
     );
   }
 }
-
-// =============================================================================
-// ATTENDANCE LIVENESS FRAME RESULT
-// =============================================================================
 
 class AttendanceLivenessFrameResult {
   const AttendanceLivenessFrameResult({
@@ -553,10 +755,6 @@ class AttendanceLivenessFrameResult {
   final bool networkUnavailable;
 }
 
-// =============================================================================
-// OFFLINE SYNC RESULT
-// =============================================================================
-
 class OfflineSyncResult {
   const OfflineSyncResult({
     required this.total,
@@ -567,4 +765,41 @@ class OfflineSyncResult {
   final int total;
   final int synced;
   final int remaining;
+}
+
+class _AnalyzedCandidate {
+  const _AnalyzedCandidate({required this.path, required this.result});
+
+  final String path;
+  final AttendanceLivenessFrameResult result;
+
+  double get quality {
+    return ((result.detectionScore ?? 0) * 1000) + (result.blurScore ?? 0);
+  }
+}
+
+class _SelectedFrames {
+  const _SelectedFrames({
+    required this.centerPath,
+    required this.blinkPath,
+    required this.turnedPath,
+    required this.smilePath,
+    required this.returnedPath,
+  });
+
+  final String centerPath;
+  final String blinkPath;
+  final String turnedPath;
+  final String smilePath;
+  final String returnedPath;
+}
+
+class _SelectionFailed implements Exception {
+  const _SelectionFailed(this.message);
+
+  final String message;
+}
+
+class _NetworkUnavailable implements Exception {
+  const _NetworkUnavailable();
 }

@@ -6,6 +6,7 @@ import '../../services/attendance_history_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/event_service.dart';
 import '../../services/notification_service.dart';
+import '../../services/attendance_service.dart';
 import '../attendance/attendance_face_verification_screen.dart';
 import '../attendance/attendance_history_screen.dart';
 import '../auth/auth_gate.dart';
@@ -123,9 +124,77 @@ class _HomeScreenState extends State<HomeScreen> {
       });
     }
 
+    // ---------------------------------------------------------------------------
+    // 1. LOAD EVENTS FIRST
+    //
+    // If Laravel is reachable, this confirms that it makes sense to attempt
+    // synchronization of locally queued offline attendance.
+    // ---------------------------------------------------------------------------
+
     final eventResult = await EventService.instance.getEvents();
 
+    if (!mounted) {
+      return;
+    }
+
+    if (!eventResult.success) {
+      setState(() {
+        _loading = false;
+        _events = const [];
+        _error = eventResult.message;
+      });
+
+      return;
+    }
+
+    _events = eventResult.events;
+
+    // ---------------------------------------------------------------------------
+    // 2. SYNC PENDING OFFLINE ATTENDANCE
+    //
+    // AttendanceService already owns this logic.
+    //
+    // It reads pending records from OfflineStorageService,
+    // sends them to Laravel,
+    // and only removes a pending record after successful verification.
+    // ---------------------------------------------------------------------------
+
+    try {
+      debugPrint('==========================================');
+      debugPrint('OFFLINE SYNC: Home dashboard trigger');
+      debugPrint('==========================================');
+
+      final syncResult = await AttendanceService.instance
+          .syncPendingAttendances();
+
+      debugPrint('==========================================');
+      debugPrint('OFFLINE SYNC RESULT');
+      debugPrint('Total: ${syncResult.total}');
+      debugPrint('Synced: ${syncResult.synced}');
+      debugPrint('Remaining: ${syncResult.remaining}');
+      debugPrint('==========================================');
+    } catch (e) {
+      // A failed sync must NOT stop the Home dashboard from loading.
+      //
+      // The pending record remains stored locally and can be retried the next
+      // time Home refreshes.
+      debugPrint('OFFLINE SYNC HOME ERROR: $e');
+    }
+
+    // ---------------------------------------------------------------------------
+    // 3. LOAD HISTORY AFTER SYNC
+    //
+    // This ordering is intentional.
+    //
+    // If an offline record was successfully synchronized, Attendance History
+    // will now immediately see that new attendance.
+    // ---------------------------------------------------------------------------
+
     final historyResult = await AttendanceHistoryService.instance.getHistory();
+
+    // ---------------------------------------------------------------------------
+    // 4. LOAD NOTIFICATIONS
+    // ---------------------------------------------------------------------------
 
     final notificationResult = await NotificationService.instance
         .getNotifications();
@@ -134,14 +203,12 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    // ---------------------------------------------------------------------------
+    // 5. UPDATE DASHBOARD
+    // ---------------------------------------------------------------------------
+
     setState(() {
       _loading = false;
-
-      if (!eventResult.success) {
-        _events = const [];
-        _error = eventResult.message;
-        return;
-      }
 
       _events = eventResult.events;
       _error = null;

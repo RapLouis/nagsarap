@@ -29,19 +29,37 @@ class AttendanceFaceVerificationScreen extends StatefulWidget {
 class _AttendanceFaceVerificationScreenState
     extends State<AttendanceFaceVerificationScreen> {
   static const Color navy = Color(0xFF080878);
+
   static const Color gold = Color(0xFFFFC800);
+
   static const Color background = Color(0xFFF7F7FB);
 
   static const double centerYawLimit = 0.08;
+
   static const double turnYawDelta = 0.06;
+
   static const double returnYawDelta = 0.06;
+
   static const double blinkRatio = 0.88;
+
   static const double blinkReopenRatio = 0.92;
+
   static const double smileRatio = 1.04;
 
   static const Duration normalCaptureInterval = Duration(milliseconds: 250);
+
   static const Duration blinkCaptureInterval = Duration(milliseconds: 80);
-  static const Duration offlinePoseDelay = Duration(seconds: 2);
+
+  // Offline bursts.
+  static const int centerBurstCount = 3;
+  static const int blinkBurstCount = 5;
+  static const int turnBurstCount = 4;
+  static const int smileBurstCount = 4;
+  static const int returnBurstCount = 3;
+
+  static const Duration offlinePoseDelay = Duration(milliseconds: 1400);
+
+  static const Duration offlineBurstGap = Duration(milliseconds: 160);
 
   CameraController? _camera;
   Position? _position;
@@ -50,20 +68,34 @@ class _AttendanceFaceVerificationScreenState
   bool _running = false;
   bool _analyzing = false;
   bool _disposed = false;
+
   bool _offlineMode = false;
   bool _offlineCaptureBusy = false;
 
-  int _offlineChallengeGeneration = 0;
+  int _offlineGeneration = 0;
   int _badFrames = 0;
 
   String? _error;
+
   _AttendanceStep _step = _AttendanceStep.preparing;
 
+  // Online accepted frames.
   XFile? _centerFrame;
   XFile? _blinkFrame;
   XFile? _turnedFrame;
   XFile? _smileFrame;
   XFile? _returnedFrame;
+
+  // Offline burst frames.
+  List<XFile> _centerCandidates = <XFile>[];
+
+  List<XFile> _blinkCandidates = <XFile>[];
+
+  List<XFile> _turnedCandidates = <XFile>[];
+
+  List<XFile> _smileCandidates = <XFile>[];
+
+  List<XFile> _returnedCandidates = <XFile>[];
 
   double? _centerYaw;
   double? _centerEyeOpenness;
@@ -73,33 +105,36 @@ class _AttendanceFaceVerificationScreenState
 
   static const int maxBadFramesBeforeMessage = 6;
 
-  Duration get _currentCaptureInterval {
-    return _step == _AttendanceStep.blink
-        ? blinkCaptureInterval
-        : normalCaptureInterval;
+  Duration get _captureInterval {
+    if (_step == _AttendanceStep.blink) {
+      return blinkCaptureInterval;
+    }
+
+    return normalCaptureInterval;
   }
 
-  bool get _waitingForBlinkReopen =>
-      _step == _AttendanceStep.blink && _blinkClosedDetected;
+  bool get _waitingForBlinkReopen {
+    return _step == _AttendanceStep.blink && _blinkClosedDetected;
+  }
 
   @override
   void initState() {
     super.initState();
-    _prepareAttendance();
+
+    _prepare();
   }
 
   // ===========================================================================
-  // PREPARE LOCATION + CAMERA
+  // PREPARE
   // ===========================================================================
 
-  Future<void> _prepareAttendance() async {
+  Future<void> _prepare() async {
     try {
-      final eventId = widget.event.id;
-      if (eventId == null) {
-        throw Exception('The selected event does not have a valid ID.');
+      if (widget.event.id == null) {
+        throw Exception('Invalid event ID.');
       }
 
-      final position = await _getCurrentPosition();
+      final position = await _getPosition();
 
       if (!mounted || _disposed) {
         return;
@@ -107,11 +142,9 @@ class _AttendanceFaceVerificationScreenState
 
       _position = position;
 
-      // Laravel remains authoritative. This local check only avoids beginning
-      // biometric capture when the cached event clearly places the user outside.
-      _validateLocalGeofence(position);
+      _checkLocalGeofence(position);
 
-      await _initializeCamera();
+      await _startCamera();
     } catch (e) {
       if (!mounted || _disposed) {
         return;
@@ -119,19 +152,19 @@ class _AttendanceFaceVerificationScreenState
 
       setState(() {
         _initializing = false;
+
         _step = _AttendanceStep.failed;
+
         _error = e.toString().replaceFirst('Exception: ', '');
       });
     }
   }
 
-  Future<Position> _getCurrentPosition() async {
-    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+  Future<Position> _getPosition() async {
+    final enabled = await Geolocator.isLocationServiceEnabled();
 
-    if (!serviceEnabled) {
-      throw Exception(
-        'Location services are disabled. Turn on GPS and try again.',
-      );
+    if (!enabled) {
+      throw Exception('Location services are disabled.');
     }
 
     var permission = await Geolocator.checkPermission();
@@ -140,16 +173,9 @@ class _AttendanceFaceVerificationScreenState
       permission = await Geolocator.requestPermission();
     }
 
-    if (permission == LocationPermission.denied) {
-      throw Exception(
-        'Location permission is required to verify the event geofence.',
-      );
-    }
-
-    if (permission == LocationPermission.deniedForever) {
-      throw Exception(
-        'Location permission is permanently denied. Enable it in Android settings.',
-      );
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      throw Exception('Location permission is required.');
     }
 
     return Geolocator.getCurrentPosition(
@@ -160,35 +186,33 @@ class _AttendanceFaceVerificationScreenState
     );
   }
 
-  void _validateLocalGeofence(Position position) {
+  void _checkLocalGeofence(Position position) {
     if (!widget.event.geofenceEnabled) {
       return;
     }
 
-    final eventLatitude = widget.event.latitude;
-    final eventLongitude = widget.event.longitude;
+    final lat = widget.event.latitude;
+
+    final lng = widget.event.longitude;
+
     final radius = widget.event.geofenceRadius;
 
-    if (eventLatitude == null || eventLongitude == null || radius <= 0) {
-      // Do not invent event coordinates. Laravel will validate the event.
+    if (lat == null || lng == null || radius <= 0) {
       return;
     }
 
     final distance = Geolocator.distanceBetween(
       position.latitude,
       position.longitude,
-      eventLatitude,
-      eventLongitude,
+      lat,
+      lng,
     );
 
     if (distance > radius) {
-      final outsideBy = distance - radius;
-
       throw Exception(
         'You are ${distance.toStringAsFixed(1)} m '
-        'from the event location.\n'
-        'Allowed radius: $radius m.\n'
-        'Move ${outsideBy.toStringAsFixed(1)} m closer.',
+        'from the event location. '
+        'Allowed radius: $radius m.',
       );
     }
   }
@@ -197,96 +221,64 @@ class _AttendanceFaceVerificationScreenState
   // CAMERA
   // ===========================================================================
 
-  Future<void> _initializeCamera() async {
-    if (_disposed) {
+  Future<void> _startCamera() async {
+    final cameras = await availableCameras();
+
+    if (cameras.isEmpty) {
+      throw StateError('No camera available.');
+    }
+
+    var camera = cameras.first;
+
+    for (final item in cameras) {
+      if (item.lensDirection == CameraLensDirection.front) {
+        camera = item;
+        break;
+      }
+    }
+
+    final controller = CameraController(
+      camera,
+      ResolutionPreset.medium,
+      enableAudio: false,
+      imageFormatGroup: ImageFormatGroup.jpeg,
+    );
+
+    await controller.initialize();
+
+    if (!mounted || _disposed) {
+      await controller.dispose();
       return;
     }
 
-    try {
-      final cameras = await availableCameras();
+    _camera = controller;
 
-      if (cameras.isEmpty) {
-        throw StateError('No camera is available.');
-      }
+    setState(() {
+      _initializing = false;
+      _error = null;
+    });
 
-      CameraDescription selected = cameras.first;
+    await Future<void>.delayed(const Duration(milliseconds: 800));
 
-      for (final camera in cameras) {
-        if (camera.lensDirection == CameraLensDirection.front) {
-          selected = camera;
-          break;
-        }
-      }
-
-      final oldCamera = _camera;
-      if (oldCamera != null) {
-        await oldCamera.dispose();
-      }
-
-      final controller = CameraController(
-        selected,
-        ResolutionPreset.medium,
-        enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.jpeg,
-      );
-
-      await controller.initialize();
-
-      if (!mounted || _disposed) {
-        await controller.dispose();
-        return;
-      }
-
-      _camera = controller;
-
-      setState(() {
-        _initializing = false;
-        _error = null;
-        _step = _AttendanceStep.preparing;
-      });
-
-      await Future<void>.delayed(const Duration(milliseconds: 900));
-
-      if (!mounted || _disposed) {
-        return;
-      }
-
-      await _startOnlineChallenge();
-    } on CameraException catch (e) {
-      if (!mounted || _disposed) {
-        return;
-      }
-
-      setState(() {
-        _initializing = false;
-        _step = _AttendanceStep.failed;
-        _error = e.code == 'CameraAccessDenied'
-            ? 'Camera permission was denied. Allow camera access and try again.'
-            : 'Unable to start camera: ${e.description ?? e.code}';
-      });
-    } catch (_) {
-      if (!mounted || _disposed) {
-        return;
-      }
-
-      setState(() {
-        _initializing = false;
-        _step = _AttendanceStep.failed;
-        _error = 'Unable to start the camera.';
-      });
-    }
+    await _startOnline();
   }
 
-  // ===========================================================================
-  // RESET
-  // ===========================================================================
-
-  void _resetChallenge() {
+  void _reset() {
     _centerFrame = null;
     _blinkFrame = null;
     _turnedFrame = null;
     _smileFrame = null;
     _returnedFrame = null;
+
+    _centerCandidates = <XFile>[];
+
+    _blinkCandidates = <XFile>[];
+
+    _turnedCandidates = <XFile>[];
+
+    _smileCandidates = <XFile>[];
+
+    _returnedCandidates = <XFile>[];
 
     _centerYaw = null;
     _centerEyeOpenness = null;
@@ -297,29 +289,23 @@ class _AttendanceFaceVerificationScreenState
   }
 
   // ===========================================================================
-  // ONLINE CHALLENGE
+  // ONLINE
   // ===========================================================================
 
-  Future<void> _startOnlineChallenge() async {
-    final controller = _camera;
-
+  Future<void> _startOnline() async {
     if (_running ||
-        controller == null ||
-        !controller.value.isInitialized ||
+        _camera == null ||
+        !_camera!.value.isInitialized ||
         _disposed) {
       return;
     }
 
-    _offlineMode = false;
-    _resetChallenge();
+    _reset();
 
-    if (!mounted) {
-      return;
-    }
+    _offlineMode = false;
 
     setState(() {
       _running = true;
-      _error = null;
       _step = _AttendanceStep.center;
     });
 
@@ -329,64 +315,53 @@ class _AttendanceFaceVerificationScreenState
         !_offlineMode &&
         _step != _AttendanceStep.verifying &&
         _step != _AttendanceStep.failed) {
-      await _captureAndAnalyze();
+      await _onlineFrame();
 
-      if (!mounted ||
-          _disposed ||
-          !_running ||
-          _offlineMode ||
-          _step == _AttendanceStep.verifying ||
-          _step == _AttendanceStep.failed) {
+      if (!_running || _offlineMode || _disposed) {
         break;
       }
 
-      await Future<void>.delayed(_currentCaptureInterval);
+      await Future<void>.delayed(_captureInterval);
     }
   }
 
-  Future<void> _captureAndAnalyze() async {
+  Future<void> _onlineFrame() async {
     if (_analyzing || !_running || _disposed) {
       return;
     }
 
-    final controller = _camera;
+    final camera = _camera;
 
-    if (controller == null ||
-        !controller.value.isInitialized ||
-        controller.value.isTakingPicture) {
+    if (camera == null ||
+        !camera.value.isInitialized ||
+        camera.value.isTakingPicture) {
       return;
     }
 
     _analyzing = true;
 
     try {
-      final frame = await controller.takePicture();
-
-      if (!mounted || _disposed || !_running) {
-        return;
-      }
+      final frame = await camera.takePicture();
 
       final result = await AttendanceService.instance.analyzeLivenessFrame(
         frame: frame,
       );
 
-      if (!mounted || _disposed || !_running) {
+      if (!mounted || _disposed) {
         return;
       }
 
       if (result.networkUnavailable) {
-        _switchToOfflineMode();
+        _beginOffline();
         return;
       }
 
       if (!result.success || !result.faceDetected) {
         _badFrames++;
 
-        if (_badFrames >= maxBadFramesBeforeMessage && mounted) {
+        if (_badFrames >= maxBadFramesBeforeMessage) {
           setState(() {
-            _error = result.message.isNotEmpty
-                ? result.message
-                : 'Keep one face clearly visible inside the guide.';
+            _error = result.message;
           });
         }
 
@@ -394,76 +369,43 @@ class _AttendanceFaceVerificationScreenState
       }
 
       final yaw = result.yaw;
+
       final eye = result.eyeOpenness;
+
       final mouth = result.mouthWidth;
 
       if (yaw == null || eye == null || mouth == null) {
-        _badFrames++;
-
-        if (_badFrames >= maxBadFramesBeforeMessage && mounted) {
-          setState(() {
-            _error =
-                'Unable to read facial measurements. Keep your face clearly visible.';
-          });
-        }
-
         return;
       }
 
       _badFrames = 0;
 
-      if (_error != null && mounted) {
+      if (_error != null) {
         setState(() {
           _error = null;
         });
       }
 
-      await _processMeasurement(
-        frame: frame,
-        yaw: yaw,
-        eyeOpenness: eye,
-        mouthWidth: mouth,
-      );
-    } on CameraException catch (e) {
-      if (!mounted || _disposed) {
-        return;
-      }
-
-      setState(() {
-        _error = 'Camera capture failed: ${e.description ?? e.code}';
-      });
-    } catch (_) {
-      _badFrames++;
-
-      if (_badFrames >= maxBadFramesBeforeMessage && mounted) {
-        setState(() {
-          _error =
-              'Unable to analyze the camera frame. Keep your face inside the guide.';
-        });
-      }
+      await _processOnline(frame: frame, yaw: yaw, eye: eye, mouth: mouth);
     } finally {
       _analyzing = false;
     }
   }
 
-  Future<void> _processMeasurement({
+  Future<void> _processOnline({
     required XFile frame,
     required double yaw,
-    required double eyeOpenness,
-    required double mouthWidth,
+    required double eye,
+    required double mouth,
   }) async {
     switch (_step) {
       case _AttendanceStep.center:
         if (yaw.abs() <= centerYawLimit) {
           _centerFrame = frame;
           _centerYaw = yaw;
-          _centerEyeOpenness = eyeOpenness;
-          _centerMouthWidth = mouthWidth;
+          _centerEyeOpenness = eye;
+          _centerMouthWidth = mouth;
           _blinkClosedDetected = false;
-
-          if (!mounted) {
-            return;
-          }
 
           setState(() {
             _step = _AttendanceStep.blink;
@@ -474,33 +416,19 @@ class _AttendanceFaceVerificationScreenState
       case _AttendanceStep.blink:
         final baseline = _centerEyeOpenness;
 
-        if (baseline == null || baseline <= 0) {
-          _fail('Center eye measurement was lost. Please try again.');
+        if (baseline == null) {
           return;
         }
 
-        final closedThreshold = baseline * blinkRatio;
-        final reopenThreshold = baseline * blinkReopenRatio;
-
         if (!_blinkClosedDetected) {
-          if (eyeOpenness <= closedThreshold) {
+          if (eye <= baseline * blinkRatio) {
             _blinkClosedDetected = true;
+
             _blinkFrame = frame;
 
-            if (mounted) {
-              setState(() {});
-            }
+            setState(() {});
           }
-        } else if (eyeOpenness >= reopenThreshold) {
-          if (_blinkFrame == null) {
-            _fail('Blink frame was not captured. Please try again.');
-            return;
-          }
-
-          if (!mounted) {
-            return;
-          }
-
+        } else if (eye >= baseline * blinkReopenRatio) {
           setState(() {
             _step = _AttendanceStep.turn;
           });
@@ -508,19 +436,10 @@ class _AttendanceFaceVerificationScreenState
         break;
 
       case _AttendanceStep.turn:
-        final baseline = _centerYaw;
+        final center = _centerYaw;
 
-        if (baseline == null) {
-          _fail('Center measurements were lost. Please try again.');
-          return;
-        }
-
-        if ((yaw - baseline).abs() >= turnYawDelta) {
+        if (center != null && (yaw - center).abs() >= turnYawDelta) {
           _turnedFrame = frame;
-
-          if (!mounted) {
-            return;
-          }
 
           setState(() {
             _step = _AttendanceStep.smile;
@@ -531,17 +450,8 @@ class _AttendanceFaceVerificationScreenState
       case _AttendanceStep.smile:
         final baseline = _centerMouthWidth;
 
-        if (baseline == null || baseline <= 0) {
-          _fail('Center measurements were lost. Please try again.');
-          return;
-        }
-
-        if (mouthWidth >= baseline * smileRatio) {
+        if (baseline != null && mouth >= baseline * smileRatio) {
           _smileFrame = frame;
-
-          if (!mounted) {
-            return;
-          }
 
           setState(() {
             _step = _AttendanceStep.returnCenter;
@@ -550,130 +460,117 @@ class _AttendanceFaceVerificationScreenState
         break;
 
       case _AttendanceStep.returnCenter:
-        final originalYaw = _centerYaw;
+        final center = _centerYaw;
 
-        if (originalYaw == null) {
-          _fail('Center measurements were lost. Please try again.');
-          return;
-        }
-
-        final centered = yaw.abs() <= centerYawLimit;
-        final returned = (yaw - originalYaw).abs() <= returnYawDelta;
-
-        if (centered && returned) {
+        if (center != null &&
+            yaw.abs() <= centerYawLimit &&
+            (yaw - center).abs() <= returnYawDelta) {
           _returnedFrame = frame;
-          await _submitOnlineAttendance();
+
+          await _submitOnline();
         }
         break;
 
-      case _AttendanceStep.preparing:
-      case _AttendanceStep.verifying:
-      case _AttendanceStep.failed:
+      default:
         break;
     }
   }
 
   // ===========================================================================
-  // AUTOMATIC OFFLINE CHALLENGE
+  // OFFLINE BURST
   // ===========================================================================
 
-  void _switchToOfflineMode() {
-    if (_disposed || _offlineMode) {
+  void _beginOffline() {
+    if (_offlineMode || _disposed) {
       return;
     }
 
     _running = false;
     _offlineMode = true;
-    _resetChallenge();
 
-    final generation = ++_offlineChallengeGeneration;
+    _reset();
 
-    if (!mounted || _disposed) {
-      return;
-    }
+    final generation = ++_offlineGeneration;
 
     setState(() {
       _step = _AttendanceStep.center;
       _error = null;
     });
 
-    Future<void>.delayed(
-      const Duration(milliseconds: 700),
-      () async {
-        if (!mounted ||
-            _disposed ||
-            !_offlineMode ||
-            generation != _offlineChallengeGeneration) {
-          return;
-        }
-
-        await _startAutomaticOfflineChallenge(generation);
-      },
-    );
+    Future<void>.delayed(const Duration(milliseconds: 500), () {
+      if (_offlineActive(generation)) {
+        _runOffline(generation);
+      }
+    });
   }
 
-  bool _offlineChallengeIsActive(int generation) {
+  bool _offlineActive(int generation) {
     return mounted &&
         !_disposed &&
         _offlineMode &&
-        generation == _offlineChallengeGeneration;
+        generation == _offlineGeneration;
   }
 
-  Future<bool> _waitForOfflinePose(
-    int generation, {
-    Duration duration = offlinePoseDelay,
-  }) async {
+  Future<bool> _wait(int generation, Duration duration) async {
     const interval = Duration(milliseconds: 100);
+
     var elapsed = Duration.zero;
 
     while (elapsed < duration) {
-      if (!_offlineChallengeIsActive(generation)) {
+      if (!_offlineActive(generation)) {
         return false;
       }
 
       await Future<void>.delayed(interval);
+
       elapsed += interval;
     }
 
-    return _offlineChallengeIsActive(generation);
+    return true;
   }
 
-  Future<XFile?> _takeOfflinePicture(int generation) async {
-    if (!_offlineChallengeIsActive(generation)) {
-      return null;
+  Future<void> _prepareStep(int generation, _AttendanceStep step) async {
+    if (!_offlineActive(generation)) {
+      return;
     }
 
-    final controller = _camera;
+    setState(() {
+      _step = step;
+      _error = null;
+    });
 
-    if (controller == null || !controller.value.isInitialized) {
-      _fail('Camera is not ready. Please try again.');
-      return null;
+    await _wait(generation, offlinePoseDelay);
+  }
+
+  Future<List<XFile>> _burst(int generation, int count) async {
+    final camera = _camera;
+
+    if (camera == null || !camera.value.isInitialized) {
+      return <XFile>[];
     }
 
-    while (controller.value.isTakingPicture) {
-      if (!_offlineChallengeIsActive(generation)) {
-        return null;
-      }
-
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-    }
-
-    if (!_offlineChallengeIsActive(generation)) {
-      return null;
-    }
+    final frames = <XFile>[];
 
     setState(() {
       _offlineCaptureBusy = true;
     });
 
     try {
-      final frame = await controller.takePicture();
+      for (var i = 0; i < count; i++) {
+        if (!_offlineActive(generation)) {
+          break;
+        }
 
-      if (!_offlineChallengeIsActive(generation)) {
-        return null;
+        while (camera.value.isTakingPicture) {
+          await Future<void>.delayed(const Duration(milliseconds: 40));
+        }
+
+        frames.add(await camera.takePicture());
+
+        if (i < count - 1) {
+          await Future<void>.delayed(offlineBurstGap);
+        }
       }
-
-      return frame;
     } finally {
       if (mounted && !_disposed) {
         setState(() {
@@ -681,170 +578,68 @@ class _AttendanceFaceVerificationScreenState
         });
       }
     }
+
+    return frames;
   }
 
-  Future<void> _startAutomaticOfflineChallenge(int generation) async {
-    if (!_offlineChallengeIsActive(generation)) {
-      return;
-    }
-
+  Future<void> _runOffline(int generation) async {
     try {
-      // Step 1: center.
-      setState(() {
-        _step = _AttendanceStep.center;
-        _error = null;
-      });
+      await _prepareStep(generation, _AttendanceStep.center);
 
-      if (!await _waitForOfflinePose(generation)) {
+      _centerCandidates = await _burst(generation, centerBurstCount);
+
+      await _prepareStep(generation, _AttendanceStep.blink);
+
+      _blinkCandidates = await _burst(generation, blinkBurstCount);
+
+      await _wait(generation, const Duration(milliseconds: 700));
+
+      await _prepareStep(generation, _AttendanceStep.turn);
+
+      _turnedCandidates = await _burst(generation, turnBurstCount);
+
+      await _prepareStep(generation, _AttendanceStep.smile);
+
+      _smileCandidates = await _burst(generation, smileBurstCount);
+
+      await _prepareStep(generation, _AttendanceStep.returnCenter);
+
+      _returnedCandidates = await _burst(generation, returnBurstCount);
+
+      if (!_offlineActive(generation)) {
         return;
       }
 
-      _centerFrame = await _takeOfflinePicture(generation);
-      if (_centerFrame == null) {
-        return;
-      }
-
-      // Step 2: closed eyes.
-      if (!_offlineChallengeIsActive(generation)) {
-        return;
-      }
-
-      setState(() {
-        _step = _AttendanceStep.blink;
-        _error = null;
-      });
-
-      if (!await _waitForOfflinePose(generation)) {
-        return;
-      }
-
-      _blinkFrame = await _takeOfflinePicture(generation);
-      if (_blinkFrame == null) {
-        return;
-      }
-
-      // Give the student time to reopen their eyes before the turn.
-      if (!await _waitForOfflinePose(
-        generation,
-        duration: const Duration(milliseconds: 900),
-      )) {
-        return;
-      }
-
-      // Step 3: head turn.
-      if (!_offlineChallengeIsActive(generation)) {
-        return;
-      }
-
-      setState(() {
-        _step = _AttendanceStep.turn;
-        _error = null;
-      });
-
-      if (!await _waitForOfflinePose(generation)) {
-        return;
-      }
-
-      _turnedFrame = await _takeOfflinePicture(generation);
-      if (_turnedFrame == null) {
-        return;
-      }
-
-      // Step 4: smile.
-      if (!_offlineChallengeIsActive(generation)) {
-        return;
-      }
-
-      setState(() {
-        _step = _AttendanceStep.smile;
-        _error = null;
-      });
-
-      if (!await _waitForOfflinePose(generation)) {
-        return;
-      }
-
-      _smileFrame = await _takeOfflinePicture(generation);
-      if (_smileFrame == null) {
-        return;
-      }
-
-      // Step 5: return center.
-      if (!_offlineChallengeIsActive(generation)) {
-        return;
-      }
-
-      setState(() {
-        _step = _AttendanceStep.returnCenter;
-        _error = null;
-      });
-
-      if (!await _waitForOfflinePose(generation)) {
-        return;
-      }
-
-      _returnedFrame = await _takeOfflinePicture(generation);
-      if (_returnedFrame == null) {
-        return;
-      }
-
-      if (!_offlineChallengeIsActive(generation)) {
-        return;
-      }
-
-      await _queueOfflineAttendance();
-    } on CameraException catch (e) {
-      if (!mounted || _disposed) {
-        return;
-      }
-
-      _fail('Camera capture failed: ${e.description ?? e.code}');
-    } catch (_) {
-      if (!mounted || _disposed) {
-        return;
-      }
-
-      _fail(
-        'Unable to complete offline biometric capture. Please try again.',
-      );
+      await _saveOffline();
+    } catch (e) {
+      _fail('Offline camera capture failed. Please try again.');
     }
   }
 
   // ===========================================================================
-  // ONLINE SUBMIT
+  // SUBMIT ONLINE
   // ===========================================================================
 
-  Future<void> _submitOnlineAttendance() async {
-    final position = _position;
+  Future<void> _submitOnline() async {
     final eventId = widget.event.id;
 
-    if (eventId == null) {
-      _fail('The selected event does not have a valid ID.');
-      return;
-    }
+    final position = _position;
 
-    if (_centerFrame == null ||
+    if (eventId == null ||
+        position == null ||
+        _centerFrame == null ||
         _blinkFrame == null ||
         _turnedFrame == null ||
         _smileFrame == null ||
         _returnedFrame == null) {
-      _fail('Some biometric frames were not captured. Please try again.');
-      return;
-    }
+      _fail('Attendance evidence is incomplete.');
 
-    if (position == null) {
-      _fail('Your location could not be read. Please try again.');
-      return;
-    }
-
-    if (!mounted || _disposed) {
       return;
     }
 
     setState(() {
       _running = false;
       _step = _AttendanceStep.verifying;
-      _error = null;
     });
 
     final result = await AttendanceService.instance.mobileCheckIn(
@@ -863,11 +658,21 @@ class _AttendanceFaceVerificationScreenState
       return;
     }
 
-    // If connectivity disappears after completing the online challenge,
-    // preserve the already captured evidence instead of throwing it away.
     if (result.networkUnavailable) {
       _offlineMode = true;
-      await _queueOfflineAttendance();
+
+      _centerCandidates = <XFile>[_centerFrame!];
+
+      _blinkCandidates = <XFile>[_blinkFrame!];
+
+      _turnedCandidates = <XFile>[_turnedFrame!];
+
+      _smileCandidates = <XFile>[_smileFrame!];
+
+      _returnedCandidates = <XFile>[_returnedFrame!];
+
+      await _saveOffline();
+
       return;
     }
 
@@ -876,61 +681,49 @@ class _AttendanceFaceVerificationScreenState
       return;
     }
 
-    await _showOnlineSuccess(result);
+    await _onlineSuccess(result);
   }
 
   // ===========================================================================
-  // QUEUE OFFLINE
+  // SAVE OFFLINE
   // ===========================================================================
 
-  Future<void> _queueOfflineAttendance() async {
-    final position = _position;
+  Future<void> _saveOffline() async {
     final eventId = widget.event.id;
 
-    if (eventId == null) {
-      _fail('The selected event does not have a valid ID.');
+    final position = _position;
+
+    if (eventId == null || position == null) {
+      _fail('Event or GPS data is missing.');
+
       return;
     }
 
-    if (position == null) {
-      _fail('Your GPS location is unavailable.');
-      return;
-    }
+    if (_centerCandidates.isEmpty ||
+        _blinkCandidates.isEmpty ||
+        _turnedCandidates.isEmpty ||
+        _smileCandidates.isEmpty ||
+        _returnedCandidates.isEmpty) {
+      _fail('Offline biometric burst is incomplete.');
 
-    if (_centerFrame == null ||
-        _blinkFrame == null ||
-        _turnedFrame == null ||
-        _smileFrame == null ||
-        _returnedFrame == null) {
-      _fail('The offline biometric evidence is incomplete. Please try again.');
-      return;
-    }
-
-    if (!mounted || _disposed) {
       return;
     }
 
     setState(() {
-      _running = false;
       _step = _AttendanceStep.verifying;
-      _error = null;
     });
-
-    // attendance_time is when the complete evidence was captured.
-    // Laravel generates sync_time later when the pending record is uploaded.
-    final attendanceTime = DateTime.now();
 
     final result = await AttendanceService.instance.queueOfflineAttendance(
       eventId: eventId,
       latitude: position.latitude,
       longitude: position.longitude,
       locationAccuracy: position.accuracy,
-      attendanceTime: attendanceTime,
-      centerFrame: _centerFrame!,
-      blinkFrame: _blinkFrame!,
-      turnedFrame: _turnedFrame!,
-      smileFrame: _smileFrame!,
-      returnedFrame: _returnedFrame!,
+      attendanceTime: DateTime.now(),
+      centerCandidates: _centerCandidates,
+      blinkCandidates: _blinkCandidates,
+      turnedCandidates: _turnedCandidates,
+      smileCandidates: _smileCandidates,
+      returnedCandidates: _returnedCandidates,
     );
 
     if (!mounted || _disposed) {
@@ -942,19 +735,15 @@ class _AttendanceFaceVerificationScreenState
       return;
     }
 
-    await _showOfflineQueuedSuccess();
+    await _offlineSuccess();
   }
-
-  // ===========================================================================
-  // ERROR / RETRY
-  // ===========================================================================
 
   void _fail(String message) {
     if (!mounted || _disposed) {
       return;
     }
 
-    _offlineChallengeGeneration++;
+    _offlineGeneration++;
 
     setState(() {
       _running = false;
@@ -965,271 +754,87 @@ class _AttendanceFaceVerificationScreenState
   }
 
   Future<void> _retry() async {
-    if (_disposed) {
-      return;
-    }
-
-    _offlineChallengeGeneration++;
+    _offlineGeneration++;
 
     setState(() {
-      _initializing = true;
-      _running = false;
       _offlineMode = false;
-      _offlineCaptureBusy = false;
+      _initializing = false;
       _error = null;
       _step = _AttendanceStep.preparing;
     });
 
-    _resetChallenge();
-
-    try {
-      final position = await _getCurrentPosition();
-      _validateLocalGeofence(position);
-
-      if (!mounted || _disposed) {
-        return;
-      }
-
-      _position = position;
-
-      setState(() {
-        _initializing = false;
-      });
-
-      await _startOnlineChallenge();
-    } catch (e) {
-      if (!mounted || _disposed) {
-        return;
-      }
-
-      setState(() {
-        _initializing = false;
-        _step = _AttendanceStep.failed;
-        _error = e.toString().replaceFirst('Exception: ', '');
-      });
-    }
+    await _startOnline();
   }
 
   // ===========================================================================
-  // SUCCESS DIALOGS
+  // DIALOGS
   // ===========================================================================
 
-  Future<void> _showOnlineSuccess(AttendanceResult result) async {
+  Future<void> _onlineSuccess(AttendanceResult result) async {
     final attendance = result.data?['attendance'];
-    String status = 'Recorded';
+
+    var status = 'Recorded';
 
     if (attendance is Map && attendance['status'] != null) {
-      final raw = attendance['status'].toString();
+      final value = attendance['status'].toString();
 
-      if (raw.isNotEmpty) {
+      if (value.isNotEmpty) {
         status =
-            '${raw[0].toUpperCase()}${raw.substring(1).toLowerCase()}';
+            '${value[0].toUpperCase()}'
+            '${value.substring(1).toLowerCase()}';
       }
     }
 
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (dialogContext) {
+      builder: (context) {
         return AlertDialog(
-          backgroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(26),
-          ),
-          contentPadding: const EdgeInsets.fromLTRB(28, 30, 28, 24),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 72,
-                height: 72,
-                decoration: const BoxDecoration(
-                  color: Color(0xFF00B934),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.check_rounded,
-                  color: Colors.white,
-                  size: 48,
-                ),
-              ),
-              const SizedBox(height: 20),
-              const Text(
-                'Attendance Recorded',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Color(0xFF1E1E24),
-                  fontSize: 24,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                widget.event.name,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Color(0xFF55555F),
-                  fontSize: 14,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 8,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFF3BF),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Text(
-                  status,
-                  style: const TextStyle(
-                    color: navy,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 22),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: navy,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                  ),
-                  onPressed: () {
-                    Navigator.pop(dialogContext);
-                  },
-                  child: const Text('Done'),
-                ),
-              ),
-            ],
-          ),
+          title: const Text('Attendance Recorded'),
+          content: Text('${widget.event.name}\n\n$status'),
+          actions: [
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(context);
+              },
+              child: const Text('Done'),
+            ),
+          ],
         );
       },
     );
 
-    if (mounted && !_disposed) {
-      Navigator.of(context).pop(true);
+    if (mounted) {
+      Navigator.pop(context, true);
     }
   }
 
-  Future<void> _showOfflineQueuedSuccess() async {
+  Future<void> _offlineSuccess() async {
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (dialogContext) {
+      builder: (context) {
         return AlertDialog(
-          backgroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(26),
+          title: const Text('Saved Offline'),
+          content: const Text(
+            'Multiple biometric candidates were saved for every challenge step.\n\n'
+            'Pending Verification & Sync\n\n'
+            'When connection returns, the server will analyze the candidate frames, choose the valid liveness evidence, verify your face and geofence, and only then record attendance.',
           ),
-          contentPadding: const EdgeInsets.fromLTRB(28, 30, 28, 24),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 72,
-                height: 72,
-                decoration: const BoxDecoration(
-                  color: gold,
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.cloud_upload_outlined,
-                  color: navy,
-                  size: 40,
-                ),
-              ),
-              const SizedBox(height: 20),
-              const Text(
-                'Saved Offline',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Color(0xFF1E1E24),
-                  fontSize: 24,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                widget.event.name,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Color(0xFF55555F),
-                  fontSize: 14,
-                ),
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'Your GPS position and biometric challenge were safely saved on this device.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Color(0xFF55555F),
-                  fontSize: 13,
-                  height: 1.4,
-                ),
-              ),
-              const SizedBox(height: 14),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 9,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFF3BF),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: const Text(
-                  'Pending Verification & Sync',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: navy,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 14),
-              const Text(
-                'When Laravel becomes reachable, the saved frames will be verified by MediaPipe, OpenCV and InsightFace before attendance is accepted.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Color(0xFF777783),
-                  fontSize: 12,
-                  height: 1.4,
-                ),
-              ),
-              const SizedBox(height: 22),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: navy,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                  ),
-                  onPressed: () {
-                    Navigator.pop(dialogContext);
-                  },
-                  child: const Text('Done'),
-                ),
-              ),
-            ],
-          ),
+          actions: [
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(context);
+              },
+              child: const Text('Done'),
+            ),
+          ],
         );
       },
     );
 
-    if (mounted && !_disposed) {
-      Navigator.of(context).pop(true);
+    if (mounted) {
+      Navigator.pop(context, true);
     }
   }
 
@@ -1240,46 +845,43 @@ class _AttendanceFaceVerificationScreenState
   String get _instruction {
     if (_offlineMode) {
       switch (_step) {
-        case _AttendanceStep.preparing:
-          return 'Preparing offline attendance...';
-
         case _AttendanceStep.center:
           return _offlineCaptureBusy
-              ? 'Capturing...'
+              ? 'Capturing centered frames...'
               : 'Look straight and hold still';
 
         case _AttendanceStep.blink:
           return _offlineCaptureBusy
-              ? 'Capturing blink...'
-              : 'Close both eyes and hold';
+              ? 'Capturing blink frames...'
+              : 'Close both eyes fully and HOLD';
 
         case _AttendanceStep.turn:
           return _offlineCaptureBusy
-              ? 'Capturing head turn...'
-              : 'Turn your head left or right and hold';
+              ? 'Capturing head-turn frames...'
+              : 'Turn left or right and HOLD';
 
         case _AttendanceStep.smile:
           return _offlineCaptureBusy
-              ? 'Capturing smile...'
-              : 'Smile clearly and hold';
+              ? 'Capturing smile frames...'
+              : 'Smile clearly and HOLD';
 
         case _AttendanceStep.returnCenter:
           return _offlineCaptureBusy
-              ? 'Capturing final frame...'
-              : 'Look straight again and hold';
+              ? 'Capturing final center frames...'
+              : 'Look straight again and HOLD';
 
         case _AttendanceStep.verifying:
-          return 'Saving attendance securely on this device...';
+          return 'Saving offline evidence...';
 
         case _AttendanceStep.failed:
           return 'Offline attendance stopped';
+
+        case _AttendanceStep.preparing:
+          return 'Preparing offline attendance...';
       }
     }
 
     switch (_step) {
-      case _AttendanceStep.preparing:
-        return 'Preparing camera and location...';
-
       case _AttendanceStep.center:
         return 'Look straight at the camera';
 
@@ -1295,13 +897,16 @@ class _AttendanceFaceVerificationScreenState
         return 'Smile clearly';
 
       case _AttendanceStep.returnCenter:
-        return 'Return your face to the center';
+        return 'Return your face to center';
 
       case _AttendanceStep.verifying:
-        return 'Verifying face, liveness and geofence...';
+        return 'Verifying attendance...';
 
       case _AttendanceStep.failed:
         return 'Verification stopped';
+
+      case _AttendanceStep.preparing:
+        return 'Preparing camera...';
     }
   }
 
@@ -1317,134 +922,117 @@ class _AttendanceFaceVerificationScreenState
         return 4;
       case _AttendanceStep.returnCenter:
         return 5;
-      case _AttendanceStep.preparing:
-        return 0;
-      case _AttendanceStep.verifying:
-        return 6;
-      case _AttendanceStep.failed:
+      default:
         return 0;
     }
   }
 
   // ===========================================================================
-  // BUILD
+  // UI
   // ===========================================================================
 
   @override
   Widget build(BuildContext context) {
-    final controller = _camera;
+    final camera = _camera;
 
     return Scaffold(
       backgroundColor: background,
       appBar: AppBar(
         backgroundColor: navy,
         foregroundColor: Colors.white,
-        elevation: 0,
-        title: const Text(
-          'Record Attendance',
-          style: TextStyle(fontWeight: FontWeight.w700),
-        ),
+        title: const Text('Record Attendance'),
       ),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 22, 20, 30),
+          padding: const EdgeInsets.all(20),
           child: Column(
             children: [
-              _buildEventCard(),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.event.name,
+                      style: const TextStyle(
+                        color: navy,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    if (widget.event.venue.isNotEmpty) Text(widget.event.venue),
+                  ],
+                ),
+              ),
+
               if (_offlineMode) ...[
                 const SizedBox(height: 12),
-                _buildOfflineBanner(),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF3CD),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: gold),
+                  ),
+                  child: const Text(
+                    'Offline Mode\nMultiple frames are captured automatically for every challenge step.',
+                    style: TextStyle(color: navy, fontWeight: FontWeight.w600),
+                  ),
+                ),
               ],
+
               const SizedBox(height: 24),
+
               Container(
                 width: 290,
                 height: 290,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color:
-                        _step == _AttendanceStep.failed ? Colors.red : gold,
-                    width: 5,
-                  ),
-                  color: Colors.black,
-                ),
                 clipBehavior: Clip.antiAlias,
-                child: _initializing ||
-                        controller == null ||
-                        !controller.value.isInitialized
-                    ? const Center(
-                        child: CircularProgressIndicator(color: gold),
-                      )
-                    : Transform.scale(
-                        scaleX: -1,
-                        child: CameraPreview(controller),
-                      ),
-              ),
-              const SizedBox(height: 24),
-              if (_stepNumber >= 1 && _stepNumber <= 5)
-                Text(
-                  'Step $_stepNumber of 5',
-                  style: const TextStyle(
-                    color: Color(0xFF777783),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
+                decoration: BoxDecoration(
+                  color: Colors.black,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: gold, width: 5),
                 ),
+                child:
+                    _initializing ||
+                        camera == null ||
+                        !camera.value.isInitialized
+                    ? const Center(child: CircularProgressIndicator())
+                    : Transform.scale(scaleX: -1, child: CameraPreview(camera)),
+              ),
+
+              const SizedBox(height: 24),
+
+              if (_stepNumber > 0) Text('Step $_stepNumber of 5'),
+
               const SizedBox(height: 8),
+
               Text(
                 _instruction,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   color: navy,
                   fontSize: 20,
-                  fontWeight: FontWeight.w800,
+                  fontWeight: FontWeight.bold,
                 ),
               ),
-              const SizedBox(height: 10),
-              Text(
-                _offlineMode
-                    ? 'Internet is unavailable. The camera will capture each challenge automatically. Final liveness and identity verification will happen on the server when this record syncs.'
-                    : 'Keep only your face inside the guide. Do not use a photo or another screen.',
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Color(0xFF777783),
-                  fontSize: 13,
-                  height: 1.4,
-                ),
-              ),
-              if (_position != null) ...[
-                const SizedBox(height: 14),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(
-                      Icons.gps_fixed_rounded,
-                      color: Color(0xFF00A33C),
-                      size: 18,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      'GPS accuracy ±${_position!.accuracy.round()} m',
-                      style: const TextStyle(
-                        color: Color(0xFF55555F),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
+
+              const SizedBox(height: 12),
+
+              if (_position != null)
+                Text('GPS accuracy ±${_position!.accuracy.round()} m'),
+
+              if (_offlineCaptureBusy ||
+                  _step == _AttendanceStep.verifying) ...[
+                const SizedBox(height: 20),
+                const CircularProgressIndicator(),
               ],
-              if (_offlineMode &&
-                  _offlineCaptureBusy &&
-                  _stepNumber >= 1 &&
-                  _stepNumber <= 5) ...[
-                const SizedBox(height: 18),
-                const CircularProgressIndicator(color: navy),
-              ],
-              if (_step == _AttendanceStep.verifying) ...[
-                const SizedBox(height: 22),
-                const CircularProgressIndicator(color: navy),
-              ],
+
               if (_error != null) ...[
                 const SizedBox(height: 20),
                 Container(
@@ -1452,38 +1040,23 @@ class _AttendanceFaceVerificationScreenState
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
                     color: const Color(0xFFFFEBEE),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: const Color(0xFFFFCDD2),
-                    ),
+                    borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
                     _error!,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Color(0xFFB71C1C),
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
+                    style: const TextStyle(color: Colors.red),
                   ),
                 ),
               ],
+
               if (_step == _AttendanceStep.failed) ...[
-                const SizedBox(height: 18),
+                const SizedBox(height: 16),
                 SizedBox(
                   width: double.infinity,
-                  child: FilledButton.icon(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: navy,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                    ),
+                  child: FilledButton(
                     onPressed: _retry,
-                    icon: const Icon(Icons.refresh_rounded),
-                    label: const Text('Try Again'),
+                    child: const Text('Try Again'),
                   ),
                 ),
               ],
@@ -1494,87 +1067,16 @@ class _AttendanceFaceVerificationScreenState
     );
   }
 
-  Widget _buildEventCard() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFE5E5EC)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            widget.event.name,
-            style: const TextStyle(
-              color: navy,
-              fontSize: 18,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          if (widget.event.venue.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                const Icon(Icons.location_on_outlined, size: 18),
-                const SizedBox(width: 5),
-                Expanded(
-                  child: Text(
-                    widget.event.venue,
-                    style: const TextStyle(fontSize: 13),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildOfflineBanner() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(13),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF6D6),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: gold),
-      ),
-      child: const Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.cloud_off_rounded, color: navy, size: 21),
-          SizedBox(width: 9),
-          Expanded(
-            child: Text(
-              'Offline Mode\nThe five biometric frames are captured automatically. This record remains pending until Laravel verifies the saved evidence.',
-              style: TextStyle(
-                color: navy,
-                fontSize: 12,
-                height: 1.35,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ===========================================================================
-  // DISPOSE
-  // ===========================================================================
-
   @override
   void dispose() {
     _disposed = true;
     _running = false;
     _offlineMode = false;
-    _offlineChallengeGeneration++;
+
+    _offlineGeneration++;
+
     _camera?.dispose();
+
     super.dispose();
   }
 }

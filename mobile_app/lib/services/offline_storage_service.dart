@@ -13,11 +13,11 @@ class PendingAttendanceRecord {
     required this.latitude,
     required this.longitude,
     required this.locationAccuracy,
-    required this.centerFramePath,
-    required this.blinkFramePath,
-    required this.turnedFramePath,
-    required this.smileFramePath,
-    required this.returnedFramePath,
+    required this.centerCandidatePaths,
+    required this.blinkCandidatePaths,
+    required this.turnedCandidatePaths,
+    required this.smileCandidatePaths,
+    required this.returnedCandidatePaths,
   });
 
   final String uuid;
@@ -28,13 +28,34 @@ class PendingAttendanceRecord {
   final double longitude;
   final double locationAccuracy;
 
-  final String centerFramePath;
-  final String blinkFramePath;
-  final String turnedFramePath;
-  final String smileFramePath;
-  final String returnedFramePath;
+  final List<String> centerCandidatePaths;
+  final List<String> blinkCandidatePaths;
+  final List<String> turnedCandidatePaths;
+  final List<String> smileCandidatePaths;
+  final List<String> returnedCandidatePaths;
 
   factory PendingAttendanceRecord.fromJson(Map<String, dynamic> json) {
+    List<String> readPaths(String listKey, String legacyKey) {
+      final value = json[listKey];
+
+      if (value is List) {
+        return value
+            .map((item) => item.toString())
+            .where((item) => item.isNotEmpty)
+            .toList();
+      }
+
+      // Backward compatibility with your previous
+      // single-frame pending records.
+      final legacy = json[legacyKey]?.toString();
+
+      if (legacy != null && legacy.isNotEmpty) {
+        return <String>[legacy];
+      }
+
+      return <String>[];
+    }
+
     return PendingAttendanceRecord(
       uuid: json['uuid'].toString(),
       eventId: _readInt(json['event_id']),
@@ -42,11 +63,26 @@ class PendingAttendanceRecord {
       latitude: _readDouble(json['latitude']),
       longitude: _readDouble(json['longitude']),
       locationAccuracy: _readDouble(json['location_accuracy']),
-      centerFramePath: json['center_frame_path'].toString(),
-      blinkFramePath: json['blink_frame_path'].toString(),
-      turnedFramePath: json['turned_frame_path'].toString(),
-      smileFramePath: json['smile_frame_path'].toString(),
-      returnedFramePath: json['returned_frame_path'].toString(),
+      centerCandidatePaths: readPaths(
+        'center_candidate_paths',
+        'center_frame_path',
+      ),
+      blinkCandidatePaths: readPaths(
+        'blink_candidate_paths',
+        'blink_frame_path',
+      ),
+      turnedCandidatePaths: readPaths(
+        'turned_candidate_paths',
+        'turned_frame_path',
+      ),
+      smileCandidatePaths: readPaths(
+        'smile_candidate_paths',
+        'smile_frame_path',
+      ),
+      returnedCandidatePaths: readPaths(
+        'returned_candidate_paths',
+        'returned_frame_path',
+      ),
     );
   }
 
@@ -58,20 +94,34 @@ class PendingAttendanceRecord {
       'latitude': latitude,
       'longitude': longitude,
       'location_accuracy': locationAccuracy,
-      'center_frame_path': centerFramePath,
-      'blink_frame_path': blinkFramePath,
-      'turned_frame_path': turnedFramePath,
-      'smile_frame_path': smileFramePath,
-      'returned_frame_path': returnedFramePath,
+      'center_candidate_paths': centerCandidatePaths,
+      'blink_candidate_paths': blinkCandidatePaths,
+      'turned_candidate_paths': turnedCandidatePaths,
+      'smile_candidate_paths': smileCandidatePaths,
+      'returned_candidate_paths': returnedCandidatePaths,
     };
   }
 
+  List<String> get allCandidatePaths {
+    return <String>[
+      ...centerCandidatePaths,
+      ...blinkCandidatePaths,
+      ...turnedCandidatePaths,
+      ...smileCandidatePaths,
+      ...returnedCandidatePaths,
+    ];
+  }
+
   bool get allFilesExist {
-    return File(centerFramePath).existsSync() &&
-        File(blinkFramePath).existsSync() &&
-        File(turnedFramePath).existsSync() &&
-        File(smileFramePath).existsSync() &&
-        File(returnedFramePath).existsSync();
+    if (centerCandidatePaths.isEmpty ||
+        blinkCandidatePaths.isEmpty ||
+        turnedCandidatePaths.isEmpty ||
+        smileCandidatePaths.isEmpty ||
+        returnedCandidatePaths.isEmpty) {
+      return false;
+    }
+
+    return allCandidatePaths.every((path) => File(path).existsSync());
   }
 
   static int _readInt(dynamic value) {
@@ -211,12 +261,20 @@ class OfflineStorageService {
     required double longitude,
     required double locationAccuracy,
     required DateTime attendanceTime,
-    required XFile centerFrame,
-    required XFile blinkFrame,
-    required XFile turnedFrame,
-    required XFile smileFrame,
-    required XFile returnedFrame,
+    required List<XFile> centerCandidates,
+    required List<XFile> blinkCandidates,
+    required List<XFile> turnedCandidates,
+    required List<XFile> smileCandidates,
+    required List<XFile> returnedCandidates,
   }) async {
+    if (centerCandidates.isEmpty ||
+        blinkCandidates.isEmpty ||
+        turnedCandidates.isEmpty ||
+        smileCandidates.isEmpty ||
+        returnedCandidates.isEmpty) {
+      throw StateError('Offline biometric evidence is incomplete.');
+    }
+
     final pending = await _pendingDirectory();
 
     final uuid = _generateUuidV4();
@@ -226,25 +284,36 @@ class OfflineStorageService {
     await recordDirectory.create(recursive: true);
 
     try {
-      final centerPath = '${recordDirectory.path}/center.jpg';
+      Future<List<String>> copyGroup(
+        String folderName,
+        List<XFile> files,
+      ) async {
+        final folder = Directory('${recordDirectory.path}/$folderName');
 
-      final blinkPath = '${recordDirectory.path}/blink.jpg';
+        await folder.create(recursive: true);
 
-      final turnedPath = '${recordDirectory.path}/turned.jpg';
+        final paths = <String>[];
 
-      final smilePath = '${recordDirectory.path}/smile.jpg';
+        for (var index = 0; index < files.length; index++) {
+          final destination = '${folder.path}/candidate_${index + 1}.jpg';
 
-      final returnedPath = '${recordDirectory.path}/returned.jpg';
+          await File(files[index].path).copy(destination);
 
-      await File(centerFrame.path).copy(centerPath);
+          paths.add(destination);
+        }
 
-      await File(blinkFrame.path).copy(blinkPath);
+        return paths;
+      }
 
-      await File(turnedFrame.path).copy(turnedPath);
+      final centerPaths = await copyGroup('center', centerCandidates);
 
-      await File(smileFrame.path).copy(smilePath);
+      final blinkPaths = await copyGroup('blink', blinkCandidates);
 
-      await File(returnedFrame.path).copy(returnedPath);
+      final turnedPaths = await copyGroup('turned', turnedCandidates);
+
+      final smilePaths = await copyGroup('smile', smileCandidates);
+
+      final returnedPaths = await copyGroup('returned', returnedCandidates);
 
       final record = PendingAttendanceRecord(
         uuid: uuid,
@@ -253,11 +322,11 @@ class OfflineStorageService {
         latitude: latitude,
         longitude: longitude,
         locationAccuracy: locationAccuracy,
-        centerFramePath: centerPath,
-        blinkFramePath: blinkPath,
-        turnedFramePath: turnedPath,
-        smileFramePath: smilePath,
-        returnedFramePath: returnedPath,
+        centerCandidatePaths: centerPaths,
+        blinkCandidatePaths: blinkPaths,
+        turnedCandidatePaths: turnedPaths,
+        smileCandidatePaths: smilePaths,
+        returnedCandidatePaths: returnedPaths,
       );
 
       final metadata = File('${recordDirectory.path}/metadata.json');
@@ -320,12 +389,8 @@ class OfflineStorageService {
     return records.length;
   }
 
-  Future<void> deletePending(PendingAttendanceRecord record) async {
-    final directory = Directory(File(record.centerFramePath).parent.path);
-
-    if (await directory.exists()) {
-      await directory.delete(recursive: true);
-    }
+  Future<void> deletePending(PendingAttendanceRecord record) {
+    return deletePendingByUuid(record.uuid);
   }
 
   Future<void> deletePendingByUuid(String uuid) async {
@@ -339,7 +404,7 @@ class OfflineStorageService {
   }
 
   // ===========================================================================
-  // UUID V4
+  // UUID
   // ===========================================================================
 
   String _generateUuidV4() {
@@ -351,7 +416,9 @@ class OfflineStorageService {
 
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
 
-    String hex(int value) => value.toRadixString(16).padLeft(2, '0');
+    String hex(int value) {
+      return value.toRadixString(16).padLeft(2, '0');
+    }
 
     final value = bytes.map(hex).join();
 
