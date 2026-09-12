@@ -16,11 +16,11 @@ class AttendanceService {
   final OfflineStorageService _offlineStorage = OfflineStorageService.instance;
 
   // Must match Python final verification.
-  static const double _centerLimit = 0.08;
-  static const double _blinkRatio = 0.72;
-  static const double _turnDelta = 0.06;
-  static const double _smileRatio = 1.04;
-  static const double _returnDelta = 0.06;
+  static const double _centerLimit = 0.13;
+  static const double _blinkRatio = 0.82;
+  static const double _turnDelta = 0.04;
+  static const double _smileRatio = 1.025;
+  static const double _returnDelta = 0.10;
 
   // ===========================================================================
   // ANALYZE ONE FRAME

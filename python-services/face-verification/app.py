@@ -15,6 +15,7 @@ from insightface.app import FaceAnalysis
 
 app = Flask(__name__)
 
+# Allow the five liveness frames without making uploads huge.
 app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 
 
@@ -22,31 +23,57 @@ app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 # CONFIGURATION
 # ============================================================
 
-# Reference-photo quality.
+# ------------------------------------------------------------
+# TEST-FRIENDLY VALUES
+# ------------------------------------------------------------
+#
+# These are intentionally a little more tolerant while you are
+# testing offline attendance.
+#
+# We are NOT disabling:
+#
+# - MediaPipe liveness
+# - InsightFace identity checking
+# - OpenCV quality checks
+# - same-person verification
+#
+# These can be tightened again before your final deployment.
+# ------------------------------------------------------------
+
+# Registration/reference-photo quality.
 MIN_BLUR_SCORE = 30.0
 
 # Live camera frames can naturally be softer.
-MIN_LIVENESS_BLUR_SCORE = 12.0
+MIN_LIVENESS_BLUR_SCORE = 8.0
 
-MIN_DETECTION_SCORE = 0.60
+# InsightFace confidence for FINAL biometric verification.
+MIN_DETECTION_SCORE = 0.45
 
-# Makes sure every liveness frame belongs to the same person.
-LIVENESS_IDENTITY_THRESHOLD = 0.45
+# Ensures all five liveness frames belong to the same person.
+LIVENESS_IDENTITY_THRESHOLD = 0.40
 
-# Face approximately centered.
-CENTER_YAW_LIMIT = 0.08
+# Face must still be approximately centered.
+CENTER_YAW_LIMIT = 0.13
 
-# Required movement when turning head.
-TURN_YAW_DELTA = 0.06
+# Minimum movement for head turn.
+TURN_YAW_DELTA = 0.04
 
-# Returned face should be close to original center.
-RETURN_YAW_DELTA = 0.06
+# Returned face can be slightly different from original center.
+RETURN_YAW_DELTA = 0.10
 
-# Blink must significantly reduce eye openness.
-BLINK_RATIO = 0.88
+# Blink:
+#
+# blink_eye <= center_eye * BLINK_RATIO
+#
+# Higher = slightly easier to pass.
+BLINK_RATIO = 0.82
 
-# Smile should widen the mouth compared with neutral frame.
-SMILE_RATIO = 1.04
+# Smile:
+#
+# smile_mouth >= center_mouth * SMILE_RATIO
+#
+# Lower = slightly easier to pass.
+SMILE_RATIO = 1.025
 
 
 # ============================================================
@@ -92,7 +119,9 @@ print("MediaPipe Face Mesh loaded successfully.")
 
 def base64_to_cv2(b64_str: str):
     if not isinstance(b64_str, str) or not b64_str.strip():
-        raise ValueError("Image data is empty.")
+        raise ValueError(
+            "Image data is empty."
+        )
 
     if "," in b64_str:
         b64_str = b64_str.split(",", 1)[1]
@@ -130,6 +159,31 @@ def base64_to_cv2(b64_str: str):
     return image
 
 
+def rotated_candidates(image):
+    """
+    Android front-camera JPEG orientation can sometimes differ
+    from what CameraPreview displays.
+
+    Try the original image first, followed by safe rotations.
+    """
+
+    return [
+        image,
+        cv2.rotate(
+            image,
+            cv2.ROTATE_90_CLOCKWISE,
+        ),
+        cv2.rotate(
+            image,
+            cv2.ROTATE_90_COUNTERCLOCKWISE,
+        ),
+        cv2.rotate(
+            image,
+            cv2.ROTATE_180,
+        ),
+    ]
+
+
 def calculate_face_blur(image, face) -> float:
     bbox = face.bbox.astype(int)
 
@@ -140,16 +194,38 @@ def calculate_face_blur(image, face) -> float:
     face_width = x2 - x1
     face_height = y2 - y1
 
-    margin_x = int(face_width * 0.08)
-    margin_y = int(face_height * 0.08)
+    margin_x = int(
+        face_width * 0.08
+    )
 
-    x1 = max(0, x1 - margin_x)
-    y1 = max(0, y1 - margin_y)
+    margin_y = int(
+        face_height * 0.08
+    )
 
-    x2 = min(width, x2 + margin_x)
-    y2 = min(height, y2 + margin_y)
+    x1 = max(
+        0,
+        x1 - margin_x,
+    )
 
-    face_crop = image[y1:y2, x1:x2]
+    y1 = max(
+        0,
+        y1 - margin_y,
+    )
+
+    x2 = min(
+        width,
+        x2 + margin_x,
+    )
+
+    y2 = min(
+        height,
+        y2 + margin_y,
+    )
+
+    face_crop = image[
+        y1:y2,
+        x1:x2,
+    ]
 
     if face_crop.size == 0:
         return 0.0
@@ -159,14 +235,123 @@ def calculate_face_blur(image, face) -> float:
         cv2.COLOR_BGR2GRAY,
     )
 
-    gray = cv2.equalizeHist(gray)
+    gray = cv2.equalizeHist(
+        gray
+    )
 
     blur_score = cv2.Laplacian(
         gray,
         cv2.CV_64F,
     ).var()
 
-    return float(blur_score)
+    return float(
+        blur_score
+    )
+
+
+def calculate_landmark_face_blur(
+    image,
+    landmarks,
+) -> float:
+    """
+    Blur measurement for candidate frames where MediaPipe,
+    rather than InsightFace, is doing the initial face detection.
+    """
+
+    height, width = image.shape[:2]
+
+    xs = [
+        landmark.x
+        for landmark in landmarks
+    ]
+
+    ys = [
+        landmark.y
+        for landmark in landmarks
+    ]
+
+    if not xs or not ys:
+        return 0.0
+
+    x1 = int(
+        min(xs) * width
+    )
+
+    y1 = int(
+        min(ys) * height
+    )
+
+    x2 = int(
+        max(xs) * width
+    )
+
+    y2 = int(
+        max(ys) * height
+    )
+
+    face_width = max(
+        1,
+        x2 - x1,
+    )
+
+    face_height = max(
+        1,
+        y2 - y1,
+    )
+
+    margin_x = int(
+        face_width * 0.10
+    )
+
+    margin_y = int(
+        face_height * 0.10
+    )
+
+    x1 = max(
+        0,
+        x1 - margin_x,
+    )
+
+    y1 = max(
+        0,
+        y1 - margin_y,
+    )
+
+    x2 = min(
+        width,
+        x2 + margin_x,
+    )
+
+    y2 = min(
+        height,
+        y2 + margin_y,
+    )
+
+    face_crop = image[
+        y1:y2,
+        x1:x2,
+    ]
+
+    if face_crop.size == 0:
+        return 0.0
+
+    gray = cv2.cvtColor(
+        face_crop,
+        cv2.COLOR_BGR2GRAY,
+    )
+
+    gray = cv2.equalizeHist(
+        gray
+    )
+
+    blur_score = cv2.Laplacian(
+        gray,
+        cv2.CV_64F,
+    ).var()
+
+    return float(
+        blur_score
+    )
 
 
 def normalize_embedding(embedding):
@@ -175,7 +360,9 @@ def normalize_embedding(embedding):
         dtype=np.float32,
     )
 
-    norm = np.linalg.norm(embedding)
+    norm = np.linalg.norm(
+        embedding
+    )
 
     if norm <= 0:
         raise ValueError(
@@ -185,7 +372,10 @@ def normalize_embedding(embedding):
     return embedding / norm
 
 
-def cosine_similarity(vec_a, vec_b) -> float:
+def cosine_similarity(
+    vec_a,
+    vec_b,
+) -> float:
     a = np.asarray(
         vec_a,
         dtype=np.float32,
@@ -215,18 +405,23 @@ def cosine_similarity(vec_a, vec_b) -> float:
     )
 
 
-def distance(point_a, point_b) -> float:
+# ============================================================
+# MEDIAPIPE HELPERS
+# ============================================================
+
+def distance(
+    point_a,
+    point_b,
+) -> float:
     return math.sqrt(
         (point_a.x - point_b.x) ** 2
         + (point_a.y - point_b.y) ** 2
     )
 
 
-# ============================================================
-# MEDIAPIPE METRICS
-# ============================================================
-
-def eye_openness(landmarks) -> float:
+def eye_openness(
+    landmarks,
+) -> float:
     left_horizontal = distance(
         landmarks[33],
         landmarks[133],
@@ -269,7 +464,9 @@ def eye_openness(landmarks) -> float:
     ) / 2.0
 
 
-def yaw_proxy(landmarks) -> float:
+def yaw_proxy(
+    landmarks,
+) -> float:
     left_cheek = landmarks[234]
     right_cheek = landmarks[454]
     nose = landmarks[1]
@@ -293,7 +490,9 @@ def yaw_proxy(landmarks) -> float:
     ) / face_width
 
 
-def mouth_width_ratio(landmarks) -> float:
+def mouth_width_ratio(
+    landmarks,
+) -> float:
     mouth_width = distance(
         landmarks[61],
         landmarks[291],
@@ -307,40 +506,219 @@ def mouth_width_ratio(landmarks) -> float:
     if face_width <= 0:
         return 0.0
 
-    return mouth_width / face_width
+    return (
+        mouth_width
+        / face_width
+    )
 
 
 # ============================================================
-# LIVENESS FRAME ANALYSIS
+# MEDIAPIPE FACE DETECTION WITH ROTATION
+# ============================================================
+
+def detect_mediapipe_face(
+    image,
+    frame_name,
+):
+    """
+    Used for offline candidate selection.
+
+    MediaPipe is the primary detector here because the candidate
+    selector needs:
+      - yaw
+      - eye openness
+      - mouth width
+
+    It also tolerates Android JPEG orientation differences.
+    """
+
+    for candidate in rotated_candidates(
+        image
+    ):
+        rgb = cv2.cvtColor(
+            candidate,
+            cv2.COLOR_BGR2RGB,
+        )
+
+        result = face_mesh.process(
+            rgb
+        )
+
+        detected_faces = (
+            result.multi_face_landmarks
+            or []
+        )
+
+        if len(detected_faces) > 1:
+            raise ValueError(
+                f"Multiple faces detected in {frame_name} frame."
+            )
+
+        if len(detected_faces) == 1:
+            return (
+                candidate,
+                detected_faces[0].landmark,
+            )
+
+    raise ValueError(
+        f"No face detected in {frame_name} frame."
+    )
+
+
+# ============================================================
+# INSIGHTFACE DETECTION WITH ROTATION
+# ============================================================
+
+def detect_insightface_face(
+    image,
+    frame_name,
+):
+    """
+    Final biometric verification still uses InsightFace.
+
+    Rotation support is included only so Android JPEG orientation
+    does not cause a false 'no face detected' failure.
+    """
+
+    for candidate in rotated_candidates(
+        image
+    ):
+        faces = face_analyzer.get(
+            candidate
+        )
+
+        if len(faces) > 1:
+            raise ValueError(
+                f"Multiple faces detected in {frame_name} frame."
+            )
+
+        if len(faces) == 1:
+            return (
+                candidate,
+                faces[0],
+            )
+
+    raise ValueError(
+        f"No face detected in {frame_name} frame."
+    )
+
+
+# ============================================================
+# OFFLINE / LIVE CANDIDATE FRAME ANALYSIS
+# ============================================================
+
+def analyze_live_candidate_frame(
+    image_base64: str,
+    frame_name: str = "live",
+):
+    """
+    IMPORTANT:
+
+    This function is used by /analyze-liveness-frame.
+
+    It intentionally uses MediaPipe for candidate analysis.
+
+    It DOES NOT decide final identity.
+
+    Final liveness/identity is still performed later through
+    /verify-liveness using InsightFace + MediaPipe.
+    """
+
+    image = base64_to_cv2(
+        image_base64
+    )
+
+    image, landmarks = (
+        detect_mediapipe_face(
+            image,
+            frame_name,
+        )
+    )
+
+    blur_score = (
+        calculate_landmark_face_blur(
+            image,
+            landmarks,
+        )
+    )
+
+    if (
+        blur_score
+        < MIN_LIVENESS_BLUR_SCORE
+    ):
+        raise ValueError(
+            f"{frame_name.capitalize()} frame is too blurry. "
+            "Hold the camera steady and try again."
+        )
+
+    yaw = float(
+        yaw_proxy(
+            landmarks
+        )
+    )
+
+    eye = float(
+        eye_openness(
+            landmarks
+        )
+    )
+
+    mouth = float(
+        mouth_width_ratio(
+            landmarks
+        )
+    )
+
+    return {
+        "face_detected": True,
+        "yaw": yaw,
+        "eye_openness": eye,
+        "mouth_width": mouth,
+        "blur_score": blur_score,
+
+        # Candidate analysis no longer depends on
+        # InsightFace detection confidence.
+        #
+        # Final verification still does.
+        "detection_score": 1.0,
+    }
+
+
+# ============================================================
+# FINAL LIVENESS FRAME ANALYSIS
 # ============================================================
 
 def analyze_liveness_frame(
     image_base64: str,
     frame_name: str,
 ):
+    """
+    Authoritative liveness analysis.
+
+    This remains strict enough to keep:
+      - InsightFace face detection
+      - InsightFace embedding
+      - same-person verification
+      - MediaPipe gesture measurements
+      - blur checks
+
+    Candidate selection does NOT bypass this.
+    """
+
     image = base64_to_cv2(
         image_base64
     )
 
     # --------------------------------------------------------
-    # InsightFace
+    # INSIGHTFACE
     # --------------------------------------------------------
 
-    faces = face_analyzer.get(
-        image
+    image, face = (
+        detect_insightface_face(
+            image,
+            frame_name,
+        )
     )
-
-    if len(faces) == 0:
-        raise ValueError(
-            f"No face detected in {frame_name} frame."
-        )
-
-    if len(faces) > 1:
-        raise ValueError(
-            f"Multiple faces detected in {frame_name} frame."
-        )
-
-    face = faces[0]
 
     detection_score = float(
         getattr(
@@ -350,7 +728,10 @@ def analyze_liveness_frame(
         )
     )
 
-    if detection_score < MIN_DETECTION_SCORE:
+    if (
+        detection_score
+        < MIN_DETECTION_SCORE
+    ):
         raise ValueError(
             f"Face visibility is too low in {frame_name} frame."
         )
@@ -385,7 +766,7 @@ def analyze_liveness_frame(
     )
 
     # --------------------------------------------------------
-    # MediaPipe
+    # MEDIAPIPE
     # --------------------------------------------------------
 
     rgb = cv2.cvtColor(
@@ -419,18 +800,41 @@ def analyze_liveness_frame(
 
     return {
         "embedding": embedding,
+
         "yaw": yaw_proxy(
             landmarks
         ),
-        "eye_openness": eye_openness(
-            landmarks
-        ),
-        "mouth_width": mouth_width_ratio(
-            landmarks
-        ),
-        "blur_score": blur_score,
-        "detection_score": detection_score,
+
+        "eye_openness":
+            eye_openness(
+                landmarks
+            ),
+
+        "mouth_width":
+            mouth_width_ratio(
+                landmarks
+            ),
+
+        "blur_score":
+            blur_score,
+
+        "detection_score":
+            detection_score,
     }
+
+
+# ============================================================
+# ROOT
+# ============================================================
+
+@app.get("/")
+def home():
+    return jsonify({
+        "success": True,
+        "service":
+            "CCIS Face Verification Service",
+        "status": "running",
+    }), 200
 
 
 # ============================================================
@@ -441,17 +845,45 @@ def analyze_liveness_frame(
 def health():
     return jsonify({
         "success": True,
+
         "service":
             "CCIS Face Verification",
-        "mediapipe": "ready",
-        "insightface": "ready",
-        "opencv": "ready",
+
+        "mediapipe":
+            "ready",
+
+        "insightface":
+            "ready",
+
+        "opencv":
+            "ready",
+
+        "testing_profile":
+            True,
+
         "blur_threshold":
             MIN_BLUR_SCORE,
+
         "liveness_blur_threshold":
             MIN_LIVENESS_BLUR_SCORE,
+
         "detection_threshold":
             MIN_DETECTION_SCORE,
+
+        "center_yaw_limit":
+            CENTER_YAW_LIMIT,
+
+        "turn_yaw_delta":
+            TURN_YAW_DELTA,
+
+        "return_yaw_delta":
+            RETURN_YAW_DELTA,
+
+        "blink_ratio":
+            BLINK_RATIO,
+
+        "smile_ratio":
+            SMILE_RATIO,
     }), 200
 
 
@@ -492,27 +924,12 @@ def extract_embedding():
             image.shape[:2]
         )
 
-        faces = face_analyzer.get(
-            image
+        image, primary_face = (
+            detect_insightface_face(
+                image,
+                "image",
+            )
         )
-
-        if len(faces) == 0:
-            return jsonify({
-                "success": False,
-                "detail":
-                    "No face detected in image. "
-                    "Ensure your face is visible and the area is well lit.",
-            }), 400
-
-        if len(faces) > 1:
-            return jsonify({
-                "success": False,
-                "detail":
-                    "Multiple faces detected. "
-                    "Only one face is allowed per frame.",
-            }), 400
-
-        primary_face = faces[0]
 
         detection_score = float(
             getattr(
@@ -538,7 +955,10 @@ def extract_embedding():
             primary_face,
         )
 
-        if blur_score < MIN_BLUR_SCORE:
+        if (
+            blur_score
+            < MIN_BLUR_SCORE
+        ):
             return jsonify({
                 "success": False,
                 "detail":
@@ -574,24 +994,32 @@ def extract_embedding():
 
         return jsonify({
             "success": True,
-            "status": "success",
+
+            "status":
+                "success",
+
             "embedding":
                 normalized_embedding,
+
             "quality": {
                 "blur_score":
                     round(
                         blur_score,
                         2,
                     ),
+
                 "detection_score":
                     round(
                         detection_score,
                         4,
                     ),
+
                 "image_width":
                     width,
+
                 "image_height":
                     height,
+
                 "face_bbox":
                     bbox,
             },
@@ -649,6 +1077,10 @@ def verify_liveness():
             }), 400
 
     try:
+        # ----------------------------------------------------
+        # ANALYZE ALL FIVE FINAL FRAMES
+        # ----------------------------------------------------
+
         center = analyze_liveness_frame(
             data["center_frame"],
             "center",
@@ -675,12 +1107,14 @@ def verify_liveness():
         )
 
         # ----------------------------------------------------
-        # Same person in every challenge frame
+        # SAME PERSON IN ALL FIVE FRAMES
         # ----------------------------------------------------
 
         reference_embedding = (
             center["embedding"]
         )
+
+        identity_scores = {}
 
         for frame_name, frame in [
             ("blink", blink),
@@ -688,10 +1122,16 @@ def verify_liveness():
             ("smile", smile),
             ("returned", returned),
         ]:
-            similarity = cosine_similarity(
-                reference_embedding,
-                frame["embedding"],
+            similarity = (
+                cosine_similarity(
+                    reference_embedding,
+                    frame["embedding"],
+                )
             )
+
+            identity_scores[
+                frame_name
+            ] = similarity
 
             if (
                 similarity
@@ -704,11 +1144,13 @@ def verify_liveness():
                 )
 
         # ----------------------------------------------------
-        # Center
+        # CENTER
         # ----------------------------------------------------
 
         if (
-            abs(center["yaw"])
+            abs(
+                center["yaw"]
+            )
             > CENTER_YAW_LIMIT
         ):
             raise ValueError(
@@ -717,14 +1159,17 @@ def verify_liveness():
             )
 
         # ----------------------------------------------------
-        # Blink
+        # BLINK
         # ----------------------------------------------------
+
+        blink_limit = (
+            center["eye_openness"]
+            * BLINK_RATIO
+        )
 
         if (
             blink["eye_openness"]
-            >
-            center["eye_openness"]
-            * BLINK_RATIO
+            > blink_limit
         ):
             raise ValueError(
                 "Blink was not detected. "
@@ -732,7 +1177,7 @@ def verify_liveness():
             )
 
         # ----------------------------------------------------
-        # Head turn
+        # HEAD TURN
         # ----------------------------------------------------
 
         turn_delta = abs(
@@ -750,14 +1195,17 @@ def verify_liveness():
             )
 
         # ----------------------------------------------------
-        # Smile
+        # SMILE
         # ----------------------------------------------------
+
+        smile_limit = (
+            center["mouth_width"]
+            * SMILE_RATIO
+        )
 
         if (
             smile["mouth_width"]
-            <
-            center["mouth_width"]
-            * SMILE_RATIO
+            < smile_limit
         ):
             raise ValueError(
                 "Smile was not detected. "
@@ -765,11 +1213,13 @@ def verify_liveness():
             )
 
         # ----------------------------------------------------
-        # Return to center
+        # RETURN CENTER
         # ----------------------------------------------------
 
         if (
-            abs(returned["yaw"])
+            abs(
+                returned["yaw"]
+            )
             > CENTER_YAW_LIMIT
         ):
             raise ValueError(
@@ -777,11 +1227,13 @@ def verify_liveness():
                 "before verification."
             )
 
+        return_delta = abs(
+            returned["yaw"]
+            - center["yaw"]
+        )
+
         if (
-            abs(
-                returned["yaw"]
-                - center["yaw"]
-            )
+            return_delta
             > RETURN_YAW_DELTA
         ):
             raise ValueError(
@@ -789,23 +1241,50 @@ def verify_liveness():
                 "to the original centered position."
             )
 
+        # ----------------------------------------------------
+        # SUCCESS
+        # ----------------------------------------------------
+
         return jsonify({
             "success": True,
+
             "status":
                 "LIVENESS_PASSED",
+
             "message":
                 "Liveness verification passed.",
+
             "metrics": {
                 "center_yaw":
                     round(
                         center["yaw"],
                         4,
                     ),
+
                 "turned_yaw":
                     round(
                         turned["yaw"],
                         4,
                     ),
+
+                "turn_delta":
+                    round(
+                        turn_delta,
+                        4,
+                    ),
+
+                "returned_yaw":
+                    round(
+                        returned["yaw"],
+                        4,
+                    ),
+
+                "return_delta":
+                    round(
+                        return_delta,
+                        4,
+                    ),
+
                 "center_eye_openness":
                     round(
                         center[
@@ -813,6 +1292,7 @@ def verify_liveness():
                         ],
                         4,
                     ),
+
                 "blink_eye_openness":
                     round(
                         blink[
@@ -820,6 +1300,13 @@ def verify_liveness():
                         ],
                         4,
                     ),
+
+                "blink_limit":
+                    round(
+                        blink_limit,
+                        4,
+                    ),
+
                 "center_mouth_width":
                     round(
                         center[
@@ -827,6 +1314,7 @@ def verify_liveness():
                         ],
                         4,
                     ),
+
                 "smile_mouth_width":
                     round(
                         smile[
@@ -834,10 +1322,31 @@ def verify_liveness():
                         ],
                         4,
                     ),
+
+                "smile_limit":
+                    round(
+                        smile_limit,
+                        4,
+                    ),
+
+                "identity": {
+                    name:
+                        round(
+                            score,
+                            4,
+                        )
+                    for name, score
+                    in identity_scores.items()
+                },
             },
         }), 200
 
     except ValueError as exc:
+        print(
+            "[LIVENESS REJECTED]",
+            str(exc),
+        )
+
         return jsonify({
             "success": False,
             "detail": str(exc),
@@ -845,7 +1354,8 @@ def verify_liveness():
 
     except Exception as exc:
         print(
-            f"[LIVENESS] Processing error: {exc}"
+            "[LIVENESS] Processing error:",
+            exc,
         )
 
         return jsonify({
@@ -853,6 +1363,11 @@ def verify_liveness():
             "detail":
                 "Liveness processing failed.",
         }), 500
+
+
+# ============================================================
+# ANALYZE SINGLE LIVENESS FRAME
+# ============================================================
 
 @app.post("/analyze-liveness-frame")
 def analyze_liveness_frame_endpoint():
@@ -879,7 +1394,12 @@ def analyze_liveness_frame_endpoint():
         }), 400
 
     try:
-        frame = analyze_liveness_frame(
+        # IMPORTANT:
+        #
+        # Candidate analysis now uses MediaPipe first.
+        #
+        # InsightFace is still used later by /verify-liveness.
+        frame = analyze_live_candidate_frame(
             image_base64,
             "live",
         )
@@ -887,7 +1407,8 @@ def analyze_liveness_frame_endpoint():
         return jsonify({
             "success": True,
 
-            "face_detected": True,
+            "face_detected":
+                True,
 
             "yaw":
                 round(
@@ -929,6 +1450,11 @@ def analyze_liveness_frame_endpoint():
         }), 200
 
     except ValueError as exc:
+        print(
+            "[LIVE FRAME REJECTED]",
+            str(exc),
+        )
+
         return jsonify({
             "success": False,
             "face_detected": False,
@@ -948,6 +1474,29 @@ def analyze_liveness_frame_endpoint():
                 "Unable to analyze live frame.",
         }), 500
 
+
+# ============================================================
+# ERROR HANDLERS
+# ============================================================
+
+@app.errorhandler(413)
+def request_too_large(_error):
+    return jsonify({
+        "success": False,
+        "detail":
+            "Uploaded biometric data is too large.",
+    }), 413
+
+
+@app.errorhandler(404)
+def route_not_found(_error):
+    return jsonify({
+        "success": False,
+        "detail":
+            "Face verification endpoint not found.",
+    }), 404
+
+
 # ============================================================
 # RUN
 # ============================================================
@@ -964,11 +1513,60 @@ if __name__ == "__main__":
         " MediaPipe + OpenCV + InsightFace"
     )
     print(
+        " OFFLINE TEST PROFILE"
+    )
+    print(
         "=========================================="
     )
+
+    print(
+        f" MIN_LIVENESS_BLUR_SCORE: "
+        f"{MIN_LIVENESS_BLUR_SCORE}"
+    )
+
+    print(
+        f" MIN_DETECTION_SCORE: "
+        f"{MIN_DETECTION_SCORE}"
+    )
+
+    print(
+        f" LIVENESS_IDENTITY_THRESHOLD: "
+        f"{LIVENESS_IDENTITY_THRESHOLD}"
+    )
+
+    print(
+        f" CENTER_YAW_LIMIT: "
+        f"{CENTER_YAW_LIMIT}"
+    )
+
+    print(
+        f" TURN_YAW_DELTA: "
+        f"{TURN_YAW_DELTA}"
+    )
+
+    print(
+        f" RETURN_YAW_DELTA: "
+        f"{RETURN_YAW_DELTA}"
+    )
+
+    print(
+        f" BLINK_RATIO: "
+        f"{BLINK_RATIO}"
+    )
+
+    print(
+        f" SMILE_RATIO: "
+        f"{SMILE_RATIO}"
+    )
+
+    print(
+        "=========================================="
+    )
+
     print(
         " Server: http://127.0.0.1:5000"
     )
+
     print(
         "=========================================="
     )
