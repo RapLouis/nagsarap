@@ -15,15 +15,23 @@ class AttendanceService {
 
   final OfflineStorageService _offlineStorage = OfflineStorageService.instance;
 
-  // Must match Python final verification.
+  // Prevents Home load, app resume, pull-to-refresh, or another caller
+  // from synchronizing the same offline biometric files simultaneously.
+  Future<OfflineSyncResult>? _activeOfflineSync;
+
+  // Temporary offline-testing candidate-selection values.
+  //
+  // Final liveness verification is still performed by Laravel/Python.
+  //
+  // IMPORTANT:
+  // Restore stricter production biometric settings during final hardening.
   static const double _centerLimit = 0.13;
   static const double _blinkRatio = 0.82;
   static const double _turnDelta = 0.04;
   static const double _smileRatio = 1.025;
-  static const double _returnDelta = 0.10;
 
   // ===========================================================================
-  // ANALYZE ONE FRAME
+  // ANALYZE ONE ATTENDANCE LIVENESS FRAME
   // ===========================================================================
 
   Future<AttendanceLivenessFrameResult> analyzeLivenessFrame({
@@ -108,22 +116,27 @@ class AttendanceService {
         'latitude': latitude,
         'longitude': longitude,
         'location_accuracy': locationAccuracy,
+
         'center_frame': await MultipartFile.fromFile(
           centerFrame.path,
           filename: 'attendance-center.jpg',
         ),
+
         'blink_frame': await MultipartFile.fromFile(
           blinkFrame.path,
           filename: 'attendance-blink.jpg',
         ),
+
         'turned_frame': await MultipartFile.fromFile(
           turnedFrame.path,
           filename: 'attendance-turn.jpg',
         ),
+
         'smile_frame': await MultipartFile.fromFile(
           smileFrame.path,
           filename: 'attendance-smile.jpg',
         ),
+
         'returned_frame': await MultipartFile.fromFile(
           returnedFrame.path,
           filename: 'attendance-return.jpg',
@@ -169,7 +182,7 @@ class AttendanceService {
   }
 
   // ===========================================================================
-  // STORE BURST OFFLINE
+  // STORE OFFLINE ATTENDANCE BURST
   // ===========================================================================
 
   Future<AttendanceResult> queueOfflineAttendance({
@@ -230,7 +243,7 @@ class AttendanceService {
   }
 
   // ===========================================================================
-  // ANALYZE ALL CANDIDATES
+  // ANALYZE ALL OFFLINE CANDIDATES
   // ===========================================================================
 
   Future<List<_AnalyzedCandidate>> _analyzeCandidates(
@@ -265,6 +278,10 @@ class AttendanceService {
     return accepted;
   }
 
+  // ===========================================================================
+  // SELECT BEST OFFLINE BIOMETRIC FRAMES
+  // ===========================================================================
+
   Future<_SelectedFrames> _selectBestFrames(
     PendingAttendanceRecord record,
   ) async {
@@ -293,16 +310,16 @@ class AttendanceService {
 
     if (validCenters.isEmpty) {
       throw const _SelectionFailed(
-        'No good centered frame was found. Keep your whole face inside the guide and look directly at the camera.',
+        'No good centered frame was found. '
+        'Keep your whole face inside the guide and '
+        'look directly at the camera.',
       );
     }
 
     final center = validCenters.first;
 
     final centerYaw = center.result.yaw!;
-
     final centerEye = center.result.eyeOpenness!;
-
     final centerMouth = center.result.mouthWidth!;
 
     // -------------------------------------------------------------------------
@@ -327,7 +344,9 @@ class AttendanceService {
 
     if (validBlinks.isEmpty) {
       throw const _SelectionFailed(
-        'No valid blink frame was found. Close BOTH eyes fully and keep them closed while the blink burst is captured.',
+        'No valid blink frame was found. '
+        'Close BOTH eyes fully and keep them closed '
+        'while the blink burst is captured.',
       );
     }
 
@@ -355,7 +374,8 @@ class AttendanceService {
 
     if (validTurns.isEmpty) {
       throw const _SelectionFailed(
-        'No valid head-turn frame was found. Turn clearly left or right and hold the pose.',
+        'No valid head-turn frame was found. '
+        'Turn clearly left or right and hold the pose.',
       );
     }
 
@@ -381,12 +401,24 @@ class AttendanceService {
 
     if (validSmiles.isEmpty) {
       throw const _SelectionFailed(
-        'No valid smile frame was found. Smile clearly and hold the expression.',
+        'No valid smile frame was found. '
+        'Smile clearly and hold the expression.',
       );
     }
 
     // -------------------------------------------------------------------------
     // RETURN CENTER
+    // -------------------------------------------------------------------------
+    //
+    // For offline burst capture we do not reject the whole record simply
+    // because the final local yaw measurement is slightly outside the
+    // preferred threshold.
+    //
+    // Instead, choose the usable final frame that is closest to the original
+    // center pose.
+    //
+    // Laravel/Python /verify-liveness remains the authoritative final
+    // liveness check.
     // -------------------------------------------------------------------------
 
     final returnResults = await _analyzeCandidates(
@@ -394,36 +426,41 @@ class AttendanceService {
       'RETURN CENTER',
     );
 
-    final validReturns = returnResults.where((candidate) {
-      final yaw = candidate.result.yaw!;
-
-      return yaw.abs() <= _centerLimit &&
-          (yaw - centerYaw).abs() <= _returnDelta;
-    }).toList();
-
-    validReturns.sort(
-      (a, b) => (a.result.yaw! - centerYaw).abs().compareTo(
-        (b.result.yaw! - centerYaw).abs(),
-      ),
-    );
-
-    if (validReturns.isEmpty) {
+    if (returnResults.isEmpty) {
       throw const _SelectionFailed(
-        'No valid final centered frame was found. Return to the center and hold still.',
+        'No usable final face frame was found. '
+        'Keep your whole face inside the guide '
+        'when returning to center.',
       );
     }
+
+    returnResults.sort((a, b) {
+      final aDifference = (a.result.yaw! - centerYaw).abs();
+
+      final bDifference = (b.result.yaw! - centerYaw).abs();
+
+      final differenceOrder = aDifference.compareTo(bDifference);
+
+      if (differenceOrder != 0) {
+        return differenceOrder;
+      }
+
+      return b.quality.compareTo(a.quality);
+    });
+
+    final returned = returnResults.first;
 
     return _SelectedFrames(
       centerPath: center.path,
       blinkPath: validBlinks.first.path,
       turnedPath: validTurns.first.path,
       smilePath: validSmiles.first.path,
-      returnedPath: validReturns.first.path,
+      returnedPath: returned.path,
     );
   }
 
   // ===========================================================================
-  // SYNC ONE RECORD
+  // SYNC ONE OFFLINE RECORD
   // ===========================================================================
 
   Future<AttendanceResult> syncOfflineAttendance(
@@ -537,51 +574,168 @@ class AttendanceService {
   }
 
   // ===========================================================================
-  // SYNC ALL
+  // SYNC ALL PENDING ATTENDANCE
+  //
+  // SINGLE-FLIGHT GUARANTEE
+  //
+  // Home loading, app-resume, pull-to-refresh, and manual synchronization can
+  // all request synchronization.
+  //
+  // Only one real synchronization operation may access the offline biometric
+  // files at one time.
+  //
+  // Other callers join the same Future instead of starting a second processor.
   // ===========================================================================
 
-  Future<OfflineSyncResult> syncPendingAttendances() async {
+  Future<OfflineSyncResult> syncPendingAttendances() {
+    final existing = _activeOfflineSync;
+
+    if (existing != null) {
+      debugPrint('OFFLINE SYNC: already running - joining existing sync.');
+
+      return existing;
+    }
+
+    late final Future<OfflineSyncResult> future;
+
+    future = Future<OfflineSyncResult>(_runPendingAttendanceSync);
+
+    _activeOfflineSync = future;
+
+    future.whenComplete(() {
+      if (identical(_activeOfflineSync, future)) {
+        _activeOfflineSync = null;
+      }
+    });
+
+    return future;
+  }
+
+  // ===========================================================================
+  // ACTUAL OFFLINE QUEUE PROCESSOR
+  // ===========================================================================
+
+  Future<OfflineSyncResult> _runPendingAttendanceSync() async {
     final records = await _offlineStorage.getPendingAttendances();
 
     debugPrint('==========================================');
+
     debugPrint('OFFLINE SYNC START');
+
     debugPrint('Pending records: ${records.length}');
+
     debugPrint('==========================================');
 
     if (records.isEmpty) {
+      debugPrint('OFFLINE SYNC: nothing to synchronize.');
+
       return const OfflineSyncResult(total: 0, synced: 0, remaining: 0);
     }
 
     var synced = 0;
 
     for (final record in records) {
+      debugPrint('OFFLINE SYNC: processing ${record.uuid}');
+
       final result = await syncOfflineAttendance(record);
 
+      debugPrint('==========================================');
+
       debugPrint('OFFLINE SYNC RESULT');
+
       debugPrint('Success: ${result.success}');
+
       debugPrint('Code: ${result.code}');
+
       debugPrint('Message: ${result.message}');
+
       debugPrint('Network unavailable: ${result.networkUnavailable}');
 
-      if (result.success || result.code == 'ALREADY_CHECKED_IN') {
+      debugPrint('==========================================');
+
+      // -----------------------------------------------------------------------
+      // SUCCESS
+      //
+      // Laravel accepted and stored this attendance.
+      //
+      // The server is now authoritative, so remove its local pending files.
+      // -----------------------------------------------------------------------
+
+      if (result.success) {
         await _offlineStorage.deletePending(record);
 
         synced++;
+
+        debugPrint(
+          'OFFLINE SYNC: '
+          '${record.uuid} synchronized and removed locally.',
+        );
+
         continue;
       }
 
+      // -----------------------------------------------------------------------
+      // DUPLICATE / IDEMPOTENCY
+      //
+      // Laravel already owns an attendance for this student/event.
+      //
+      // There is no reason to retry this local queue forever.
+      // -----------------------------------------------------------------------
+
+      if (result.code == 'ALREADY_CHECKED_IN') {
+        await _offlineStorage.deletePending(record);
+
+        synced++;
+
+        debugPrint(
+          'OFFLINE SYNC: '
+          '${record.uuid} already exists on server. '
+          'Local copy removed.',
+        );
+
+        continue;
+      }
+
+      // -----------------------------------------------------------------------
+      // NETWORK FAILURE
+      //
+      // Stop and keep all remaining evidence locally.
+      // -----------------------------------------------------------------------
+
       if (result.networkUnavailable) {
+        debugPrint(
+          'OFFLINE SYNC: network unavailable. '
+          'Keeping pending attendance locally.',
+        );
+
         break;
       }
+
+      // -----------------------------------------------------------------------
+      // VERIFICATION OR SERVER REJECTION
+      //
+      // Do not silently destroy biometric evidence when verification fails.
+      // -----------------------------------------------------------------------
+
+      debugPrint(
+        'OFFLINE SYNC: '
+        '${record.uuid} was not accepted. '
+        'Keeping it locally.',
+      );
     }
 
     final remaining = await _offlineStorage.pendingCount();
 
     debugPrint('==========================================');
+
     debugPrint('OFFLINE SYNC COMPLETE');
+
     debugPrint('Total: ${records.length}');
+
     debugPrint('Synced: $synced');
+
     debugPrint('Remaining: $remaining');
+
     debugPrint('==========================================');
 
     return OfflineSyncResult(
@@ -590,6 +744,10 @@ class AttendanceService {
       remaining: remaining,
     );
   }
+
+  // ===========================================================================
+  // PENDING COUNT
+  // ===========================================================================
 
   Future<int> pendingOfflineCount() {
     return _offlineStorage.pendingCount();
@@ -679,21 +837,31 @@ class AttendanceService {
     switch (response.statusCode) {
       case 401:
         return 'Your login session has expired.';
+
       case 403:
         return 'Your account cannot record attendance.';
+
       case 404:
         return 'Event not found.';
+
       case 409:
         return 'Attendance has already been recorded.';
+
       case 422:
         return 'Attendance verification failed.';
+
       case 429:
         return 'Too many requests. Please wait.';
+
       default:
         return 'Attendance verification failed.';
     }
   }
 }
+
+// =============================================================================
+// ATTENDANCE RESULT
+// =============================================================================
 
 class AttendanceResult {
   const AttendanceResult({
@@ -721,6 +889,10 @@ class AttendanceResult {
     );
   }
 }
+
+// =============================================================================
+// LIVENESS FRAME RESULT
+// =============================================================================
 
 class AttendanceLivenessFrameResult {
   const AttendanceLivenessFrameResult({
@@ -755,6 +927,10 @@ class AttendanceLivenessFrameResult {
   final bool networkUnavailable;
 }
 
+// =============================================================================
+// OFFLINE SYNC RESULT
+// =============================================================================
+
 class OfflineSyncResult {
   const OfflineSyncResult({
     required this.total,
@@ -767,16 +943,25 @@ class OfflineSyncResult {
   final int remaining;
 }
 
+// =============================================================================
+// INTERNAL ANALYZED CANDIDATE
+// =============================================================================
+
 class _AnalyzedCandidate {
   const _AnalyzedCandidate({required this.path, required this.result});
 
   final String path;
+
   final AttendanceLivenessFrameResult result;
 
   double get quality {
     return ((result.detectionScore ?? 0) * 1000) + (result.blurScore ?? 0);
   }
 }
+
+// =============================================================================
+// SELECTED OFFLINE FRAMES
+// =============================================================================
 
 class _SelectedFrames {
   const _SelectedFrames({
@@ -793,6 +978,10 @@ class _SelectedFrames {
   final String smilePath;
   final String returnedPath;
 }
+
+// =============================================================================
+// INTERNAL EXCEPTIONS
+// =============================================================================
 
 class _SelectionFailed implements Exception {
   const _SelectionFailed(this.message);

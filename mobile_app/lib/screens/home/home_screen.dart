@@ -3,10 +3,11 @@ import 'package:intl/intl.dart';
 
 import '../../models/event_item.dart';
 import '../../services/attendance_history_service.dart';
+import '../../services/attendance_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/event_service.dart';
 import '../../services/notification_service.dart';
-import '../../services/attendance_service.dart';
+
 import '../attendance/attendance_face_verification_screen.dart';
 import '../attendance/attendance_history_screen.dart';
 import '../auth/auth_gate.dart';
@@ -25,26 +26,53 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   static const Color navy = Color(0xFF080878);
   static const Color gold = Color(0xFFFFC800);
   static const Color background = Color(0xFFF6F6F6);
   static const Color muted = Color(0xFF808080);
 
   bool _loading = true;
+  bool _dashboardBusy = false;
+  bool _syncingOffline = false;
+
   String? _error;
 
   List<EventItem> _events = const [];
 
   int _attendanceCount = 0;
   int _unreadCount = 0;
+  int _pendingOfflineCount = 0;
 
   String _latestAttendanceStatus = 'No record';
+
+  // ===========================================================================
+  // LIFECYCLE
+  // ===========================================================================
 
   @override
   void initState() {
     super.initState();
+
+    WidgetsBinding.instance.addObserver(this);
+
     _loadDashboard();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+
+    if (state == AppLifecycleState.resumed) {
+      _loadDashboard(showMainLoader: false);
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+
+    super.dispose();
   }
 
   // ===========================================================================
@@ -113,128 +141,200 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // ===========================================================================
-  // DASHBOARD DATA
+  // DASHBOARD
   // ===========================================================================
 
-  Future<void> _loadDashboard() async {
-    if (mounted) {
+  Future<void> _loadDashboard({bool showMainLoader = true}) async {
+    if (_dashboardBusy) {
+      return;
+    }
+
+    _dashboardBusy = true;
+
+    if (mounted && showMainLoader) {
       setState(() {
         _loading = true;
         _error = null;
       });
     }
 
-    // ---------------------------------------------------------------------------
-    // 1. LOAD EVENTS FIRST
-    //
-    // If Laravel is reachable, this confirms that it makes sense to attempt
-    // synchronization of locally queued offline attendance.
-    // ---------------------------------------------------------------------------
+    try {
+      // -----------------------------------------------------------------------
+      // 1. LOCAL PENDING COUNT
+      // -----------------------------------------------------------------------
 
-    final eventResult = await EventService.instance.getEvents();
+      final pendingBefore = await AttendanceService.instance
+          .pendingOfflineCount();
 
-    if (!mounted) {
-      return;
-    }
+      if (mounted) {
+        setState(() {
+          _pendingOfflineCount = pendingBefore;
+        });
+      }
 
-    if (!eventResult.success) {
+      // -----------------------------------------------------------------------
+      // 2. EVENTS
+      //
+      // This also helps determine whether Laravel is reachable.
+      // -----------------------------------------------------------------------
+
+      final eventResult = await EventService.instance.getEvents();
+
+      if (!mounted) {
+        return;
+      }
+
+      // -----------------------------------------------------------------------
+      // 3. OFFLINE SYNC
+      //
+      // Only attempt synchronization if something is actually queued.
+      // -----------------------------------------------------------------------
+
+      if (pendingBefore > 0) {
+        setState(() {
+          _syncingOffline = true;
+        });
+
+        debugPrint('==========================================');
+
+        debugPrint('OFFLINE SYNC: Home automatic trigger');
+
+        debugPrint('Pending before sync: $pendingBefore');
+
+        debugPrint('==========================================');
+
+        try {
+          final syncResult = await AttendanceService.instance
+              .syncPendingAttendances();
+
+          debugPrint('==========================================');
+
+          debugPrint('OFFLINE SYNC RESULT');
+
+          debugPrint('Total: ${syncResult.total}');
+
+          debugPrint('Synced: ${syncResult.synced}');
+
+          debugPrint('Remaining: ${syncResult.remaining}');
+
+          debugPrint('==========================================');
+
+          if (mounted) {
+            setState(() {
+              _pendingOfflineCount = syncResult.remaining;
+            });
+          }
+        } catch (e) {
+          debugPrint('HOME OFFLINE SYNC ERROR: $e');
+
+          final remaining = await AttendanceService.instance
+              .pendingOfflineCount();
+
+          if (mounted) {
+            setState(() {
+              _pendingOfflineCount = remaining;
+            });
+          }
+        } finally {
+          if (mounted) {
+            setState(() {
+              _syncingOffline = false;
+            });
+          }
+        }
+      }
+
+      // -----------------------------------------------------------------------
+      // 4. LOAD HISTORY AFTER SYNC
+      //
+      // Important:
+      //
+      // If offline attendance just synchronized,
+      // history immediately sees the new attendance.
+      // -----------------------------------------------------------------------
+
+      final historyResult = await AttendanceHistoryService.instance
+          .getHistory();
+
+      // -----------------------------------------------------------------------
+      // 5. NOTIFICATIONS
+      // -----------------------------------------------------------------------
+
+      final notificationResult = await NotificationService.instance
+          .getNotifications();
+
+      // -----------------------------------------------------------------------
+      // 6. FINAL LOCAL PENDING COUNT
+      // -----------------------------------------------------------------------
+
+      final pendingAfter = await AttendanceService.instance
+          .pendingOfflineCount();
+
+      if (!mounted) {
+        return;
+      }
+
+      // -----------------------------------------------------------------------
+      // 7. UPDATE UI
+      // -----------------------------------------------------------------------
+
+      setState(() {
+        _pendingOfflineCount = pendingAfter;
+
+        if (eventResult.success) {
+          _events = eventResult.events;
+
+          _error = null;
+        } else {
+          _events = const [];
+
+          _error = eventResult.message;
+        }
+
+        if (historyResult.success) {
+          _attendanceCount = historyResult.records.length;
+
+          if (historyResult.records.isEmpty) {
+            _latestAttendanceStatus = 'No record';
+          } else {
+            _latestAttendanceStatus = _formatStatus(
+              historyResult.records.first.status,
+            );
+          }
+        } else {
+          _attendanceCount = 0;
+
+          _latestAttendanceStatus = 'Unavailable';
+        }
+
+        if (notificationResult.success) {
+          _unreadCount = notificationResult.unreadCount;
+        } else {
+          _unreadCount = 0;
+        }
+
+        _loading = false;
+      });
+    } catch (e) {
+      debugPrint('HOME DASHBOARD ERROR: $e');
+
+      if (!mounted) {
+        return;
+      }
+
       setState(() {
         _loading = false;
-        _events = const [];
-        _error = eventResult.message;
+
+        _error = 'Unable to load the dashboard.';
       });
-
-      return;
+    } finally {
+      _dashboardBusy = false;
     }
-
-    _events = eventResult.events;
-
-    // ---------------------------------------------------------------------------
-    // 2. SYNC PENDING OFFLINE ATTENDANCE
-    //
-    // AttendanceService already owns this logic.
-    //
-    // It reads pending records from OfflineStorageService,
-    // sends them to Laravel,
-    // and only removes a pending record after successful verification.
-    // ---------------------------------------------------------------------------
-
-    try {
-      debugPrint('==========================================');
-      debugPrint('OFFLINE SYNC: Home dashboard trigger');
-      debugPrint('==========================================');
-
-      final syncResult = await AttendanceService.instance
-          .syncPendingAttendances();
-
-      debugPrint('==========================================');
-      debugPrint('OFFLINE SYNC RESULT');
-      debugPrint('Total: ${syncResult.total}');
-      debugPrint('Synced: ${syncResult.synced}');
-      debugPrint('Remaining: ${syncResult.remaining}');
-      debugPrint('==========================================');
-    } catch (e) {
-      // A failed sync must NOT stop the Home dashboard from loading.
-      //
-      // The pending record remains stored locally and can be retried the next
-      // time Home refreshes.
-      debugPrint('OFFLINE SYNC HOME ERROR: $e');
-    }
-
-    // ---------------------------------------------------------------------------
-    // 3. LOAD HISTORY AFTER SYNC
-    //
-    // This ordering is intentional.
-    //
-    // If an offline record was successfully synchronized, Attendance History
-    // will now immediately see that new attendance.
-    // ---------------------------------------------------------------------------
-
-    final historyResult = await AttendanceHistoryService.instance.getHistory();
-
-    // ---------------------------------------------------------------------------
-    // 4. LOAD NOTIFICATIONS
-    // ---------------------------------------------------------------------------
-
-    final notificationResult = await NotificationService.instance
-        .getNotifications();
-
-    if (!mounted) {
-      return;
-    }
-
-    // ---------------------------------------------------------------------------
-    // 5. UPDATE DASHBOARD
-    // ---------------------------------------------------------------------------
-
-    setState(() {
-      _loading = false;
-
-      _events = eventResult.events;
-      _error = null;
-
-      if (historyResult.success) {
-        _attendanceCount = historyResult.records.length;
-
-        if (historyResult.records.isEmpty) {
-          _latestAttendanceStatus = 'No record';
-        } else {
-          _latestAttendanceStatus = _formatStatus(
-            historyResult.records.first.status,
-          );
-        }
-      } else {
-        _attendanceCount = 0;
-        _latestAttendanceStatus = 'Unavailable';
-      }
-
-      if (notificationResult.success) {
-        _unreadCount = notificationResult.unreadCount;
-      } else {
-        _unreadCount = 0;
-      }
-    });
   }
+
+  // ===========================================================================
+  // EVENTS
+  // ===========================================================================
 
   List<EventItem> get _todayEvents {
     return _events.where((event) => event.isToday).toList();
@@ -254,7 +354,7 @@ class _HomeScreenState extends State<HomeScreen> {
     ).push(MaterialPageRoute(builder: (_) => const AttendanceHistoryScreen()));
 
     if (mounted) {
-      await _loadDashboard();
+      await _loadDashboard(showMainLoader: false);
     }
   }
 
@@ -263,23 +363,35 @@ class _HomeScreenState extends State<HomeScreen> {
         .push(MaterialPageRoute(builder: (_) => const NotificationsScreen()));
 
     if (mounted) {
-      await _loadDashboard();
+      await _loadDashboard(showMainLoader: false);
     }
   }
 
   Future<void> _openCalendar() async {
     await Navigator.of(context)
         .push(MaterialPageRoute(builder: (_) => const CalendarScreen()));
+
+    if (mounted) {
+      await _loadDashboard(showMainLoader: false);
+    }
   }
 
   Future<void> _openSanctions() async {
     await Navigator.of(context)
         .push(MaterialPageRoute(builder: (_) => const SanctionsScreen()));
+
+    if (mounted) {
+      await _loadDashboard(showMainLoader: false);
+    }
   }
 
   Future<void> _openProfile() async {
     await Navigator.of(context)
         .push(MaterialPageRoute(builder: (_) => const ProfileScreen()));
+
+    if (mounted) {
+      await _loadDashboard(showMainLoader: false);
+    }
   }
 
   // ===========================================================================
@@ -313,7 +425,7 @@ class _HomeScreenState extends State<HomeScreen> {
         shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
         ),
-        builder: (sheetContext) {
+        builder: (BuildContext sheetContext) {
           return SafeArea(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
@@ -368,7 +480,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     if (recorded == true && mounted) {
-      await _loadDashboard();
+      await _loadDashboard(showMainLoader: false);
     }
   }
 
@@ -387,7 +499,9 @@ class _HomeScreenState extends State<HomeScreen> {
             Expanded(
               child: RefreshIndicator(
                 color: navy,
-                onRefresh: _loadDashboard,
+                onRefresh: () {
+                  return _loadDashboard(showMainLoader: false);
+                },
                 child: ListView(
                   physics: const AlwaysScrollableScrollPhysics(),
                   padding: const EdgeInsets.fromLTRB(18, 26, 18, 115),
@@ -400,7 +514,6 @@ class _HomeScreenState extends State<HomeScreen> {
                         fontWeight: FontWeight.w800,
                       ),
                     ),
-
                     const SizedBox(height: 18),
 
                     if (_loading)
@@ -410,22 +523,25 @@ class _HomeScreenState extends State<HomeScreen> {
                           child: CircularProgressIndicator(color: navy),
                         ),
                       )
-                    else if (_error != null)
-                      _buildError()
                     else ...[
-                      _buildSummary(),
+                      if (_pendingOfflineCount > 0 || _syncingOffline) ...[
+                        _buildPendingOfflineCard(),
+                        const SizedBox(height: 16),
+                      ],
 
-                      const SizedBox(height: 16),
+                      if (_error != null)
+                        _buildError()
+                      else ...[
+                        _buildSummary(),
+                        const SizedBox(height: 16),
+                        _buildHistoryCard(),
+                        const SizedBox(height: 22),
+                        _buildTodaySection(),
 
-                      _buildHistoryCard(),
-
-                      const SizedBox(height: 22),
-
-                      _buildTodaySection(),
-
-                      if (_upcomingEvents.isNotEmpty) ...[
-                        const SizedBox(height: 28),
-                        _buildUpcomingSection(),
+                        if (_upcomingEvents.isNotEmpty) ...[
+                          const SizedBox(height: 28),
+                          _buildUpcomingSection(),
+                        ],
                       ],
                     ],
                   ],
@@ -461,9 +577,7 @@ class _HomeScreenState extends State<HomeScreen> {
               size: 30,
             ),
           ),
-
           const SizedBox(width: 14),
-
           Expanded(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -492,7 +606,6 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
-
           InkWell(
             borderRadius: BorderRadius.circular(30),
             onTap: _showProfileMenu,
@@ -501,6 +614,89 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Icon(Icons.account_circle_outlined, color: gold, size: 44),
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  // ===========================================================================
+  // OFFLINE PENDING CARD
+  // ===========================================================================
+
+  Widget _buildPendingOfflineCard() {
+    final syncing = _syncingOffline;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF6D6),
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: gold),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFE9A3),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: syncing
+                ? const SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.5,
+                      color: navy,
+                    ),
+                  )
+                : const Icon(
+                    Icons.cloud_upload_outlined,
+                    color: navy,
+                    size: 26,
+                  ),
+          ),
+          const SizedBox(width: 13),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  syncing
+                      ? 'Synchronizing attendance'
+                      : 'Pending offline attendance',
+                  style: const TextStyle(
+                    color: navy,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  syncing
+                      ? 'Verifying the saved attendance with the server.'
+                      : '$_pendingOfflineCount record${_pendingOfflineCount == 1 ? '' : 's'} waiting for verification and sync.',
+                  style: const TextStyle(
+                    color: Color(0xFF6C6200),
+                    fontSize: 11,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (!syncing)
+            IconButton(
+              tooltip: 'Sync now',
+              onPressed: () {
+                _loadDashboard(showMainLoader: false);
+              },
+              icon: const Icon(Icons.sync_rounded, color: navy),
+            ),
         ],
       ),
     );
@@ -601,9 +797,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 child: const Icon(Icons.history_rounded, color: navy, size: 24),
               ),
-
               const SizedBox(width: 13),
-
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -623,7 +817,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                 ),
               ),
-
               const Icon(Icons.chevron_right_rounded, color: Colors.black54),
             ],
           ),
@@ -639,6 +832,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildTodaySection() {
     if (_todayEvents.isEmpty) {
       return Container(
+        width: double.infinity,
         padding: const EdgeInsets.all(25),
         decoration: BoxDecoration(
           color: Colors.white,
@@ -671,9 +865,7 @@ class _HomeScreenState extends State<HomeScreen> {
           "Today's Events",
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
         ),
-
         const SizedBox(height: 12),
-
         for (final event in _todayEvents) ...[
           _buildEventCard(event, today: true),
           const SizedBox(height: 12),
@@ -709,9 +901,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ],
         ),
-
         const SizedBox(height: 8),
-
         for (final event in upcoming) ...[
           _buildEventCard(event),
           const SizedBox(height: 12),
@@ -719,6 +909,10 @@ class _HomeScreenState extends State<HomeScreen> {
       ],
     );
   }
+
+  // ===========================================================================
+  // EVENT CARD
+  // ===========================================================================
 
   Widget _buildEventCard(EventItem event, {bool today = false}) {
     return Container(
@@ -739,9 +933,7 @@ class _HomeScreenState extends State<HomeScreen> {
               borderRadius: BorderRadius.circular(10),
             ),
           ),
-
           const SizedBox(width: 14),
-
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -755,21 +947,16 @@ class _HomeScreenState extends State<HomeScreen> {
                     fontWeight: FontWeight.w700,
                   ),
                 ),
-
                 const SizedBox(height: 5),
-
                 Text(
                   _formatDate(event),
                   style: const TextStyle(color: muted, fontSize: 12),
                 ),
-
                 const SizedBox(height: 3),
-
                 Text(
                   _formatTimeRange(event),
                   style: const TextStyle(color: muted, fontSize: 11),
                 ),
-
                 if (event.venue.isNotEmpty) ...[
                   const SizedBox(height: 3),
                   Text(
@@ -782,7 +969,6 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
-
           if (today)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -810,6 +996,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildError() {
     return Container(
+      width: double.infinity,
       padding: const EdgeInsets.all(25),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -831,7 +1018,9 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 16),
           FilledButton(
-            onPressed: _loadDashboard,
+            onPressed: () {
+              _loadDashboard();
+            },
             style: FilledButton.styleFrom(
               backgroundColor: navy,
               foregroundColor: Colors.white,
@@ -855,7 +1044,7 @@ class _HomeScreenState extends State<HomeScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (sheetContext) {
+      builder: (BuildContext sheetContext) {
         return SafeArea(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(18, 4, 18, 20),
@@ -877,9 +1066,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       ? null
                       : Text(_studentNumber),
                 ),
-
                 const Divider(),
-
                 ListTile(
                   leading: const Icon(
                     Icons.person_outline_rounded,
@@ -889,20 +1076,20 @@ class _HomeScreenState extends State<HomeScreen> {
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () {
                     Navigator.pop(sheetContext);
+
                     _openProfile();
                   },
                 ),
-
                 ListTile(
                   leading: const Icon(Icons.history_rounded, color: navy),
                   title: const Text('Attendance History'),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () {
                     Navigator.pop(sheetContext);
+
                     _openHistory();
                   },
                 ),
-
                 ListTile(
                   leading: const Icon(Icons.logout_rounded, color: Colors.red),
                   title: const Text(
@@ -911,6 +1098,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   onTap: () {
                     Navigator.pop(sheetContext);
+
                     _confirmLogout();
                   },
                 ),
@@ -922,10 +1110,14 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // ===========================================================================
+  // LOGOUT
+  // ===========================================================================
+
   Future<void> _confirmLogout() async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) {
+      builder: (BuildContext dialogContext) {
         return AlertDialog(
           title: const Text('Log Out'),
           content: const Text('Are you sure you want to log out?'),
@@ -984,10 +1176,11 @@ class _HomeScreenState extends State<HomeScreen> {
               icon: Icons.home_outlined,
               label: 'Home',
               selected: true,
-              onTap: () {},
+              onTap: () {
+                _loadDashboard(showMainLoader: false);
+              },
             ),
           ),
-
           Expanded(
             child: _bottomItem(
               icon: Icons.notifications_none_rounded,
@@ -996,9 +1189,7 @@ class _HomeScreenState extends State<HomeScreen> {
               onTap: _openNotifications,
             ),
           ),
-
           const SizedBox(width: 78),
-
           Expanded(
             child: _bottomItem(
               icon: Icons.calendar_today_outlined,
@@ -1006,7 +1197,6 @@ class _HomeScreenState extends State<HomeScreen> {
               onTap: _openCalendar,
             ),
           ),
-
           Expanded(
             child: _bottomItem(
               icon: Icons.event_note_outlined,
@@ -1066,9 +1256,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
               ],
             ),
-
             const SizedBox(height: 5),
-
             Text(
               label,
               maxLines: 1,
@@ -1167,7 +1355,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
         return DateFormat('h:mm a').format(parsed);
       } catch (_) {
-        // Try next supported format.
+        // Try next format.
       }
     }
 
@@ -1186,7 +1374,8 @@ class _HomeScreenState extends State<HomeScreen> {
         .where((word) => word.isNotEmpty)
         .map(
           (word) =>
-              '${word[0].toUpperCase()}${word.substring(1).toLowerCase()}',
+              '${word[0].toUpperCase()}'
+              '${word.substring(1).toLowerCase()}',
         )
         .join(' ');
   }
