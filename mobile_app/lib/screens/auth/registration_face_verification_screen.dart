@@ -1159,11 +1159,7 @@ class _RegistrationFaceVerificationScreenState
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    Transform.scale(
-                      scaleX: -1,
-                      child: CameraPreview(controller),
-                    ),
-
+                    CameraPreview(controller),
                     /*
                      * Small visual confirmation
                      * when closed eyes have been

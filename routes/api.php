@@ -30,12 +30,12 @@ Route::prefix('v1')->group(function () {
     Route::post(
         '/register',
         [RegistrationController::class, 'register']
-    )->middleware('throttle:5,1');
+    )->middleware('throttle:10,1');
 
     Route::post(
         '/register/validate-photo',
         [RegistrationController::class, 'validatePhoto']
-    )->middleware('throttle:20,1');
+    )->middleware('throttle:30,1');
 
     /*
     |--------------------------------------------------------------------------
@@ -65,6 +65,14 @@ Route::prefix('v1')->group(function () {
         |--------------------------------------------------------------------------
         | REGISTRATION BIOMETRICS
         |--------------------------------------------------------------------------
+        |
+        | Liveness sends several sequential frames.
+        |
+        | The previous 60/minute limit was too restrictive
+        | for real-time camera sampling.
+        |
+        | Sanctum-authenticated throttling is user-specific.
+        |
         */
 
         Route::post(
@@ -73,7 +81,7 @@ Route::prefix('v1')->group(function () {
                 RegistrationController::class,
                 'analyzeLivenessFrame',
             ]
-        )->middleware('throttle:60,1');
+        )->middleware('throttle:240,1');
 
         Route::post(
             '/register/verify-face',
@@ -81,7 +89,7 @@ Route::prefix('v1')->group(function () {
                 RegistrationController::class,
                 'verifyFace',
             ]
-        )->middleware('throttle:10,1');
+        )->middleware('throttle:20,1');
 
         /*
         |--------------------------------------------------------------------------
@@ -113,27 +121,39 @@ Route::prefix('v1')->group(function () {
         Route::post(
             '/attendance/check-in',
             [AttendanceController::class, 'checkIn']
-        )->middleware('throttle:30,1');
+        )->middleware('throttle:20,1');
 
+        /*
+         * Continuous liveness frame analysis.
+         */
         Route::post(
             '/attendance/analyze-liveness-frame',
             [
                 AttendanceController::class,
                 'analyzeLivenessFrame',
             ]
-        )->middleware('throttle:120,1');
+        )->middleware('throttle:240,1');
 
+        /*
+         * Final ONLINE attendance.
+         */
         Route::post(
             '/attendance/mobile-check-in',
             [
                 AttendanceController::class,
                 'mobileCheckIn',
             ]
-        )->middleware('throttle:30,1');
+        )->middleware('throttle:20,1');
 
+        /*
+         * Pending OFFLINE attendance synchronization.
+         */
         Route::post(
             '/attendance/sync',
-            [AttendanceController::class, 'sync']
+            [
+                AttendanceController::class,
+                'sync',
+            ]
         )->middleware('throttle:60,1');
 
         /*
@@ -178,6 +198,8 @@ Route::prefix('v1')->group(function () {
                 NotificationController::class,
                 'markAsRead',
             ]
-        )->whereNumber('notificationId');
+        )->whereNumber(
+            'notificationId'
+        );
     });
 });

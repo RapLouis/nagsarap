@@ -31,17 +31,13 @@ class AuthService {
 
   final ApiService _api = ApiService.instance;
 
-  static const FlutterSecureStorage _storage =
-      FlutterSecureStorage();
+  static const FlutterSecureStorage _storage = FlutterSecureStorage();
 
-  static const String _cachedUserKey =
-      'ccis_cached_user';
+  static const String _cachedUserKey = 'ccis_cached_user';
 
-  static const String _cachedStudentKey =
-      'ccis_cached_student';
+  static const String _cachedStudentKey = 'ccis_cached_student';
 
-  static const String _cachedSessionKey =
-      'ccis_offline_session_enabled';
+  static const String _cachedSessionKey = 'ccis_offline_session_enabled';
 
   // ===========================================================================
   // LOGIN
@@ -68,37 +64,26 @@ class AuthService {
     try {
       final response = await _api.dio.post(
         ApiEndpoints.login,
-        data: {
-          'student_number':
-              studentNumber.trim(),
-          'password': password,
-        },
+        data: {'student_number': studentNumber.trim(), 'password': password},
       );
 
-      final root = _asMap(
-        response.data,
-      );
+      final root = _asMap(response.data);
 
       if (root == null) {
         return const AuthResult(
           success: false,
-          message:
-              'Invalid response from server.',
+          message: 'Invalid response from server.',
         );
       }
 
       if (root['success'] == false) {
         return AuthResult(
           success: false,
-          message:
-              root['message']
-                  ?.toString() ??
-              'Login failed.',
+          message: root['message']?.toString() ?? 'Login failed.',
         );
       }
 
-      final payload =
-          _payload(root);
+      final payload = _payload(root);
 
       final token =
           payload['token'] ??
@@ -106,43 +91,27 @@ class AuthService {
           root['token'] ??
           root['access_token'];
 
-      if (token == null ||
-          token
-              .toString()
-              .trim()
-              .isEmpty) {
+      if (token == null || token.toString().trim().isEmpty) {
         return AuthResult(
           success: false,
           message:
-              root['message']
-                  ?.toString() ??
+              root['message']?.toString() ??
               'Login failed. No authentication token was returned.',
         );
       }
 
-      await _api.saveToken(
-        token.toString(),
-      );
+      await _api.saveToken(token.toString());
 
-      final parsed =
-          _extractUserAndStudent(
-        root,
-      );
+      final parsed = _extractUserAndStudent(root);
 
       final user = parsed.$1;
       final student = parsed.$2;
 
-      await _saveOfflineSession(
-        user: user,
-        student: student,
-      );
+      await _saveOfflineSession(user: user, student: student);
 
       return AuthResult(
         success: true,
-        message:
-            root['message']
-                ?.toString() ??
-            'Login successful.',
+        message: root['message']?.toString() ?? 'Login successful.',
         user: user,
         student: student,
         offline: false,
@@ -162,16 +131,11 @@ class AuthService {
         );
       }
 
-      return AuthResult(
-        success: false,
-        message:
-            _extractErrorMessage(e),
-      );
+      return AuthResult(success: false, message: _extractErrorMessage(e));
     } catch (_) {
       return const AuthResult(
         success: false,
-        message:
-            'Unable to log in. Please try again.',
+        message: 'Unable to log in. Please try again.',
       );
     }
   }
@@ -195,75 +159,54 @@ class AuthService {
   // ===========================================================================
 
   Future<AuthResult> me() async {
-    final token =
-        await _api.getToken();
+    final token = await _api.getToken();
 
-    if (token == null ||
-        token.isEmpty) {
+    if (token == null || token.isEmpty) {
       return const AuthResult(
         success: false,
-        message:
-            'No saved login session.',
+        message: 'No saved login session.',
       );
     }
 
     try {
-      final response =
-          await _api.dio.get(
-        ApiEndpoints.me,
-      );
+      final response = await _api.dio.get(ApiEndpoints.me);
 
       if (response.statusCode == 401) {
         await _clearLocalSession();
 
         return const AuthResult(
           success: false,
-          message:
-              'Your login session has expired.',
+          message: 'Your login session has expired.',
         );
       }
 
-      final root =
-          _asMap(response.data);
+      final root = _asMap(response.data);
 
       if (root == null) {
         return const AuthResult(
           success: false,
-          message:
-              'Invalid response from server.',
+          message: 'Invalid response from server.',
         );
       }
 
       if (root['success'] == false) {
         return AuthResult(
           success: false,
-          message:
-              root['message']
-                  ?.toString() ??
-              'Unable to restore session.',
+          message: root['message']?.toString() ?? 'Unable to restore session.',
         );
       }
 
-      final parsed =
-          _extractUserAndStudent(
-        root,
-      );
+      final parsed = _extractUserAndStudent(root);
 
       final user = parsed.$1;
       final student = parsed.$2;
 
       // Refresh the last known server-verified identity.
-      await _saveOfflineSession(
-        user: user,
-        student: student,
-      );
+      await _saveOfflineSession(user: user, student: student);
 
       return AuthResult(
         success: true,
-        message:
-            root['message']
-                ?.toString() ??
-            'Authenticated.',
+        message: root['message']?.toString() ?? 'Authenticated.',
         user: user,
         student: student,
         offline: false,
@@ -278,8 +221,7 @@ class AuthService {
 
         return const AuthResult(
           success: false,
-          message:
-              'Your login session has expired.',
+          message: 'Your login session has expired.',
         );
       }
 
@@ -292,24 +234,18 @@ class AuthService {
       // ==============================================================
 
       if (e.response == null) {
-        final cached =
-            await restoreOfflineSession();
+        final cached = await restoreOfflineSession();
 
         if (cached.success) {
           return cached;
         }
       }
 
-      return AuthResult(
-        success: false,
-        message:
-            _extractErrorMessage(e),
-      );
+      return AuthResult(success: false, message: _extractErrorMessage(e));
     } catch (_) {
       // Last fallback:
       // if networking itself failed unexpectedly, attempt trusted cache.
-      final cached =
-          await restoreOfflineSession();
+      final cached = await restoreOfflineSession();
 
       if (cached.success) {
         return cached;
@@ -317,8 +253,7 @@ class AuthService {
 
       return const AuthResult(
         success: false,
-        message:
-            'Unable to restore your login session.',
+        message: 'Unable to restore your login session.',
       );
     }
   }
@@ -327,97 +262,67 @@ class AuthService {
   // RESTORE OFFLINE SESSION
   // ===========================================================================
 
-  Future<AuthResult>
-      restoreOfflineSession() async {
+  Future<AuthResult> restoreOfflineSession() async {
     try {
-      final token =
-          await _api.getToken();
+      final token = await _api.getToken();
 
-      if (token == null ||
-          token.isEmpty) {
+      if (token == null || token.isEmpty) {
         return const AuthResult(
           success: false,
-          message:
-              'No saved login session.',
+          message: 'No saved login session.',
         );
       }
 
-      final enabled =
-          await _storage.read(
-        key: _cachedSessionKey,
-      );
+      final enabled = await _storage.read(key: _cachedSessionKey);
 
       if (enabled != 'true') {
         return const AuthResult(
           success: false,
-          message:
-              'Offline login has not been initialized on this device.',
+          message: 'Offline login has not been initialized on this device.',
         );
       }
 
-      final userJson =
-          await _storage.read(
-        key: _cachedUserKey,
-      );
+      final userJson = await _storage.read(key: _cachedUserKey);
 
-      final studentJson =
-          await _storage.read(
-        key: _cachedStudentKey,
-      );
+      final studentJson = await _storage.read(key: _cachedStudentKey);
 
-      if ((userJson == null ||
-              userJson.isEmpty) &&
-          (studentJson == null ||
-              studentJson.isEmpty)) {
+      if ((userJson == null || userJson.isEmpty) &&
+          (studentJson == null || studentJson.isEmpty)) {
         return const AuthResult(
           success: false,
-          message:
-              'No cached student session is available.',
+          message: 'No cached student session is available.',
         );
       }
 
       Map<String, dynamic>? user;
       Map<String, dynamic>? student;
 
-      if (userJson != null &&
-          userJson.isNotEmpty) {
-        final decoded =
-            jsonDecode(userJson);
+      if (userJson != null && userJson.isNotEmpty) {
+        final decoded = jsonDecode(userJson);
 
         if (decoded is Map) {
-          user =
-              Map<String, dynamic>.from(
-            decoded,
-          );
+          user = Map<String, dynamic>.from(decoded);
         }
       }
 
-      if (studentJson != null &&
-          studentJson.isNotEmpty) {
-        final decoded =
-            jsonDecode(studentJson);
+      if (studentJson != null && studentJson.isNotEmpty) {
+        final decoded = jsonDecode(studentJson);
 
         if (decoded is Map) {
-          student =
-              Map<String, dynamic>.from(
-            decoded,
-          );
+          student = Map<String, dynamic>.from(decoded);
         }
       }
 
-      if (user == null &&
-          student == null) {
+      if (user == null && student == null) {
         return const AuthResult(
           success: false,
-          message:
-              'Saved offline session is invalid.',
+          message: 'Saved offline session is invalid.',
         );
       }
 
       return AuthResult(
         success: true,
-        message:
-            'Offline session restored.',
+        message: 'Offline session restored.',
         user: user,
         student: student,
         offline: true,
@@ -425,8 +330,7 @@ class AuthService {
     } catch (_) {
       return const AuthResult(
         success: false,
-        message:
-            'Unable to restore the offline session.',
+        message: 'Unable to restore the offline session.',
       );
     }
   }
@@ -440,27 +344,17 @@ class AuthService {
     required Map<String, dynamic>? student,
   }) async {
     if (user != null) {
-      await _storage.write(
-        key: _cachedUserKey,
-        value: jsonEncode(user),
-      );
+      await _storage.write(key: _cachedUserKey, value: jsonEncode(user));
     }
 
     if (student != null) {
-      await _storage.write(
-        key: _cachedStudentKey,
-        value: jsonEncode(student),
-      );
+      await _storage.write(key: _cachedStudentKey, value: jsonEncode(student));
     }
 
     // Do not enable offline session restoration unless at least one identity
     // object actually exists.
-    if (user != null ||
-        student != null) {
-      await _storage.write(
-        key: _cachedSessionKey,
-        value: 'true',
-      );
+    if (user != null || student != null) {
+      await _storage.write(key: _cachedSessionKey, value: 'true');
     }
   }
 
@@ -476,9 +370,7 @@ class AuthService {
 
   Future<void> logout() async {
     try {
-      await _api.dio.post(
-        ApiEndpoints.logout,
-      );
+      await _api.dio.post(ApiEndpoints.logout);
     } catch (_) {
       // Local logout must still complete even while offline.
     } finally {
@@ -489,17 +381,11 @@ class AuthService {
   Future<void> _clearLocalSession() async {
     await _api.removeToken();
 
-    await _storage.delete(
-      key: _cachedUserKey,
-    );
+    await _storage.delete(key: _cachedUserKey);
 
-    await _storage.delete(
-      key: _cachedStudentKey,
-    );
+    await _storage.delete(key: _cachedStudentKey);
 
-    await _storage.delete(
-      key: _cachedSessionKey,
-    );
+    await _storage.delete(key: _cachedSessionKey);
   }
 
   // ===========================================================================
@@ -511,18 +397,13 @@ class AuthService {
   }
 
   Future<bool> hasOfflineSession() async {
-    final token =
-        await _api.getToken();
+    final token = await _api.getToken();
 
-    if (token == null ||
-        token.isEmpty) {
+    if (token == null || token.isEmpty) {
       return false;
     }
 
-    final enabled =
-        await _storage.read(
-      key: _cachedSessionKey,
-    );
+    final enabled = await _storage.read(key: _cachedSessionKey);
 
     return enabled == 'true';
   }
@@ -531,76 +412,47 @@ class AuthService {
   // RESPONSE PARSING
   // ===========================================================================
 
-  Map<String, dynamic> _payload(
-    Map<String, dynamic> root,
-  ) {
+  Map<String, dynamic> _payload(Map<String, dynamic> root) {
     if (root['data'] is Map) {
-      return Map<String, dynamic>.from(
-        root['data'] as Map,
-      );
+      return Map<String, dynamic>.from(root['data'] as Map);
     }
 
     return root;
   }
 
-  (
-    Map<String, dynamic>?,
-    Map<String, dynamic>?
-  ) _extractUserAndStudent(
+  (Map<String, dynamic>?, Map<String, dynamic>?) _extractUserAndStudent(
     Map<String, dynamic> root,
   ) {
-    final payload =
-        _payload(root);
+    final payload = _payload(root);
 
     Map<String, dynamic>? user;
     Map<String, dynamic>? student;
 
     if (payload['user'] is Map) {
-      user =
-          Map<String, dynamic>.from(
-        payload['user'] as Map,
-      );
+      user = Map<String, dynamic>.from(payload['user'] as Map);
     }
 
     if (payload['student'] is Map) {
-      student =
-          Map<String, dynamic>.from(
-        payload['student'] as Map,
-      );
+      student = Map<String, dynamic>.from(payload['student'] as Map);
     }
 
-    if (student == null &&
-        user != null &&
-        user['student'] is Map) {
-      student =
-          Map<String, dynamic>.from(
-        user['student'] as Map,
-      );
+    if (student == null && user != null && user['student'] is Map) {
+      student = Map<String, dynamic>.from(user['student'] as Map);
     }
 
     if (user == null &&
         (payload.containsKey('id') ||
             payload.containsKey('email') ||
             payload.containsKey('name'))) {
-      user =
-          Map<String, dynamic>.from(
-        payload,
-      );
+      user = Map<String, dynamic>.from(payload);
     }
 
-    return (
-      user,
-      student,
-    );
+    return (user, student);
   }
 
-  Map<String, dynamic>? _asMap(
-    dynamic value,
-  ) {
+  Map<String, dynamic>? _asMap(dynamic value) {
     if (value is Map) {
-      return Map<String, dynamic>.from(
-        value,
-      );
+      return Map<String, dynamic>.from(value);
     }
 
     return null;
@@ -610,46 +462,32 @@ class AuthService {
   // ERROR PARSING
   // ===========================================================================
 
-  String _extractErrorMessage(
-    DioException exception,
-  ) {
-    final response =
-        exception.response;
+  String _extractErrorMessage(DioException exception) {
+    final response = exception.response;
 
     if (response == null) {
       return 'Unable to connect to the server.';
     }
 
     if (response.data is Map) {
-      final data =
-          Map<String, dynamic>.from(
-        response.data as Map,
-      );
+      final data = Map<String, dynamic>.from(response.data as Map);
 
       if (data['message'] != null) {
-        return data['message']
-            .toString();
+        return data['message'].toString();
       }
 
       if (data['error'] != null) {
-        return data['error']
-            .toString();
+        return data['error'].toString();
       }
 
       if (data['errors'] is Map) {
-        final errors =
-            Map<String, dynamic>.from(
-          data['errors'] as Map,
-        );
+        final errors = Map<String, dynamic>.from(data['errors'] as Map);
 
         if (errors.isNotEmpty) {
-          final first =
-              errors.values.first;
+          final first = errors.values.first;
 
-          if (first is List &&
-              first.isNotEmpty) {
-            return first.first
-                .toString();
+          if (first is List && first.isNotEmpty) {
+            return first.first.toString();
           }
 
           return first.toString();

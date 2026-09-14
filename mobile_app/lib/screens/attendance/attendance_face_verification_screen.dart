@@ -1003,7 +1003,7 @@ class _AttendanceFaceVerificationScreenState
                         camera == null ||
                         !camera.value.isInitialized
                     ? const Center(child: CircularProgressIndicator())
-                    : Transform.scale(scaleX: -1, child: CameraPreview(camera)),
+                    : CameraPreview(camera),
               ),
 
               const SizedBox(height: 24),
