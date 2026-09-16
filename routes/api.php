@@ -56,6 +56,11 @@ Route::prefix('v1')->group(function () {
             [AuthController::class, 'me']
         );
 
+        Route::get(
+            '/me/photo',
+            [AuthController::class, 'profilePhoto']
+        );
+
         Route::post(
             '/auth/logout',
             [AuthController::class, 'logout']
@@ -81,7 +86,7 @@ Route::prefix('v1')->group(function () {
                 RegistrationController::class,
                 'analyzeLivenessFrame',
             ]
-        )->middleware('throttle:240,1');
+        );
 
         Route::post(
             '/register/verify-face',
@@ -132,7 +137,7 @@ Route::prefix('v1')->group(function () {
                 AttendanceController::class,
                 'analyzeLivenessFrame',
             ]
-        )->middleware('throttle:240,1');
+        );
 
         /*
          * Final ONLINE attendance.

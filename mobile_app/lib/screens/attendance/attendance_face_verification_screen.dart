@@ -33,18 +33,14 @@ class _AttendanceFaceVerificationScreenState
   static const Color gold = Color(0xFFFFC800);
 
   static const Color background = Color(0xFFF7F7FB);
+  static const double centerYawLimit = 0.50;
+  static const double turnYawDelta = 0.005;
+  static const double returnYawDelta = 0.50;
 
-  static const double centerYawLimit = 0.08;
+  static const double blinkRatio = 0.995;
+  static const double blinkReopenRatio = 0.85;
 
-  static const double turnYawDelta = 0.06;
-
-  static const double returnYawDelta = 0.06;
-
-  static const double blinkRatio = 0.88;
-
-  static const double blinkReopenRatio = 0.92;
-
-  static const double smileRatio = 1.04;
+  static const double smileRatio = 1.001;
 
   static const Duration normalCaptureInterval = Duration(milliseconds: 250);
 

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Event;
+use App\Models\StudentNotification;
 use App\Services\AttendanceException;
 use App\Services\AttendanceService;
 use App\Services\FaceService;
@@ -147,6 +148,13 @@ class AttendanceController extends Controller
                     )
                 );
         } catch (RuntimeException $e) {
+            $this->notifyAttendanceResult(
+                $request,
+                $event,
+                false,
+                $e->getMessage()
+            );
+
             return response()->json([
                 'success' => false,
                 'code' => 'LIVENESS_FAILED',
@@ -221,22 +229,31 @@ class AttendanceController extends Controller
                     isOfflineSync: true
                 );
         } catch (AttendanceException $e) {
+            $this->notifyAttendanceResult($request, $event, false, $e->getMessage());
+
             return response()->json([
                 'success' => false,
                 'code' => $e->errorCode,
-                'message' =>
-                    $e->getMessage(),
+                'message' => $e->getMessage(),
                 'data' => $e->data,
             ], $e->httpStatus);
         } catch (RuntimeException $e) {
+            $this->notifyAttendanceResult($request, $event, false, $e->getMessage());
+
             return response()->json([
                 'success' => false,
-                'code' =>
-                    'FACE_VERIFICATION_FAILED',
-                'message' =>
-                    $e->getMessage(),
+                'code' => 'FACE_VERIFICATION_FAILED',
+                'message' => $e->getMessage(),
             ], 422);
         }
+
+        $this->notifyAttendanceResult(
+            $request,
+            $event,
+            true,
+            'Offline attendance synchronized successfully.',
+            $attendance->status
+        );
 
         return response()->json([
             'success' => true,
@@ -417,12 +434,12 @@ class AttendanceController extends Controller
                         )
                     );
         } catch (RuntimeException $e) {
+            $this->notifyAttendanceResult($request, $event, false, $e->getMessage());
+
             return response()->json([
                 'success' => false,
-                'code' =>
-                    'LIVENESS_FAILED',
-                'message' =>
-                    $e->getMessage(),
+                'code' => 'LIVENESS_FAILED',
+                'message' => $e->getMessage(),
             ], 422);
         }
 
@@ -475,22 +492,31 @@ class AttendanceController extends Controller
                             false
                     );
         } catch (AttendanceException $e) {
+            $this->notifyAttendanceResult($request, $event, false, $e->getMessage());
+
             return response()->json([
                 'success' => false,
                 'code' => $e->errorCode,
-                'message' =>
-                    $e->getMessage(),
+                'message' => $e->getMessage(),
                 'data' => $e->data,
             ], $e->httpStatus);
         } catch (RuntimeException $e) {
+            $this->notifyAttendanceResult($request, $event, false, $e->getMessage());
+
             return response()->json([
                 'success' => false,
-                'code' =>
-                    'FACE_VERIFICATION_FAILED',
-                'message' =>
-                    $e->getMessage(),
+                'code' => 'FACE_VERIFICATION_FAILED',
+                'message' => $e->getMessage(),
             ], 422);
         }
+
+        $this->notifyAttendanceResult(
+            $request,
+            $event,
+            true,
+            'Attendance recorded successfully.',
+            $attendance->status
+        );
 
         return response()->json([
             'success' => true,
@@ -727,4 +753,43 @@ class AttendanceController extends Controller
             ],
         ]);
     }
+
+    private function notifyAttendanceResult(
+        Request $request,
+        Event $event,
+        bool $recorded,
+        string $detail,
+        ?string $status = null
+    ): void {
+        $studentId = $request->user()?->student_id;
+
+        if (!$studentId) {
+            return;
+        }
+
+        $eventName = trim((string) ($event->title ?? $event->event_name ?? $event->name ?? 'Event'));
+
+        if ($recorded) {
+            $statusText = $status ? ' Status: '.ucfirst($status).'.' : '';
+
+            StudentNotification::create([
+                'student_id' => $studentId,
+                'type' => 'attendance_recorded',
+                'title' => 'Attendance Recorded',
+                'message' => "Your attendance for {$eventName} was recorded successfully.{$statusText}",
+                'is_read' => false,
+            ]);
+
+            return;
+        }
+
+        StudentNotification::create([
+            'student_id' => $studentId,
+            'type' => 'attendance_failed',
+            'title' => 'Attendance Not Recorded',
+            'message' => "Your attendance for {$eventName} was not recorded. {$detail}",
+            'is_read' => false,
+        ]);
+    }
+
 }

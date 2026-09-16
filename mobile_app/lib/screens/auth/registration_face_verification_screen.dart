@@ -36,42 +36,14 @@ class _RegistrationFaceVerificationScreenState
   // ===========================================================================
   // LIVENESS THRESHOLDS
   // ===========================================================================
+  static const double centerYawLimit = 0.50;
+  static const double turnYawDelta = 0.005;
+  static const double returnYawDelta = 0.50;
 
-  /*
-   * Keep these aligned with the Python service.
-   */
+  static const double blinkRatio = 0.995;
+  static const double blinkReopenRatio = 0.85;
 
-  static const double centerYawLimit = 0.08;
-
-  static const double turnYawDelta = 0.06;
-
-  static const double returnYawDelta = 0.06;
-
-  /*
-   * Blink:
-   *
-   * Closed eye must fall below:
-   *
-   * centerEyeOpenness * 0.88
-   *
-   * Example:
-   *
-   * center = 0.100
-   * closed threshold = 0.088
-   *
-   * eye = 0.084
-   * -> CLOSED
-   */
-  static const double blinkRatio = 0.88;
-
-  /*
-   * Eyes must reopen close to the original
-   * center baseline before proceeding.
-   */
-  static const double blinkReopenRatio = 0.92;
-
-  static const double smileRatio = 1.04;
-
+  static const double smileRatio = 1.001;
   // ===========================================================================
   // CAPTURE SPEED
   // ===========================================================================

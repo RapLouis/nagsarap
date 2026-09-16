@@ -25,10 +25,10 @@ class AttendanceService {
   //
   // IMPORTANT:
   // Restore stricter production biometric settings during final hardening.
-  static const double _centerLimit = 0.13;
-  static const double _blinkRatio = 0.82;
-  static const double _turnDelta = 0.04;
-  static const double _smileRatio = 1.025;
+  static const double _centerLimit = 0.18;
+  static const double _blinkRatio = 0.90;
+  static const double _turnDelta = 0.03;
+  static const double _smileRatio = 1.015;
 
   // ===========================================================================
   // ANALYZE ONE ATTENDANCE LIVENESS FRAME

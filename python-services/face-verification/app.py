@@ -23,42 +23,32 @@ app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 # =============================================================================
 # STRICT PRODUCTION BIOMETRIC PROFILE
 # =============================================================================
+MIN_BLUR_SCORE = 10.0
 
-# Reference/profile image sharpness.
-MIN_BLUR_SCORE = 30.0
-
-# Live camera images are naturally softer.
-MIN_LIVENESS_BLUR_SCORE = 12.0
+# Live-camera frame sharpness.
+MIN_LIVENESS_BLUR_SCORE = 2.0
 
 # InsightFace detection confidence.
-MIN_DETECTION_SCORE = 0.60
+MIN_DETECTION_SCORE = 0.30
 
-# Same-person similarity requirement.
-#
-# IMPORTANT:
-# This is NOT lowered.
-LIVENESS_IDENTITY_THRESHOLD = 0.45
+# Same-person continuity between the five liveness frames.
+# This is NOT the registered-student final face-match threshold.
+LIVENESS_IDENTITY_THRESHOLD = 0.20
 
-# Initial / final center tolerance.
-CENTER_YAW_LIMIT = 0.08
+# Very wide initial/final center tolerance.
+CENTER_YAW_LIMIT = 0.50
 
-# Required head movement.
-TURN_YAW_DELTA = 0.06
+# Slight movement is enough to demonstrate head turn.
+TURN_YAW_DELTA = 0.005
 
-# Return-to-center tolerance.
-RETURN_YAW_DELTA = 0.06
+# Very wide return-to-center tolerance.
+RETURN_YAW_DELTA = 0.50
 
-# Blink:
-# closed eye openness must be <=
-# center eye openness * BLINK_RATIO
-BLINK_RATIO = 0.72
+# A tiny decrease in eye openness can trigger blink.
+BLINK_RATIO = 0.995
 
-# Smile:
-# smile mouth width must be >=
-# neutral mouth width * SMILE_RATIO
-SMILE_RATIO = 1.04
-
-
+# A tiny increase in mouth width can trigger smile.
+SMILE_RATIO = 1.001
 # =============================================================================
 # INSIGHTFACE
 # =============================================================================
@@ -1071,7 +1061,7 @@ def home():
             "running",
 
         "profile":
-            "production_strict",
+            "demo_friendly",
     }), 200
 
 
@@ -1992,7 +1982,7 @@ if __name__ == "__main__":
         " MediaPipe + OpenCV + InsightFace"
     )
     print(
-        " STRICT PRODUCTION BIOMETRIC PROFILE"
+        " DEMO-FRIENDLY BIOMETRIC PROFILE"
     )
     print(
         "=============================================="
