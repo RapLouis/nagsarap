@@ -2,124 +2,258 @@
 
 namespace App\Http\Controllers;
 
+use App\Exceptions\BiometricServiceException;
+use App\Http\Requests\VerifyFaceRequest;
+use App\Models\FaceVerificationAttempt;
 use App\Models\Student;
+use App\Services\BiometricService;
+use App\Services\FaceChallengeService;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Str;
+use Inertia\Inertia;
+use Inertia\Response;
 
 class FaceVerificationController extends Controller
 {
+    public function __construct(
+        private readonly FaceChallengeService $challenges,
+        private readonly BiometricService $biometrics,
+    ) {
+    }
+
     /**
-     * Process live camera biometrics and store 512-D InsightFace embedding.
+     * Render the verification page with a fresh server-issued challenge.
+     * Replaces the closure that used to live in routes/web.php.
      */
-    public function verifyFace(Request $request)
+    public function show(Request $request): Response|RedirectResponse
     {
-        /** @var \App\Models\User $user */
-        $user = Auth::user();
-        $student = $user->student;
+        $student = $request->user()?->student;
+        abort_unless($student, 403, 'Student record not found.');
 
-        if (!$student) {
-            return back()->withErrors(['face' => 'Student record not found.']);
+        // Skip verification if already verified
+        if ($student->verification_status === 'verified') {
+            return redirect()->route('dashboard');
         }
 
-        // 1. Validate only the live camera frame file upload
-        $request->validate([
-            'live_camera_frame' => ['required', 'image', 'mimes:jpeg,png,jpg', 'max:5048'],
+        return Inertia::render('auth/verify-face', [
+            // Only the fields the page needs. The old closure sent the whole Student
+            // model to the browser, which can include the face embedding.
+            'student' => $student->only(['student_id', 'firstname', 'surname']),
+
+            // A closure, so the challenge is only created when the prop is actually sent
+            // (page load and the page's retry reload), not on unrelated partial reloads.
+            'challenge' => fn () => $this->challenges->issue(
+                $student->student_id,
+                $request->session()->getId(),
+            ),
         ]);
+    }
 
-        // 2. Convert uploaded camera frame file to Base64
-        $liveFrameFile = $request->file('live_camera_frame');
-        $liveBase64Image = 'data:image/jpeg;base64,' . base64_encode(file_get_contents($liveFrameFile->getRealPath()));
+    /**
+     * Verify liveness and identity, then store the 512-D InsightFace embedding.
+     */
+    public function verifyFace(VerifyFaceRequest $request): RedirectResponse
+    {
+        $student = $request->user()->student;
 
-        // 3. Request Live Frame 512-D Embedding Vector from Python Microservice
+        if (! $student) {
+            return $this->fail('Student record not found.');
+        }
+
+        // Rate limit per student. Every attempt counts, pass or fail.
+        $limiterKey = 'face-verify:' . $student->student_id;
+
+        if (RateLimiter::tooManyAttempts($limiterKey, (int) config('face_verification.max_attempts'))) {
+            $minutes = max(1, (int) ceil(RateLimiter::availableIn($limiterKey) / 60));
+            $this->record('rate_limited', $student, $request);
+
+            return $this->fail("Too many attempts. Please try again in {$minutes} minute(s).");
+        }
+
+        RateLimiter::hit($limiterKey, (int) config('face_verification.attempt_decay_seconds'));
+
+        // One verification per student at a time. This also makes the one-time challenge
+        // and the duplicate check race-free. The TTL must be longer than the Python timeout.
+        $lock = Cache::lock('face-verify-lock:' . $student->student_id, 60);
+
+        if (! $lock->get()) {
+            return $this->fail('A verification is already in progress. Please wait a moment.');
+        }
+
         try {
-            $response = Http::timeout(10)->post('http://127.0.0.1:5000/extract-embedding', [
-                'image_base64' => $liveBase64Image,
-            ]);
+            return $this->processVerification($request, $student, $limiterKey);
+        } finally {
+            $lock->release();
+        }
+    }
 
-            if ($response->failed()) {
-                return back()->withErrors([
-                    'face' => $response->json()['detail'] ?? 'Live biometric validation failed. Please ensure your face is clear and visible.'
-                ]);
-            }
+    private function processVerification(VerifyFaceRequest $request, Student $student, string $limiterKey): RedirectResponse
+    {
+        // 1. Server-issued, one-time challenge (this also fixes the direction to check).
+        $challenge = $this->challenges->consume(
+            $student->student_id,
+            $request->input('challenge_nonce'),
+            $request->session()->getId(),
+        );
 
-            $liveEmbedding = $response->json()['embedding'];
+        if (! $challenge['valid']) {
+            $this->record('challenge_invalid', $student, $request, ['reason_code' => $challenge['reason']]);
 
-        } catch (\Exception $e) {
-            return back()->withErrors([
-                'face' => 'Unable to connect to biometric verification service.'
-            ]);
+            return $this->fail(
+                $challenge['reason'] === 'expired'
+                    ? 'Your verification session expired. Please try again.'
+                    : 'Your verification session is invalid. Please try again.'
+            );
         }
 
-        // 4. Verify Live Camera against Uploaded Profile Photo
-        if ($student->face_photo_path && Storage::disk('private')->exists($student->face_photo_path)) {
-            $photoBytes = Storage::disk('private')->get($student->face_photo_path);
-            $profileBase64Image = 'data:image/jpeg;base64,' . base64_encode($photoBytes);
+        $direction = $challenge['direction'];
 
-            try {
-                $photoResponse = Http::timeout(10)->post('http://127.0.0.1:5000/extract-embedding', [
-                    'image_base64' => $profileBase64Image,
-                ]);
+        // 2. Liveness (pose, direction, same person across frames, anti-spoof) in the Python service.
+        try {
+            $liveness = $this->biometrics->verifyLiveness(
+                $direction,
+                $this->toBase64($request->file('live_camera_frame')),
+                $this->toBase64($request->file('turn_peak_frame')),
+                $request->file('turn_mid_frame') ? $this->toBase64($request->file('turn_mid_frame')) : null,
+            );
+        } catch (BiometricServiceException) {
+            $this->record('service_error', $student, $request, ['direction' => $direction]);
 
-                if ($photoResponse->successful()) {
-                    $profileEmbedding = $photoResponse->json()['embedding'];
-                    $photoMatchSimilarity = $this->calculateCosineSimilarity($liveEmbedding, $profileEmbedding);
-
-                    // Must match the uploaded profile picture
-                    if ($photoMatchSimilarity < 0.50) {
-                        return back()->withErrors([
-                            'face' => 'Live face does not match the uploaded profile picture. Please try again with proper lighting.'
-                        ]);
-                    }
-                }
-            } catch (\Exception $e) {
-                // If profile photo check fails due to poor image quality, allow pipeline to fall back on deduplication
-            }
+            return $this->fail('Unable to reach the biometric verification service. Please try again in a moment.');
         }
 
-        // 5. Cosine Similarity Deduplication check across all registered students
-        $existingStudents = Student::whereNotNull('face_embedding')
+        if (! ($liveness['passed'] ?? false)) {
+            $this->record('liveness_failed', $student, $request, [
+                'direction' => $direction,
+                'reason_code' => $liveness['reason_code'] ?? null,
+                'metrics' => ['checks' => $liveness['checks'] ?? null],
+            ], storeFrames: true);
+
+            // "detail" is written by the Python service to be safe to show to the user.
+            return $this->fail($liveness['detail'] ?? 'The liveness check failed. Please try again.');
+        }
+
+        $liveEmbedding = $liveness['frontal_embedding'];
+
+        // 3. The straight-on frame must match the uploaded profile photo.
+        $profileEmbedding = $this->biometrics->profileEmbedding($student);
+        $profileSimilarity = null;
+
+        if ($profileEmbedding !== null) {
+            $profileSimilarity = BiometricService::cosineSimilarity($liveEmbedding, $profileEmbedding);
+
+            if ($profileSimilarity < (float) config('face_verification.profile_match_threshold')) {
+                $this->record('profile_mismatch', $student, $request, [
+                    'direction' => $direction,
+                    'metrics' => ['profile_similarity' => round($profileSimilarity, 4), 'checks' => $liveness['checks'] ?? null],
+                ], storeFrames: true);
+
+                return $this->fail('Live face does not match the uploaded profile picture. Please try again with proper lighting.');
+            }
+        } elseif (config('face_verification.require_profile_match')) {
+            $this->record('profile_unavailable', $student, $request, ['direction' => $direction]);
+
+            return $this->fail('We could not use your profile photo for comparison. Please contact support to update it.');
+        }
+
+        // 4. Duplicate check across all registered students.
+        $duplicateThreshold = (float) config('face_verification.duplicate_threshold');
+
+        $existingStudents = Student::query()
+            ->whereNotNull('face_embedding')
             ->where('student_id', '!=', $student->student_id)
-            ->get();
+            ->select(['student_id', 'face_embedding'])
+            ->cursor(); // streams rows instead of loading every embedding into memory
 
-        foreach ($existingStudents as $existingStudent) {
-            $similarity = $this->calculateCosineSimilarity($liveEmbedding, $existingStudent->face_embedding);
+        foreach ($existingStudents as $existing) {
+            $similarity = BiometricService::cosineSimilarity($liveEmbedding, $existing->face_embedding);
 
-            if ($similarity >= 0.60) {
-                return back()->withErrors([
-                    'face' => 'Duplicate face detected. This face is already registered under student number: ' . $existingStudent->student_number
-                ]);
+            if ($similarity >= $duplicateThreshold) {
+                // The matched student goes to the audit log only. Showing their student number
+                // to the user would let anyone look up who is registered.
+                $this->record('duplicate', $student, $request, [
+                    'direction' => $direction,
+                    'metrics' => [
+                        'matched_student_id' => $existing->student_id,
+                        'duplicate_similarity' => round($similarity, 4),
+                    ],
+                ], storeFrames: true);
+
+                return $this->fail('This face is already registered to another account. Please contact support if you think this is a mistake.');
             }
         }
 
-        // 6. Save Embedding & Update Verification Status
+        // 5. Save embedding and mark as verified.
         $student->face_embedding = $liveEmbedding;
         $student->verification_status = 'verified';
         $student->save();
 
+        $this->record('passed', $student, $request, [
+            'direction' => $direction,
+            'metrics' => [
+                'profile_similarity' => $profileSimilarity !== null ? round($profileSimilarity, 4) : null,
+                'checks' => $liveness['checks'] ?? null,
+            ],
+        ]);
+
+        RateLimiter::clear($limiterKey);
+
         return redirect()->route('dashboard')->with('success', 'Biometric registration completed successfully!');
     }
 
-    /**
-     * Calculate Cosine Similarity between two 512-D vector arrays.
-     */
-    private function calculateCosineSimilarity(array $vecA, array $vecB): float
+    private function fail(string $message): RedirectResponse
     {
-        $dotProduct = 0.0;
-        $normA = 0.0;
-        $normB = 0.0;
+        // The React page reads errors.face
+        return back()->withErrors(['face' => $message]);
+    }
 
-        for ($i = 0; $i < count($vecA); $i++) {
-            $dotProduct += $vecA[$i] * $vecB[$i];
-            $normA += $vecA[$i] ** 2;
-            $normB += $vecB[$i] ** 2;
+    private function toBase64(UploadedFile $file): string
+    {
+        return base64_encode($file->get());
+    }
+
+    /**
+     * Audit trail. A logging failure must never block or break a verification, so it is wrapped in rescue().
+     *
+     * @param  array{direction?: string, reason_code?: string, metrics?: array}  $extra
+     */
+    private function record(string $outcome, Student $student, Request $request, array $extra = [], bool $storeFrames = false): void
+    {
+        rescue(function () use ($outcome, $student, $request, $extra, $storeFrames) {
+            FaceVerificationAttempt::create([
+                'student_id' => $student->student_id,
+                'user_id' => $request->user()?->getKey(),
+                'outcome' => $outcome,
+                'reason_code' => $extra['reason_code'] ?? null,
+                'direction' => $extra['direction'] ?? null,
+                'ip_address' => $request->ip(),
+                'user_agent' => Str::limit((string) $request->userAgent(), 255, ''),
+                'metrics' => $extra['metrics'] ?? null,
+                'frame_paths' => $storeFrames ? $this->storeFrames($request, $student) : null,
+            ]);
+        });
+    }
+
+    /** Only stores anything when FACE_STORE_FAILED_FRAMES=true. Returns the stored paths. */
+    private function storeFrames(Request $request, Student $student): ?array
+    {
+        if (! config('face_verification.store_failed_frames')) {
+            return null;
         }
 
-        if ($normA == 0 || $normB == 0) {
-            return 0.0;
+        $directory = "face-attempts/{$student->student_id}/" . Str::uuid();
+        $paths = [];
+
+        foreach (['live_camera_frame' => 'frontal', 'turn_mid_frame' => 'mid', 'turn_peak_frame' => 'peak'] as $field => $label) {
+            if ($file = $request->file($field)) {
+                $paths[$label] = $file->storeAs($directory, "{$label}.jpg", 'private');
+            }
         }
 
-        return $dotProduct / (sqrt($normA) * sqrt($normB));
+        return $paths ?: null;
     }
 }

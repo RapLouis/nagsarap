@@ -5,6 +5,7 @@ use App\Http\Controllers\Admin\StudentManagementController;
 use App\Http\Controllers\AttendanceController;
 use App\Http\Controllers\EventController;
 use App\Http\Controllers\FaceVerificationController;
+use App\Http\Controllers\Admin\AnalyticsController;
 use App\Models\Event;
 use App\Models\Student;
 use Illuminate\Support\Facades\Auth;
@@ -131,6 +132,23 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 '/events/{event}/status', 
                 [EventController::class, 'updateStatus']
             )->name('events.update-status');
+            
+            // -----------------------------------------------------------------
+            // ADMIN ANALYTICS & REPORTS
+            // -----------------------------------------------------------------
+
+            // Global System Analytics page
+            Route::get(
+                '/analytics',
+                [AnalyticsController::class, 'index']
+            )->name('analytics.index');
+
+            // Per-Event Drill-down analytics view
+            Route::get(
+                '/analytics/events/{event}',
+                [AnalyticsController::class, 'showEvent']
+            )->name('analytics.event-show');
+
         });
 
 
@@ -138,35 +156,19 @@ Route::middleware(['auth', 'verified'])->group(function () {
     // BIOMETRIC FACE VERIFICATION
     // =========================================================================
 
-    Route::get('/register/verify-face', function () {
-        /** @var \App\Models\User $user */
-        $user = Auth::user();
-
-        $student = $user->load('student')->student;
-
-        // Skip verification if already verified
-        if ($student && $student->verification_status === 'verified') {
-            return redirect()->route('dashboard');
-        }
-
-        if ($student) {
-            $student->face_photo_url = $student->face_photo_path
-                ? route('student.face-photo', [
-                    'student' => $student->student_id
-                ])
-                : null;
-        }
-
-        return Inertia::render('auth/verify-face', [
-            'student' => $student,
-        ]);
-    })->name('register.verify-face');
+    // Show the page (FaceVerificationController::show issues the liveness challenge)
+    Route::get(
+        '/register/verify-face',
+        [FaceVerificationController::class, 'show']
+    )->middleware('throttle:20,1')
+     ->name('register.verify-face');
 
     // Submit face verification
     Route::post(
         '/register/verify-face',
         [FaceVerificationController::class, 'verifyFace']
-    )->name('register.verify-face.submit');
+    )->middleware('throttle:10,1')
+     ->name('register.verify-face.submit');
 
 
     // =========================================================================

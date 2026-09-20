@@ -13,12 +13,14 @@ class Event extends Model
 {
     use HasFactory;
 
+    // Explicitly define custom primary key to match migration
     protected $primaryKey = 'event_id';
 
     protected $fillable = [
         'title',
         'description',
         'event_date',
+        'event_end_date', // <--- Added for "from-to" date range
         'location',
         'is_geofenced',
         'geofence_type',
@@ -35,13 +37,15 @@ class Event extends Model
     ];
 
     protected $casts = [
+        'event_id'         => 'integer',
         'event_date'       => 'date:Y-m-d',
+        'event_end_date'   => 'date:Y-m-d', // <--- Added cast
         'is_active'        => 'boolean',
         'is_geofenced'     => 'boolean',
         'latitude'         => 'float',
         'longitude'        => 'float',
         'radius_meters'    => 'integer',
-        'geofence_polygon' => 'array', // Cast JSON polygon coordinates to PHP array
+        'geofence_polygon' => 'array',
     ];
 
     // =========================================================================
@@ -55,10 +59,10 @@ class Event extends Model
     public function isWithinGeofence(float $userLat, float $userLng): bool
     {
         if (!$this->is_geofenced) {
-            return true; // Access granted automatically if geofencing is off
+            return true; // Access granted automatically if geofencing is disabled
         }
 
-        // Polygon Check (Hexagon / Custom Boundary)
+        // Polygon Check (Custom Area Boundary)
         if ($this->geofence_type === 'polygon' && !empty($this->geofence_polygon)) {
             return $this->isPointInPolygon($userLat, $userLng, $this->geofence_polygon);
         }
@@ -104,7 +108,7 @@ class Event extends Model
     {
         $verticesCount = count($polygon);
         if ($verticesCount < 3) {
-            return false; // Valid polygon requires at least 3 vertices
+            return false;
         }
 
         $inside = false;
@@ -115,8 +119,13 @@ class Event extends Model
             $xj = $polygon[$j]['lng'] ?? $polygon[$j][1];
             $yj = $polygon[$j]['lat'] ?? $polygon[$j][0];
 
+            $denom = ($yj - $yi);
+            if ($denom == 0) {
+                continue; // Skip horizontal collinear segments to prevent division by zero
+            }
+
             $intersect = (($yi > $userLat) !== ($yj > $userLat)) &&
-                ($userLng < ($xj - $xi) * ($userLat - $yi) / ($yj - $yi) + $xi);
+                ($userLng < ($xj - $xi) * ($userLat - $yi) / $denom + $xi);
 
             if ($intersect) {
                 $inside = !$inside;
@@ -141,19 +150,20 @@ class Event extends Model
 
     public function getWindowEndAttribute(): Carbon
     {
-        $dateStr = $this->event_date instanceof Carbon 
-            ? $this->event_date->format('Y-m-d') 
-            : $this->event_date;
+        // Use event_end_date if available, otherwise fall back to event_date
+        $endDate = $this->event_end_date 
+            ? ($this->event_end_date instanceof Carbon ? $this->event_end_date->format('Y-m-d') : $this->event_end_date)
+            : ($this->event_date instanceof Carbon ? $this->event_date->format('Y-m-d') : $this->event_date);
 
         if ($this->time_out_end) {
-            return Carbon::parse("{$dateStr} {$this->time_out_end}")->addHours(2);
+            return Carbon::parse("{$endDate} {$this->time_out_end}")->addHours(2);
         }
 
         if ($this->time_out_start) {
-            return Carbon::parse("{$dateStr} {$this->time_out_start}")->addHours(2);
+            return Carbon::parse("{$endDate} {$this->time_out_start}")->addHours(2);
         }
 
-        return Carbon::parse("{$dateStr} 23:59:59");
+        return Carbon::parse("{$endDate} 23:59:59");
     }
 
     // =========================================================================
@@ -162,27 +172,28 @@ class Event extends Model
 
     public function scopeOngoing(Builder $query): Builder
     {
-        $now = now();
-        $nowStr = $now->toDateTimeString();
-        $today = $now->toDateString();
+        $nowStr = now()->toDateTimeString();
+        $today = now()->toDateString();
 
         return $query->where('approval_status', 'approved')
-            ->where('event_date', $today) // Restrict directly to today's date for testing
+            // Check if today falls within event_date and event_end_date range
+            ->where('event_date', '<=', $today)
+            ->where(function ($q) use ($today) {
+                $q->whereNull('event_end_date')
+                  ->orWhere('event_end_date', '>=', $today);
+            })
             ->where(function ($q) use ($nowStr) {
-                // Window has started (including 2 hours before)
                 $q->whereRaw("DATE_SUB(CONCAT(event_date, ' ', time_in_start), INTERVAL 2 HOUR) <= ?", [$nowStr])
                   ->where(function ($sub) use ($nowStr) {
                       $sub->where(function ($out) use ($nowStr) {
-                          // If checkout exists, check against checkout + 2 hours
                           $out->whereNotNull('time_out_end')
-                              ->whereRaw("DATE_ADD(CONCAT(event_date, ' ', time_out_end), INTERVAL 2 HOUR) >= ?", [$nowStr])
+                              ->whereRaw("DATE_ADD(CONCAT(COALESCE(event_end_date, event_date), ' ', time_out_end), INTERVAL 2 HOUR) >= ?", [$nowStr])
                               ->orWhere(function ($outStart) use ($nowStr) {
                                   $outStart->whereNull('time_out_end')
                                            ->whereNotNull('time_out_start')
-                                           ->whereRaw("DATE_ADD(CONCAT(event_date, ' ', time_out_start), INTERVAL 2 HOUR) >= ?", [$nowStr]);
+                                           ->whereRaw("DATE_ADD(CONCAT(COALESCE(event_end_date, event_date), ' ', time_out_start), INTERVAL 2 HOUR) >= ?", [$nowStr]);
                               });
                       })->orWhere(function ($noOut) {
-                          // If no checkout is configured, it stays ongoing until end of day
                           $noOut->whereNull('time_out_end')
                                 ->whereNull('time_out_start');
                       });
@@ -192,8 +203,7 @@ class Event extends Model
 
     public function scopeUpcoming(Builder $query): Builder
     {
-        $now = now();
-        $nowStr = $now->toDateTimeString();
+        $nowStr = now()->toDateTimeString();
 
         return $query->where('approval_status', 'approved')
             ->where(function ($q) use ($nowStr) {
@@ -203,24 +213,11 @@ class Event extends Model
 
     public function scopeCompleted(Builder $query): Builder
     {
-        $now = now();
+        $nowStr = now()->toDateTimeString();
 
         return $query->where('approval_status', 'approved')
-            ->where(function ($q) use ($now) {
-                $q->whereDate('event_date', '<', $now->toDateString())
-                  ->orWhere(function ($sub) use ($now) {
-                      $sub->whereDate('event_date', $now->toDateString())
-                          ->where(function ($inner) use ($now) {
-                              $inner->where(function ($outEnd) use ($now) {
-                                  $outEnd->whereNotNull('time_out_end')
-                                         ->whereRaw("TIME(DATE_ADD(CONCAT(event_date, ' ', time_out_end), INTERVAL 2 HOUR)) < ?", [$now->toTimeString()]);
-                              })->orWhere(function ($outStart) use ($now) {
-                                  $outStart->whereNull('time_out_end')
-                                           ->whereNotNull('time_out_start')
-                                           ->whereRaw("TIME(DATE_ADD(CONCAT(event_date, ' ', time_out_start), INTERVAL 2 HOUR)) < ?", [$now->toTimeString()]);
-                              });
-                          });
-                  });
+            ->where(function ($q) use ($nowStr) {
+                $q->whereRaw("DATE_ADD(CONCAT(COALESCE(event_end_date, event_date), ' ', COALESCE(time_out_end, time_out_start, '23:59:59')), INTERVAL 2 HOUR) < ?", [$nowStr]);
             });
     }
 

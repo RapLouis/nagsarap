@@ -41,7 +41,7 @@ class CreateNewUser implements CreatesNewUsers
             'ext'            => ['nullable', 'string', 'max:10'],
             'email'          => ['required', 'string', 'email', 'max:255', Rule::unique(User::class, 'email')],
             'password'       => $this->passwordRules(),
-            'profile_photo'  => ['required', 'image', 'mimes:jpeg,png,jpg', 'max:5048'],
+            'profile_photo'  => ['required', 'image', 'mimes:jpeg,png,jpg', 'max:10240'],
             'form_5'         => [
                 'required', 
                 'file', 
@@ -50,7 +50,7 @@ class CreateNewUser implements CreatesNewUsers
             ],
         ])->validate();
 
-        // 2. Save Files to Disk
+        // 2. Save Files to Secure Private Disk
         $photoPath = $input['profile_photo']->store('profile_photos', 'private');
         $pdfPath = $input['form_5']->store('form_5_documents', 'private');
         $pdfAbsolutePath = Storage::disk('private')->path($pdfPath);
@@ -67,7 +67,8 @@ class CreateNewUser implements CreatesNewUsers
             if ($response->successful()) {
                 $photoEmbedding = $response->json()['embedding'];
             } else {
-                Storage::disk('public')->delete($photoPath);
+                // Fixed: Clean up from private disk instead of public
+                Storage::disk('private')->delete($photoPath);
                 Storage::disk('private')->delete($pdfPath);
 
                 $detail = $response->json()['detail'] ?? 'No clear face detected in profile photo.';
@@ -76,9 +77,12 @@ class CreateNewUser implements CreatesNewUsers
                 ]);
             }
         } catch (\Exception $e) {
-            if ($e instanceof ValidationException) throw $e;
+            if ($e instanceof ValidationException) {
+                throw $e;
+            }
 
-            Storage::disk('public')->delete($photoPath);
+            // Fixed: Clean up from private disk instead of public
+            Storage::disk('private')->delete($photoPath);
             Storage::disk('private')->delete($pdfPath);
 
             throw ValidationException::withMessages([
@@ -105,7 +109,7 @@ class CreateNewUser implements CreatesNewUsers
             Storage::disk('private')->delete($photoPath);
             Storage::disk('private')->delete($pdfPath);
 
-            $errorMessage = 'Form 5 verification failed. The name on the document does not match your inpuuted name. Kindly ensure that the name on your Form 5 matches the name you provided during registration.';
+            $errorMessage = 'Form 5 verification failed. The name on the document does not match your inputted name. Kindly ensure that the name on your Form 5 matches the name you provided during registration.';
             if (!$verificationResult['is_latest_term']) {
                 $errorMessage = 'The uploaded Form 5 is not valid for the current academic year/semester.';
             }
@@ -115,7 +119,7 @@ class CreateNewUser implements CreatesNewUsers
             ]);
         }
 
-        // 5. Create Student Record with Reference Vector Pre-Stored
+        // 5. Create Student Record (Model Mutators automatically clean and title-case names)
         $extractedData = $verificationResult['data'];
 
         $student = Student::create([
@@ -127,7 +131,7 @@ class CreateNewUser implements CreatesNewUsers
             'email'               => $input['email'],
             'face_photo_path'     => $photoPath,
             'form_5_path'         => $pdfPath,
-            'face_embedding'      => $photoEmbedding, // Reference 512-D vector stored
+            'face_embedding'      => $photoEmbedding,
             'degree'              => $extractedData['degree'] ?? null,
             'year_section'        => $extractedData['year_section'] ?? null,
             'semester'            => $extractedData['semester'] ?? null,
@@ -135,7 +139,7 @@ class CreateNewUser implements CreatesNewUsers
             'verification_status' => 'pending_face_verification',
         ]);
 
-        // 6. Create User Account
+        // 6. Create User Account Linked to Student Profile
         return User::create([
             'name'       => "{$student->firstname} {$student->surname}",
             'email'      => $input['email'],

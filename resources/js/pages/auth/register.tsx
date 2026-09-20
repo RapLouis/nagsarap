@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Spinner } from '@/components/ui/spinner';
 import { validateFaceImage } from '@/lib/faceValidation';
+import { compressImage } from '@/lib/utils';
 import {
     Cpu,
     Mail,
@@ -70,7 +71,7 @@ export default function Register({}: Props) {
     };
 
     // =========================================================================
-    // CLIENT-SIDE FACE VALIDATION HANDLER
+    // CLIENT-SIDE FACE VALIDATION & COMPRESSION HANDLER
     // =========================================================================
     const handleProfilePhotoChange = async (e: ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -79,22 +80,34 @@ export default function Register({}: Props) {
         setIsValidatingPhoto(true);
         clearErrors('profile_photo');
 
-        // 1. Run MediaPipe face quality checks (Blur, Face count, ratio)
-        const result = await validateFaceImage(file);
+        try {
+            // 1. Run MediaPipe face quality checks (Blur, Face count, ratio)
+            const result = await validateFaceImage(file);
 
-        if (!result.isValid) {
-            setError('profile_photo', result.message || 'Invalid face photo.');
+            if (!result.isValid) {
+                setError('profile_photo', result.message || 'Invalid face photo.');
+                setData('profile_photo', null);
+                setPhotoName('');
+                e.target.value = ''; // Reset file input element
+                setIsValidatingPhoto(false);
+                return;
+            }
+
+            // 2. Compress & resize image to prevent memory spikes & optimize upload
+            const compressedFile = await compressImage(file, 1000, 1000, 0.8);
+
+            // 3. Set compressed file in state if checks pass
+            setData('profile_photo', compressedFile);
+            setPhotoName(file.name);
+        } catch (error) {
+            console.error('Face validation or compression error:', error);
+            setError('profile_photo', 'Failed to process image. Please try another photo.');
             setData('profile_photo', null);
             setPhotoName('');
-            e.target.value = ''; // Reset file input element
+            e.target.value = '';
+        } finally {
             setIsValidatingPhoto(false);
-            return;
         }
-
-        // 2. Set file in state if face checks pass
-        setData('profile_photo', file);
-        setPhotoName(file.name);
-        setIsValidatingPhoto(false);
     };
 
     const handleSubmit = (e: FormEvent) => {

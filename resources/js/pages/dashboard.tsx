@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Head, Link, router } from '@inertiajs/react';
+import type { FaceLandmarker } from '@mediapipe/tasks-vision';
 import {
     Camera,
     CheckCircle2,
@@ -14,6 +15,10 @@ import {
     TrendingUp,
     ListChecks,
     CalendarClock,
+    Eye,
+    ArrowLeft,
+    ArrowRight,
+    Loader2,
 } from 'lucide-react';
 
 type Event = {
@@ -51,12 +56,144 @@ type DashboardProps = {
     totalExpectedEvents?: number;
 };
 
+type Direction = 'left' | 'right';
+type LivenessStep = 'DETECT' | 'LOOK_CENTER' | 'TURN' | 'VERIFYING' | 'PASSED';
+type Landmark = { x: number; y: number };
+
 const GOLD = '#C9973E';
 const GOLD_DARK = '#B0812E';
 
+// MediaPipe Configuration Constants
+const MEDIAPIPE_VERSION = '0.10.21';
+const WASM_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MEDIAPIPE_VERSION}/wasm`;
+const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+
+const VIDEO_CONSTRAINTS: MediaStreamConstraints = {
+    video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+    audio: false,
+};
+
+const PROCESS_EVERY_N_FRAMES = 3;
+const FRONTAL_YAW_MAX = 0.12;
+const FRONTAL_HOLD_FRAMES = 8;
+const MID_TURN_YAW = 0.15;
+const TURN_YAW_MIN = 0.25;
+const TURN_HOLD_FRAMES = 3;
+const WRONG_WAY_YAW = 0.15;
+const CHALLENGE_TIMEOUT_MS = 20_000;
+
+const MIN_FACE_WIDTH = 0.22;
+const MAX_FACE_WIDTH = 0.6;
+const MAX_CENTER_OFFSET_X = 0.12;
+const MAX_CENTER_OFFSET_Y = 0.15;
+
+const DIRECTION_SIGN: Record<Direction, 1 | -1> = { left: 1, right: -1 };
+const NOSE_TIP = 1;
+const LEFT_CHEEK = 234;
+const RIGHT_CHEEK = 454;
+
+function calculateYaw(landmarks: Landmark[]): number {
+    const nose = landmarks[NOSE_TIP];
+    const left = landmarks[LEFT_CHEEK];
+    const right = landmarks[RIGHT_CHEEK];
+    if (!nose || !left || !right) return 0;
+
+    const distanceLeft = Math.abs(nose.x - left.x);
+    const distanceRight = Math.abs(nose.x - right.x);
+    const total = distanceLeft + distanceRight;
+
+    return total === 0 ? 0 : (distanceLeft - distanceRight) / total;
+}
+
+function getFaceBounds(landmarks: Landmark[]) {
+    let minX = 1;
+    let maxX = 0;
+    let minY = 1;
+    let maxY = 0;
+
+    for (const point of landmarks) {
+        if (point.x < minX) minX = point.x;
+        if (point.x > maxX) maxX = point.x;
+        if (point.y < minY) minY = point.y;
+        if (point.y > maxY) maxY = point.y;
+    }
+
+    return {
+        width: maxX - minX,
+        centerX: (minX + maxX) / 2,
+        centerY: (minY + maxY) / 2,
+    };
+}
+
+function getPlacementIssue(landmarks: Landmark[]): string | null {
+    const { width, centerX, centerY } = getFaceBounds(landmarks);
+
+    if (width < MIN_FACE_WIDTH) return 'Move closer to the camera.';
+    if (width > MAX_FACE_WIDTH) return 'Move a little further from the camera.';
+    if (
+        Math.abs(centerX - 0.5) > MAX_CENTER_OFFSET_X ||
+        Math.abs(centerY - 0.5) > MAX_CENTER_OFFSET_Y
+    ) {
+        return 'Center your face in the circle.';
+    }
+    return null;
+}
+
+function captureFrame(video: HTMLVideoElement): Promise<Blob | null> {
+    const canvas = document.createElement('canvas');
+    const width = Math.min(video.videoWidth || 640, 640);
+    const height = Math.min(video.videoHeight || 480, 480);
+    
+    canvas.width = width;
+    canvas.height = height;
+
+    const context = canvas.getContext('2d', { alpha: false });
+    if (!context) return Promise.resolve(null);
+
+    context.drawImage(video, 0, 0, width, height);
+
+    return new Promise((resolve) => {
+        canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.70);
+    });
+}
+
+function describeCameraError(error: unknown): string {
+    const name = (error as { name?: string })?.name;
+    if (name === 'NotAllowedError' || name === 'SecurityError') {
+        return 'Camera access was blocked. Allow camera permission in browser settings.';
+    }
+    if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+        return 'No front camera found on this device.';
+    }
+    if (name === 'NotReadableError') {
+        return 'Camera is in use by another application.';
+    }
+    return 'Unable to access the camera.';
+}
+
+async function createLandmarker(): Promise<FaceLandmarker> {
+    const { FaceLandmarker, FilesetResolver } = await import('@mediapipe/tasks-vision');
+    const vision = await FilesetResolver.forVisionTasks(WASM_URL);
+
+    const create = (delegate: 'GPU' | 'CPU') =>
+        FaceLandmarker.createFromOptions(vision, {
+            baseOptions: { modelAssetPath: MODEL_URL, delegate },
+            runningMode: 'VIDEO',
+            numFaces: 2,
+            minFaceDetectionConfidence: 0.5,
+            minFacePresenceConfidence: 0.5,
+            minTrackingConfidence: 0.5,
+        });
+
+    try {
+        return await create('GPU');
+    } catch (error) {
+        return await create('CPU');
+    }
+}
+
 function formatEventTime(startTime?: string | null, endTime?: string | null): string {
     if (!startTime) return '';
-
     const parseTime = (timeStr: string) => {
         const [hours, minutes] = timeStr.split(':').map(Number);
         const date = new Date();
@@ -66,9 +203,7 @@ function formatEventTime(startTime?: string | null, endTime?: string | null): st
 
     const formattedStart = parseTime(startTime);
     if (!endTime) return formattedStart;
-
-    const formattedEnd = parseTime(endTime);
-    return `${formattedStart} - ${formattedEnd}`;
+    return `${formattedStart} - ${parseTime(endTime)}`;
 }
 
 export default function Dashboard({
@@ -310,183 +445,317 @@ function ConfidenceBadge({ score }: { score: number }) {
 
 function CheckInModal({ event, onClose }: { event: Event; onClose: () => void }) {
     const videoRef = useRef<HTMLVideoElement | null>(null);
-    const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    const landmarkerRef = useRef<FaceLandmarker | null>(null);
+    const requestRef = useRef<number | null>(null);
+    const mountedRef = useRef(true);
 
+    const stepRef = useRef<LivenessStep>('DETECT');
+    const frameCountRef = useRef(0);
+    const lastVideoTimeRef = useRef(-1);
+    const holdCountRef = useRef(0);
+    const turnHoldRef = useRef(0);
+    const challengeStartRef = useRef<number | null>(null);
+    const hasSubmittedRef = useRef(false);
+
+    const frontalFrameRef = useRef<Promise<Blob | null> | null>(null);
+    const midFrameRef = useRef<Promise<Blob | null> | null>(null);
+    const peakFrameRef = useRef<Promise<Blob | null> | null>(null);
+
+    const [step, setStep] = useState<LivenessStep>('DETECT');
     const [streamStarted, setStreamStarted] = useState(false);
+    const [modelReady, setModelReady] = useState(false);
     const [cameraError, setCameraError] = useState<string | null>(null);
-    const [isScanning, setIsScanning] = useState(false);
-    const [feedbackMessage, setFeedbackMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+    const [modalError, setModalError] = useState<string | null>(null);
+    const [hint, setHint] = useState<string | null>(null);
+    const [holdProgress, setHoldProgress] = useState(0);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    
+    const [direction] = useState<Direction>(() => {
+        const bytes = new Uint8Array(1);
+        crypto.getRandomValues(bytes);
+        return bytes[0] % 2 === 0 ? 'left' : 'right';
+    });
+
+    const goToStep = (next: LivenessStep) => {
+        if (stepRef.current === next) return;
+        stepRef.current = next;
+        setStep(next);
+    };
+
+    const resetChallenge = () => {
+        holdCountRef.current = 0;
+        turnHoldRef.current = 0;
+        challengeStartRef.current = null;
+        frontalFrameRef.current = null;
+        midFrameRef.current = null;
+        peakFrameRef.current = null;
+        setHoldProgress(0);
+        goToStep('DETECT');
+    };
 
     useEffect(() => {
-        let isMounted = true;
-        let activeStream: MediaStream | null = null;
+        mountedRef.current = true;
 
-        async function startCamera() {
+        async function initialize() {
+            const landmarkerPromise = createLandmarker();
+            landmarkerPromise.catch(() => {});
+
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { width: 640, height: 480, facingMode: 'user' },
-                    audio: false,
-                });
-                activeStream = stream;
-                if (videoRef.current && isMounted) {
-                    videoRef.current.srcObject = stream;
-                    setStreamStarted(true);
+                const stream = await navigator.mediaDevices.getUserMedia(VIDEO_CONSTRAINTS);
+                if (!mountedRef.current || !videoRef.current) {
+                    stream.getTracks().forEach((t) => t.stop());
+                    return;
                 }
-            } catch (err) {
-                if (isMounted) {
-                    setCameraError('Camera access was denied or is unavailable.');
+                videoRef.current.srcObject = stream;
+                await videoRef.current.play().catch(() => {});
+                setStreamStarted(true);
+            } catch (error) {
+                if (mountedRef.current) setCameraError(describeCameraError(error));
+                return;
+            }
+
+            try {
+                const landmarker = await landmarkerPromise;
+                if (!mountedRef.current) {
+                    landmarker.close();
+                    return;
+                }
+                landmarkerRef.current = landmarker;
+                setModelReady(true);
+            } catch (error) {
+                if (mountedRef.current) {
+                    setCameraError('Unable to load face detection model.');
                 }
             }
         }
 
-        startCamera();
+        initialize();
 
         return () => {
-            isMounted = false;
-            activeStream?.getTracks().forEach((track) => track.stop());
+            mountedRef.current = false;
+            if (requestRef.current !== null) cancelAnimationFrame(requestRef.current);
+            if (videoRef.current?.srcObject) {
+                (videoRef.current.srcObject as MediaStream).getTracks().forEach((t) => t.stop());
+            }
+            landmarkerRef.current?.close();
+            landmarkerRef.current = null;
         };
     }, []);
 
-    const handleScanAttendance = async () => {
-        if (!videoRef.current) return;
+    useEffect(() => {
+        if (!streamStarted || !modelReady || modalError !== null) return;
 
-        setIsScanning(true);
-        setFeedbackMessage(null);
+        let stopped = false;
 
-        const video = videoRef.current;
-        const canvas = canvasRef.current || document.createElement('canvas');
-        canvas.width = video.videoWidth || 640;
-        canvas.height = video.videoHeight || 480;
+        const processFrame = () => {
+            const video = videoRef.current;
+            const landmarker = landmarkerRef.current;
+            if (!video || !landmarker || video.readyState < 2) return;
 
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
+            if (video.currentTime === lastVideoTimeRef.current) return;
+            lastVideoTimeRef.current = video.currentTime;
 
-        ctx.save();
-        ctx.translate(canvas.width, 0);
-        ctx.scale(-1, 1);
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        ctx.restore();
-
-        canvas.toBlob((blob) => {
-            if (!blob) {
-                setFeedbackMessage({ type: 'error', text: 'Failed to capture frame from webcam.' });
-                setIsScanning(false);
+            let faces: Landmark[][];
+            try {
+                faces = landmarker.detectForVideo(video, performance.now()).faceLandmarks ?? [];
+            } catch (error) {
                 return;
             }
 
+            if (faces.length === 0) {
+                setHint(null);
+                resetChallenge();
+                return;
+            }
+
+            if (faces.length > 1) {
+                setHint('Only one face should be visible.');
+                resetChallenge();
+                return;
+            }
+
+            const landmarks = faces[0];
+            const yaw = calculateYaw(landmarks);
+            const turned = yaw * DIRECTION_SIGN[direction];
+
+            switch (stepRef.current) {
+                case 'DETECT':
+                    goToStep('LOOK_CENTER');
+                    break;
+
+                case 'LOOK_CENTER': {
+                    const placementIssue = getPlacementIssue(landmarks);
+                    if (placementIssue) {
+                        holdCountRef.current = 0;
+                        setHoldProgress(0);
+                        setHint(placementIssue);
+                        break;
+                    }
+
+                    if (Math.abs(yaw) > FRONTAL_YAW_MAX) {
+                        holdCountRef.current = 0;
+                        setHoldProgress(0);
+                        setHint('Look straight at the camera.');
+                        break;
+                    }
+
+                    setHint(null);
+                    holdCountRef.current += 1;
+                    setHoldProgress(Math.min(holdCountRef.current / FRONTAL_HOLD_FRAMES, 1));
+
+                    if (holdCountRef.current >= FRONTAL_HOLD_FRAMES) {
+                        frontalFrameRef.current = captureFrame(video);
+                        challengeStartRef.current = performance.now();
+                        turnHoldRef.current = 0;
+                        goToStep('TURN');
+                    }
+                    break;
+                }
+
+                case 'TURN': {
+                    const startedAt = challengeStartRef.current ?? performance.now();
+                    if (performance.now() - startedAt > CHALLENGE_TIMEOUT_MS) {
+                        resetChallenge();
+                        setHint('Time ran out. Let’s try again.');
+                        break;
+                    }
+
+                    if (turned <= -WRONG_WAY_YAW) {
+                        turnHoldRef.current = 0;
+                        setHint(`Turn to your ${direction}, not the other way.`);
+                        break;
+                    }
+
+                    setHint(null);
+
+                    if (!midFrameRef.current && turned >= MID_TURN_YAW) {
+                        midFrameRef.current = captureFrame(video);
+                    }
+
+                    if (turned >= TURN_YAW_MIN) {
+                        turnHoldRef.current += 1;
+                        if (turnHoldRef.current >= TURN_HOLD_FRAMES) {
+                            peakFrameRef.current = captureFrame(video);
+                            void submitAttendance(frontalFrameRef.current, midFrameRef.current, peakFrameRef.current);
+                            return;
+                        }
+                    } else {
+                        turnHoldRef.current = 0;
+                    }
+                    break;
+                }
+            }
+        };
+
+        const tick = () => {
+            if (stopped) return;
+            if (stepRef.current === 'VERIFYING' || stepRef.current === 'PASSED') return;
+
+            frameCountRef.current += 1;
+            if (frameCountRef.current % PROCESS_EVERY_N_FRAMES === 0) processFrame();
+
+            if ((stepRef.current as string) === 'VERIFYING') return;
+            requestRef.current = requestAnimationFrame(tick);
+        };
+
+        requestRef.current = requestAnimationFrame(tick);
+
+        return () => {
+            stopped = true;
+            if (requestRef.current !== null) cancelAnimationFrame(requestRef.current);
+        };
+    }, [streamStarted, modelReady, modalError, direction]);
+
+    const submitAttendance = async (
+        frontalPromise: Promise<Blob | null> | null,
+        midPromise: Promise<Blob | null> | null,
+        peakPromise: Promise<Blob | null> | null
+    ) => {
+        if (hasSubmittedRef.current) return;
+        hasSubmittedRef.current = true;
+        goToStep('VERIFYING');
+        setHint(null);
+
+        try {
+            const [frontal, mid, peak] = await Promise.all([frontalPromise, midPromise, peakPromise]);
+            if (!frontal || !peak) throw new Error('Failed to capture camera frames.');
+
+            setIsSubmitting(true);
             const formData = new FormData();
             formData.append('event_id', String(event.event_id));
-            formData.append('live_camera_frame', blob, 'attendance-scan.jpg');
+            formData.append('live_camera_frame', frontal, 'frontal.jpg');
+            if (mid) formData.append('turn_mid_frame', mid, 'turn-mid.jpg');
+            formData.append('turn_peak_frame', peak, 'turn-peak.jpg');
+            formData.append('direction', direction);
 
             router.post('/attendance/check-in', formData, {
                 forceFormData: true,
                 onSuccess: () => {
-                    setFeedbackMessage({ type: 'success', text: 'Attendance verified and recorded!' });
-                    setIsScanning(false);
+                    setIsSubmitting(false);
+                    goToStep('PASSED');
+                    setTimeout(() => onClose(), 1200);
                 },
                 onError: (errors: any) => {
-                    setFeedbackMessage({
-                        type: 'error',
-                        text: errors.attendance || errors.live_camera_frame || 'Facial scan verification failed.',
-                    });
-                    setIsScanning(false);
+                    setIsSubmitting(false);
+                    setModalError(errors.attendance || errors.live_camera_frame || 'Verification failed.');
                 },
             });
-        }, 'image/jpeg', 0.95);
+        } catch (err) {
+            setIsSubmitting(false);
+            setModalError('Failed to process frames.');
+        }
     };
 
+    const instruction = (() => {
+        switch (step) {
+            case 'DETECT':
+            case 'LOOK_CENTER':
+                return { text: 'Look straight and hold still', icon: Eye, spin: false };
+            case 'TURN':
+                return { text: `Turn your head to your ${direction}`, icon: direction === 'left' ? ArrowLeft : ArrowRight, spin: false };
+            case 'VERIFYING':
+                return { text: 'Verifying attendance...', icon: RefreshCw, spin: true };
+            case 'PASSED':
+                return { text: 'Checked in successfully!', icon: CheckCircle2, spin: false };
+            default:
+                return { text: 'Loading camera...', icon: Loader2, spin: true };
+        }
+    })();
+    const ActiveIcon = instruction.icon;
+
     return (
-        <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
-            onClick={(e) => {
-                if (e.target === e.currentTarget) onClose();
-            }}
-        >
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
             <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#090d16] text-gray-900 dark:text-white shadow-2xl overflow-hidden border border-gray-100 dark:border-slate-800">
                 <div className="relative px-6 pt-6 pb-4 border-b border-gray-100 dark:border-slate-800">
-                    <button
-                        onClick={onClose}
-                        className="absolute right-4 top-4 rounded-full p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors"
-                    >
+                    <button onClick={onClose} className="absolute right-4 top-4 rounded-full p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-slate-800">
                         <X className="h-5 w-5" />
                     </button>
-                    <h2 className="text-lg font-bold pr-8 text-gray-900 dark:text-white">
-                        {event.title}
-                    </h2>
-                    <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
-                        <span className="flex items-center gap-1">
-                            <Clock className="h-3.5 w-3.5" />
-                            {event.event_date} {formatEventTime(event.start_time, event.end_time)}
-                        </span>
-                        <span className="flex items-center gap-1">
-                            <MapPin className="h-3.5 w-3.5" />
-                            {event.location || 'Location TBA'}
-                        </span>
-                    </div>
+                    <h2 className="text-lg font-bold pr-8">{event.title}</h2>
+                    <p className="mt-1 text-xs text-gray-500">Active Liveness Attendance Check-in</p>
                 </div>
 
                 <div className="flex flex-col items-center px-6 py-6">
-                    <div className="relative h-44 w-44 overflow-hidden rounded-full border-4 border-[#1B1F5C] dark:border-amber-400 bg-black mb-1">
-                        <video
-                            ref={videoRef}
-                            autoPlay
-                            playsInline
-                            muted
-                            className="h-full w-full object-cover -scale-x-100"
-                        />
-                        {!streamStarted && !cameraError && (
-                            <div className="absolute inset-0 flex items-center justify-center bg-black/60">
-                                <RefreshCw className="h-6 w-6 animate-spin text-white/80" />
-                            </div>
-                        )}
-                        {cameraError && (
-                            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/80 px-4 text-center">
-                                <AlertCircle className="h-6 w-6 text-white/80" />
-                                <p className="text-[11px] text-white/80">{cameraError}</p>
+                    <div className="relative h-48 w-48 overflow-hidden rounded-full border-4 border-[#1B1F5C] dark:border-amber-400 bg-black mb-3">
+                        <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-cover scale-x-[-1]" />
+                        <div className="pointer-events-none absolute inset-2 rounded-full border-2 border-dashed border-[#F5A623] animate-pulse" />
+                        
+                        {step === 'TURN' && (
+                            <div className={`absolute top-1/2 -translate-y-1/2 rounded-full bg-black/60 p-2 text-white ${direction === 'left' ? 'left-2' : 'right-2'}`}>
+                                <ActiveIcon className="h-6 w-6 animate-pulse" />
                             </div>
                         )}
                     </div>
-                    <p className="mb-4 text-[11px] text-gray-400 dark:text-gray-500">Center your face in the frame</p>
 
-                    {feedbackMessage && (
-                        <div
-                            className={`w-full mb-4 flex items-center gap-2 rounded-lg p-3 text-xs font-medium ${
-                                feedbackMessage.type === 'success'
-                                    ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/40'
-                                    : 'bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800/40'
-                            }`}
-                        >
-                            {feedbackMessage.type === 'success' ? (
-                                <CheckCircle2 className="h-4 w-4 shrink-0" />
-                            ) : (
-                                <AlertCircle className="h-4 w-4 shrink-0" />
-                            )}
-                            <span>{feedbackMessage.text}</span>
-                        </div>
-                    )}
+                    <div className="flex items-center gap-2 rounded-lg bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-xs font-semibold text-amber-800 dark:text-amber-400 border border-amber-200 dark:border-amber-800/40 mb-2">
+                        <ActiveIcon className={`h-4 w-4 shrink-0 ${instruction.spin ? 'animate-spin' : ''}`} />
+                        <span>{instruction.text}</span>
+                    </div>
 
-                    <button
-                        onClick={handleScanAttendance}
-                        disabled={isScanning || !streamStarted}
-                        className="w-full flex items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-semibold text-white transition-all disabled:opacity-50"
-                        style={{ backgroundColor: isScanning ? GOLD_DARK : GOLD }}
-                    >
-                        {isScanning ? (
-                            <>
-                                <RefreshCw className="h-4 w-4 animate-spin" />
-                                <span>Verifying...</span>
-                            </>
-                        ) : (
-                            <>
-                                <Camera className="h-4 w-4" />
-                                <span>Scan to check in</span>
-                            </>
-                        )}
-                    </button>
+                    {hint && <p className="text-[11px] text-amber-600 dark:text-amber-400 text-center">{hint}</p>}
+                    {modalError && <p className="text-[11px] text-red-600 text-center mt-2">{modalError}</p>}
+                    {cameraError && <p className="text-[11px] text-red-600 text-center mt-2">{cameraError}</p>}
                 </div>
             </div>
-
-            <canvas ref={canvasRef} className="hidden" />
         </div>
     );
 }

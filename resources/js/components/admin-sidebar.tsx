@@ -32,7 +32,7 @@ export function AdminSidebar() {
         },
         {
             title: 'Analysis',
-            href: '/admin/analysis',
+            href: '/admin/analytics',
             icon: BarChart3,
         },
         {

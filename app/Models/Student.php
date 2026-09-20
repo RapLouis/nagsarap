@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
@@ -46,6 +47,36 @@ class Student extends Model
     protected $casts = [
         'face_embedding' => 'array', // Converts JSON 512-D vector to PHP array automatically
     ];
+
+    /**
+     * Automatically format and clean the firstname input.
+     */
+    protected function firstname(): Attribute
+    {
+        return Attribute::make(
+            set: fn (?string $value) => $value ? ucwords(strtolower(trim($value))) : null,
+        );
+    }
+
+    /**
+     * Automatically format and clean the surname input.
+     */
+    protected function surname(): Attribute
+    {
+        return Attribute::make(
+            set: fn (?string $value) => $value ? ucwords(strtolower(trim($value))) : null,
+        );
+    }
+
+    /**
+     * Automatically format and clean the middlename input.
+     */
+    protected function middlename(): Attribute
+    {
+        return Attribute::make(
+            set: fn (?string $value) => $value ? ucwords(strtolower(trim($value))) : null,
+        );
+    }
 
     /**
      * Get the user account associated with the student profile.

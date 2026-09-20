@@ -12,7 +12,11 @@ return new class extends Migration
             $table->id('event_id');
             $table->string('title', 150);
             $table->text('description')->nullable();
+            
+            // DATES CONFIGURATION
             $table->date('event_date');
+            $table->date('event_end_date')->nullable(); // <--- Added for "from-to" format
+            
             $table->string('location', 100)->nullable();
             
             // HYBRID GEOFENCING CONFIGURATION
@@ -37,7 +41,7 @@ return new class extends Migration
             
             // ADMINISTRATIVE APPROVAL STATUS
             $table->enum('approval_status', ['approved', 'pending', 'declined'])
-                  ->default('approved');
+                 ->default('approved');
 
             $table->boolean('is_active')->default(true);
             $table->timestamps();
