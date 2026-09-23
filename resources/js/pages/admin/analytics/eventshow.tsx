@@ -7,6 +7,7 @@ import {
     Clock,
     XCircle,
     AlertTriangle,
+    Calendar,
 } from 'lucide-react';
 import {
     ResponsiveContainer,
@@ -48,11 +49,32 @@ type RosterRow = {
     logged_at: string;
 };
 
+type SlotItem = {
+    time_in_start: string;
+    time_in_end?: string;
+    time_out_start?: string;
+    time_out_end?: string;
+};
+
+type ScheduleItem = {
+    date: string;
+    slots: SlotItem[];
+};
+
+type DailyBreakdownItem = {
+    date: string;
+    slots: SlotItem[];
+    attendees: number;
+    successful: number;
+};
+
 type EventModel = {
     id: number;
-    name: string;
+    title: string;
+    name?: string; // fallback
     description?: string;
     created_at?: string;
+    schedules?: ScheduleItem[];
     [key: string]: any;
 };
 
@@ -61,6 +83,7 @@ type Analytics = {
     successfulCheckins: number;
     eventSuccessRate: number;
     avgConfidence: number;
+    dailyBreakdown?: DailyBreakdownItem[];
     departmentBreakdown: DepartmentRow[];
     checkinTimeline: TimelineRow[];
     roster: RosterRow[];
@@ -149,11 +172,14 @@ function ConfidenceBar({ score }: { score: number }) {
 // ─── Main page ─────────────────────────────────────────────────────────────────
 
 export default function EventAnalyticsShow({ event, analytics }: Props) {
+    const eventTitle = event.title || event.name || 'Event Analytics';
+
     const {
         totalAttendees,
         successfulCheckins,
         eventSuccessRate,
         avgConfidence,
+        dailyBreakdown = [],
         departmentBreakdown,
         checkinTimeline,
         roster,
@@ -164,7 +190,7 @@ export default function EventAnalyticsShow({ event, analytics }: Props) {
 
     return (
         <div className="min-h-screen bg-[#F5F6FA] p-6 font-sans text-black">
-            <Head title={`Analytics — ${event.name}`} />
+            <Head title={`Analytics — ${eventTitle}`} />
 
             <div className="mx-auto max-w-7xl space-y-6">
 
@@ -183,7 +209,7 @@ export default function EventAnalyticsShow({ event, analytics }: Props) {
                             <span className="rounded-md bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
                                 Event attendance report
                             </span>
-                            <h1 className="mt-2 text-2xl font-bold text-[#1B1F5C]">{event.name}</h1>
+                            <h1 className="mt-2 text-2xl font-bold text-[#1B1F5C]">{eventTitle}</h1>
                             {event.description && (
                                 <p className="mt-1 max-w-xl text-sm text-gray-500">{event.description}</p>
                             )}
@@ -198,6 +224,42 @@ export default function EventAnalyticsShow({ event, analytics }: Props) {
                         )}
                     </div>
                 </div>
+
+                {/* ── Multi-Day & Time Slots Breakdown Section ── */}
+                {dailyBreakdown.length > 0 && (
+                    <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm">
+                        <div className="mb-4 flex items-center gap-2">
+                            <Calendar className="h-5 w-5 text-blue-600" />
+                            <h2 className="text-base font-bold text-gray-900">Schedule & Daily Breakdown</h2>
+                        </div>
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                            {dailyBreakdown.map((day, idx) => (
+                                <div key={idx} className="rounded-xl border border-gray-100 bg-gray-50 p-4">
+                                    <div className="flex justify-between items-center mb-2">
+                                        <span className="font-semibold text-blue-900 text-sm">
+                                            Day {idx + 1}: {day.date}
+                                        </span>
+                                        <span className="text-xs bg-white border px-2 py-0.5 rounded-full font-medium text-gray-600">
+                                            {day.attendees} Check-ins
+                                        </span>
+                                    </div>
+                                    
+                                    {/* Configured Slots for this Day */}
+                                    <div className="mt-2 space-y-1">
+                                        <p className="text-[11px] font-semibold tracking-wider text-gray-400 uppercase">Time Slots:</p>
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {day.slots?.map((slot, sIdx) => (
+                                                <span key={sIdx} className="rounded bg-white border border-gray-200 px-2 py-0.5 text-xs text-gray-700">
+                                                    {slot.time_in_start} - {slot.time_out_end || slot.time_out_start || 'End'}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
 
                 {/* ── KPI Cards ── */}
                 <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">

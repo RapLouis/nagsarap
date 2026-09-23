@@ -47,8 +47,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 : null;
         }
 
-        // Active events for student attendance
-        $activeEvents = Event::where('is_active', true)->get();
+        // Active events for student attendance (Filtered by today via ongoing scope)
+        $activeEvents = Event::ongoing()->with('days')->get();
 
         return Inertia::render('dashboard', [
             'student' => $student,
@@ -85,6 +85,24 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 '/students',
                 [StudentManagementController::class, 'index']
             )->name('students.index');
+
+            // Update student details
+            Route::patch(
+                '/students/{student}',
+                [StudentManagementController::class, 'update']
+            )->name('students.update');
+
+            // Verify student (manual override)
+            Route::patch(
+                '/students/{student}/verify',
+                [StudentManagementController::class, 'verify']
+            )->name('students.verify');
+
+            // Reject student (send back to pending face verification)
+            Route::patch(
+                '/students/{student}/reject',
+                [StudentManagementController::class, 'reject']
+            )->name('students.reject');
 
             // Delete student
             Route::delete(
@@ -156,14 +174,12 @@ Route::middleware(['auth', 'verified'])->group(function () {
     // BIOMETRIC FACE VERIFICATION
     // =========================================================================
 
-    // Show the page (FaceVerificationController::show issues the liveness challenge)
     Route::get(
         '/register/verify-face',
         [FaceVerificationController::class, 'show']
     )->middleware('throttle:20,1')
      ->name('register.verify-face');
 
-    // Submit face verification
     Route::post(
         '/register/verify-face',
         [FaceVerificationController::class, 'verifyFace']
@@ -210,6 +226,5 @@ Route::middleware(['auth', 'verified'])->group(function () {
         }
     )->name('student.face-photo');
 });
-
 
 require __DIR__.'/settings.php';

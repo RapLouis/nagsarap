@@ -13,36 +13,19 @@ return new class extends Migration
             $table->string('title', 150);
             $table->text('description')->nullable();
             
-            // DATES CONFIGURATION
-            $table->date('event_date');
-            $table->date('event_end_date')->nullable(); // <--- Added for "from-to" format
-            
+            // VENUE & LOCATION INFO
             $table->string('location', 100)->nullable();
             
             // HYBRID GEOFENCING CONFIGURATION
             $table->boolean('is_geofenced')->default(false);
             $table->enum('geofence_type', ['radius', 'polygon'])->default('radius');
-            
-            // RADIUS-BASED FIELDS
             $table->decimal('latitude', 10, 8)->nullable();
             $table->decimal('longitude', 11, 8)->nullable();
             $table->unsignedInteger('radius_meters')->default(100);
-
-            // POLYGON-BASED FIELD
             $table->json('geofence_polygon')->nullable();
-
-            // TIME-IN WINDOW
-            $table->time('time_in_start');
-            $table->time('time_in_end')->nullable();
-            
-            // TIME-OUT WINDOW
-            $table->time('time_out_start')->nullable();
-            $table->time('time_out_end')->nullable();
             
             // ADMINISTRATIVE APPROVAL STATUS
-            $table->enum('approval_status', ['approved', 'pending', 'declined'])
-                 ->default('approved');
-
+            $table->enum('approval_status', ['approved', 'pending', 'declined'])->default('approved');
             $table->boolean('is_active')->default(true);
             $table->timestamps();
         });

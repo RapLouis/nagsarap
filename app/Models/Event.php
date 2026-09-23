@@ -13,14 +13,11 @@ class Event extends Model
 {
     use HasFactory;
 
-    // Explicitly define custom primary key to match migration
     protected $primaryKey = 'event_id';
 
     protected $fillable = [
         'title',
         'description',
-        'event_date',
-        'event_end_date', // <--- Added for "from-to" date range
         'location',
         'is_geofenced',
         'geofence_type',
@@ -28,18 +25,12 @@ class Event extends Model
         'longitude',
         'radius_meters',
         'geofence_polygon',
-        'time_in_start',
-        'time_in_end',
-        'time_out_start',
-        'time_out_end',
         'is_active',
         'approval_status',
     ];
 
     protected $casts = [
         'event_id'         => 'integer',
-        'event_date'       => 'date:Y-m-d',
-        'event_end_date'   => 'date:Y-m-d', // <--- Added cast
         'is_active'        => 'boolean',
         'is_geofenced'     => 'boolean',
         'latitude'         => 'float',
@@ -52,35 +43,26 @@ class Event extends Model
     // HYBRID GEOFENCE VERIFICATION
     // =========================================================================
 
-    /**
-     * Check if user coordinates fall within the event's geofence.
-     * Routes automatically to Polygon or Radius check based on configuration.
-     */
     public function isWithinGeofence(float $userLat, float $userLng): bool
     {
         if (!$this->is_geofenced) {
-            return true; // Access granted automatically if geofencing is disabled
+            return true;
         }
 
-        // Polygon Check (Custom Area Boundary)
         if ($this->geofence_type === 'polygon' && !empty($this->geofence_polygon)) {
             return $this->isPointInPolygon($userLat, $userLng, $this->geofence_polygon);
         }
 
-        // Radius Check (Haversine Formula)
         return $this->isPointInRadius($userLat, $userLng);
     }
 
-    /**
-     * Radius Check: Haversine distance calculation in meters.
-     */
     protected function isPointInRadius(float $userLat, float $userLng): bool
     {
         if (is_null($this->latitude) || is_null($this->longitude)) {
             return true;
         }
 
-        $earthRadius = 6371000; // Radius of Earth in meters
+        $earthRadius = 6371000;
 
         $latFrom = deg2rad($userLat);
         $lngFrom = deg2rad($userLng);
@@ -95,15 +77,9 @@ class Event extends Model
             cos($latFrom) * cos($latTo) * pow(sin($lngDelta / 2), 2)
         ));
 
-        $distance = $angle * $earthRadius;
-
-        return $distance <= $this->radius_meters;
+        return ($angle * $earthRadius) <= $this->radius_meters;
     }
 
-    /**
-     * Polygon Check: Ray-Casting Algorithm for 2D Point-in-Polygon validation.
-     * $polygon format: [ ['lat' => x, 'lng' => y], ... ]
-     */
     protected function isPointInPolygon(float $userLat, float $userLng, array $polygon): bool
     {
         $verticesCount = count($polygon);
@@ -121,7 +97,7 @@ class Event extends Model
 
             $denom = ($yj - $yi);
             if ($denom == 0) {
-                continue; // Skip horizontal collinear segments to prevent division by zero
+                continue;
             }
 
             $intersect = (($yi > $userLat) !== ($yj > $userLat)) &&
@@ -136,88 +112,91 @@ class Event extends Model
     }
 
     // =========================================================================
-    // DYNAMIC TIME WINDOW ACCESSORS
+    // DYNAMIC TIME WINDOW ACCESSORS (Child Table Aware)
     // =========================================================================
 
     public function getWindowStartAttribute(): Carbon
     {
-        $dateStr = $this->event_date instanceof Carbon 
-            ? $this->event_date->format('Y-m-d') 
-            : $this->event_date;
+        $days = $this->relationLoaded('days') ? $this->days : $this->days()->get();
+        
+        $earliest = null;
+        foreach ($days as $day) {
+            $slots = $day->slots ?? [];
+            foreach ($slots as $slot) {
+                if (!empty($slot['time_in_start'])) {
+                    $dateStr = $day->event_date instanceof Carbon ? $day->event_date->format('Y-m-d') : $day->event_date;
+                    $dateTime = "{$dateStr} {$slot['time_in_start']}";
+                    if (!$earliest || $dateTime < $earliest) {
+                        $earliest = $dateTime;
+                    }
+                }
+            }
+        }
 
-        return Carbon::parse("{$dateStr} {$this->time_in_start}")->subHours(2);
+        if ($earliest) {
+            return Carbon::parse($earliest)->subHours(2);
+        }
+
+        return now()->subHours(2);
     }
 
     public function getWindowEndAttribute(): Carbon
     {
-        // Use event_end_date if available, otherwise fall back to event_date
-        $endDate = $this->event_end_date 
-            ? ($this->event_end_date instanceof Carbon ? $this->event_end_date->format('Y-m-d') : $this->event_end_date)
-            : ($this->event_date instanceof Carbon ? $this->event_date->format('Y-m-d') : $this->event_date);
-
-        if ($this->time_out_end) {
-            return Carbon::parse("{$endDate} {$this->time_out_end}")->addHours(2);
+        $days = $this->relationLoaded('days') ? $this->days : $this->days()->get();
+        
+        $latest = null;
+        foreach ($days as $day) {
+            $slots = $day->slots ?? [];
+            foreach ($slots as $slot) {
+                $time = $slot['time_out_end'] ?? $slot['time_out_start'] ?? null;
+                if ($time) {
+                    $dateStr = $day->event_date instanceof Carbon ? $day->event_date->format('Y-m-d') : $day->event_date;
+                    $dateTime = "{$dateStr} {$time}";
+                    if (!$latest || $dateTime > $latest) {
+                        $latest = $dateTime;
+                    }
+                }
+            }
         }
 
-        if ($this->time_out_start) {
-            return Carbon::parse("{$endDate} {$this->time_out_start}")->addHours(2);
+        if ($latest) {
+            return Carbon::parse($latest)->addHours(2);
         }
 
-        return Carbon::parse("{$endDate} 23:59:59");
+        return now()->addHours(2);
     }
 
     // =========================================================================
-    // ELOQUENT QUERY SCOPES
+    // ELOQUENT QUERY SCOPES (Child Table Date-Range Aware)
     // =========================================================================
 
     public function scopeOngoing(Builder $query): Builder
     {
-        $nowStr = now()->toDateTimeString();
         $today = now()->toDateString();
 
         return $query->where('approval_status', 'approved')
-            // Check if today falls within event_date and event_end_date range
-            ->where('event_date', '<=', $today)
-            ->where(function ($q) use ($today) {
-                $q->whereNull('event_end_date')
-                  ->orWhere('event_end_date', '>=', $today);
-            })
-            ->where(function ($q) use ($nowStr) {
-                $q->whereRaw("DATE_SUB(CONCAT(event_date, ' ', time_in_start), INTERVAL 2 HOUR) <= ?", [$nowStr])
-                  ->where(function ($sub) use ($nowStr) {
-                      $sub->where(function ($out) use ($nowStr) {
-                          $out->whereNotNull('time_out_end')
-                              ->whereRaw("DATE_ADD(CONCAT(COALESCE(event_end_date, event_date), ' ', time_out_end), INTERVAL 2 HOUR) >= ?", [$nowStr])
-                              ->orWhere(function ($outStart) use ($nowStr) {
-                                  $outStart->whereNull('time_out_end')
-                                           ->whereNotNull('time_out_start')
-                                           ->whereRaw("DATE_ADD(CONCAT(COALESCE(event_end_date, event_date), ' ', time_out_start), INTERVAL 2 HOUR) >= ?", [$nowStr]);
-                              });
-                      })->orWhere(function ($noOut) {
-                          $noOut->whereNull('time_out_end')
-                                ->whereNull('time_out_start');
-                      });
-                  });
+            ->whereHas('days', function ($q) use ($today) {
+                $q->where('event_date', '=', $today);
             });
     }
 
     public function scopeUpcoming(Builder $query): Builder
     {
-        $nowStr = now()->toDateTimeString();
+        $today = now()->toDateString();
 
         return $query->where('approval_status', 'approved')
-            ->where(function ($q) use ($nowStr) {
-                $q->whereRaw("DATE_SUB(CONCAT(event_date, ' ', time_in_start), INTERVAL 2 HOUR) > ?", [$nowStr]);
+            ->whereHas('days', function ($q) use ($today) {
+                $q->where('event_date', '>', $today);
             });
     }
 
     public function scopeCompleted(Builder $query): Builder
     {
-        $nowStr = now()->toDateTimeString();
+        $today = now()->toDateString();
 
         return $query->where('approval_status', 'approved')
-            ->where(function ($q) use ($nowStr) {
-                $q->whereRaw("DATE_ADD(CONCAT(COALESCE(event_end_date, event_date), ' ', COALESCE(time_out_end, time_out_start, '23:59:59')), INTERVAL 2 HOUR) < ?", [$nowStr]);
+            ->whereHas('days', function ($q) use ($today) {
+                $q->where('event_date', '<', $today);
             });
     }
 
@@ -234,6 +213,11 @@ class Event extends Model
     // =========================================================================
     // RELATIONSHIPS
     // =========================================================================
+
+    public function days(): HasMany
+    {
+        return $this->hasMany(EventDay::class, 'event_id', 'event_id');
+    }
 
     public function attendances(): HasMany
     {

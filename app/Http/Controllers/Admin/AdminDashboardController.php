@@ -62,8 +62,11 @@ class AdminDashboardController extends Controller
             ->where('is_active', true)
             ->first();
 
-        // Event counts and temporary clearance stub
-        $activeEventsCount = Event::where('event_date', '>=', $today)->count();
+        // Event counts using the child event_days table relationship
+        $activeEventsCount = Event::whereHas('days', function ($query) use ($today) {
+            $query->where('event_date', '>=', $today);
+        })->count();
+        
         $pendingClearancesCount = 0; // Stubbed until clearance system is built
 
         // Recent activity feed based on latest check-ins

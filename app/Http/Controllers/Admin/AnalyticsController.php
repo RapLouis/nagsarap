@@ -53,11 +53,10 @@ class AnalyticsController extends Controller
 
         $totalStudents = Student::whereNotNull('face_embedding')->count();
 
-        $totalEvents = Event::where(
-            'event_date',
-            '>=',
-            $startDate
-        )->count();
+        // Updated to query through the child event_days table
+        $totalEvents = Event::whereHas('days', function ($query) use ($startDate) {
+            $query->where('event_date', '>=', $startDate);
+        })->count();
 
         $totalAttendances = Attendance::where(
             'logged_at',
@@ -196,18 +195,15 @@ class AnalyticsController extends Controller
                 ),
             ]);
 
-        // ── Per-Event Summary ────────────────────────────────────────────────
-        // Includes events with zero attendance.
+        // ── Per-Event Summary (Joined with event_days) ────────────────────────
 
         $eventSummary = Event::select(
                 'events.event_id',
                 'events.title',
-                DB::raw(
-                    'DATE(events.event_date) as date'
-                ),
-                DB::raw(
-                    'COUNT(a.attendance_id) as attended'
-                ),
+                DB::raw('MIN(ed.event_date) as start_date'),
+                DB::raw('MAX(ed.event_date) as end_date'),
+                DB::raw('COUNT(DISTINCT ed.event_day_id) as total_days'),
+                DB::raw('COUNT(a.attendance_id) as attended'),
                 DB::raw(
                     "SUM(
                         CASE
@@ -220,6 +216,7 @@ class AnalyticsController extends Controller
                     'ROUND(AVG(a.confidence_score), 4) as avg_confidence'
                 )
             )
+            ->join('event_days as ed', 'ed.event_id', '=', 'events.event_id')
             ->leftJoin(
                 'attendances as a',
                 'a.event_id',
@@ -227,22 +224,23 @@ class AnalyticsController extends Controller
                 'events.event_id'
             )
             ->where(
-                'events.event_date',
+                'ed.event_date',
                 '>=',
                 $startDate
             )
             ->groupBy(
                 'events.event_id',
-                'events.title',
-                DB::raw('DATE(events.event_date)')
+                'events.title'
             )
-            ->orderByDesc('events.event_date')
+            ->orderByDesc('start_date')
             ->limit(20)
             ->get()
             ->map(fn ($row) => [
                 'id' => $row->event_id,
                 'event' => $row->title,
-                'date' => $row->date,
+                'date' => $row->total_days > 1 
+                    ? "{$row->start_date} to {$row->end_date}" 
+                    : $row->start_date,
                 'attended' => (int) $row->attended,
                 'successful' => (int) $row->successful,
                 'avg_confidence' => (float) (
@@ -318,6 +316,9 @@ class AnalyticsController extends Controller
 
     public function showEvent(Event $event)
     {
+        // Eager-load child days relationship
+        $event->load('days');
+
         // ── Event-level Counts ────────────────────────────────────────────────
 
         $totalAttendees = Attendance::where(
@@ -345,6 +346,30 @@ class AnalyticsController extends Controller
                 2
             )
             : 0;
+
+        // ── Per-Day Breakdown (Multi-Day Support) ─────────────────────────────
+
+        $dailyBreakdown = $event->days->map(function ($day) use ($event) {
+            $dateStr = $day->event_date instanceof Carbon 
+                ? $day->event_date->format('Y-m-d') 
+                : Carbon::parse($day->event_date)->format('Y-m-d');
+
+            $attendeesCount = Attendance::where('event_id', $event->event_id)
+                ->whereDate('logged_at', $dateStr)
+                ->count();
+
+            $successfulCount = Attendance::where('event_id', $event->event_id)
+                ->whereDate('logged_at', $dateStr)
+                ->whereIn('status', ['success', 'present'])
+                ->count();
+
+            return [
+                'date' => $dateStr,
+                'slots' => $day->slots, // JSON array of time slots for this specific day
+                'attendees' => $attendeesCount,
+                'successful' => $successfulCount,
+            ];
+        });
 
         // ── Department / Degree Breakdown (With Registrants vs Checked In) ────
 
@@ -467,7 +492,16 @@ class AnalyticsController extends Controller
         // ── Return Event Analytics ────────────────────────────────────────────
 
         return Inertia::render('admin/analytics/eventshow', [
-            'event' => $event,
+            'event' => [
+                'id' => $event->event_id,
+                'title' => $event->title,
+                'description' => $event->description,
+                'location' => $event->location,
+                'schedules' => $event->days->map(fn ($d) => [
+                    'date' => $d->event_date instanceof Carbon ? $d->event_date->format('Y-m-d') : $d->event_date,
+                    'slots' => $d->slots,
+                ]),
+            ],
 
             'analytics' => [
                 'totalAttendees' => $totalAttendees,
@@ -477,6 +511,7 @@ class AnalyticsController extends Controller
                     (float) ($avgConfidence ?? 0),
                     4
                 ),
+                'dailyBreakdown' => $dailyBreakdown, // Day-by-day stats & slots
                 'departmentBreakdown' => $departmentBreakdown,
                 'checkinTimeline' => $checkinTimeline,
                 'roster' => $roster,
