@@ -1,0 +1,12 @@
+Flask
+Flask-Cors
+
+insightface
+onnxruntime
+
+opencv-python-headless
+numpy
+Pillow
+
+mediapipe
+requests

@@ -1,0 +1,58 @@
+name: ccis_attendance
+description: "CCIS Attendance System mobile application."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # API
+  dio: ^5.11.1
+
+  # Authentication
+  flutter_secure_storage: ^11.0.0
+
+  # Offline/local storage
+  shared_preferences: ^2.5.5
+
+  # Network
+  connectivity_plus: ^7.3.1
+
+  # Location/geofencing
+  geolocator: ^14.0.3
+  permission_handler: ^13.0.2
+
+  # Camera/images
+  camera: ^0.12.1
+  image_picker: ^1.2.3
+
+  # Form 5
+  file_selector: ^1.1.0
+
+  # Native mobile map using same OSM/geofence coordinates as Leaflet
+  flutter_map: ^8.3.2
+  latlong2: ^0.10.1
+
+  # Utilities
+  intl: ^0.20.3
+  uuid: ^4.6.0
+
+  # UI
+  google_fonts: ^8.2.1
+  path_provider: ^2.1.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
