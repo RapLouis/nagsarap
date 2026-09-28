@@ -29,7 +29,7 @@ class EventController extends Controller
 
         switch ($activeTab) {
             case 'ongoing':
-                $eventsQuery->ongoing();
+                $eventsQuery->ongoing();    
                 break;
             case 'upcoming':
                 $eventsQuery->upcoming();

@@ -433,8 +433,8 @@ export default function Events({
         };
 
         if (editingEvent) {
+            setData(submissionData);
             put(`/admin/events/${editingEvent.event_id}`, {
-                ...submissionData,
                 preserveScroll: true,
                 onSuccess: () => {
                     setIsFormOpen(false);
@@ -442,8 +442,8 @@ export default function Events({
                 },
             });
         } else {
+            setData(submissionData);
             post('/admin/events', {
-                ...submissionData,
                 preserveScroll: true,
                 onSuccess: () => {
                     setIsFormOpen(false);

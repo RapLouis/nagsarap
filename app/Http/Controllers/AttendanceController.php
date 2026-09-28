@@ -2,120 +2,200 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Attendance;
+use App\Exceptions\AttendanceException;
 use App\Models\Event;
-use App\Models\Student;
+use App\Services\AttendanceService;
+use App\Services\BiometricService;
+use App\Services\FaceChallengeService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Http;
 
 class AttendanceController extends Controller
 {
     /**
-     * Mark attendance for an active event using face verification.
+     * Mark attendance from the web application.
+     *
+     * This uses the same attendance service used by the mobile API.
      */
-    public function markAttendance(Request $request)
-    {
-        /** @var \App\Models\User $user */
+    public function markAttendance(
+        Request $request,
+        AttendanceService $service,
+        BiometricService $bio,
+        FaceChallengeService $challenges
+    ) {
         $user = Auth::user();
+
+        if (!$user) {
+            return back()->withErrors([
+                'attendance' => 'You must be logged in.',
+            ]);
+        }
+
         $student = $user->student;
 
-        if (!$student || $student->verification_status !== 'verified' || !$student->face_embedding) {
+        if (
+            !$student
+            || $student->verification_status !== 'verified'
+            || empty($student->face_embedding)
+        ) {
             return back()->withErrors([
-                'attendance' => 'Your face biometrics are not registered or verified yet.'
+                'attendance' =>
+                    'Your face biometrics are not registered or verified yet.',
             ]);
         }
 
-        // 1. Validate payload
-        $request->validate([
-            'event_id'          => ['required', 'exists:events,event_id'],
-            'live_camera_frame' => ['required', 'image', 'mimes:jpeg,png,jpg', 'max:5048'],
+        $validated = $request->validate([
+            'event_id' => [
+                'required',
+                'integer',
+                'exists:events,event_id',
+            ],
+
+            'challenge_nonce' => [
+                'required',
+                'string',
+                'max:100',
+            ],
+
+            'session_id' => [
+                'required',
+                'string',
+                'min:16',
+                'max:100',
+            ],
+
+            'latitude' => [
+                'required',
+                'numeric',
+                'between:-90,90',
+            ],
+
+            'longitude' => [
+                'required',
+                'numeric',
+                'between:-180,180',
+            ],
+
+            'location_accuracy' => [
+                'nullable',
+                'numeric',
+                'min:0',
+                'max:10000',
+            ],
+
+            'center_frame' => [
+                'required',
+                'image',
+                'mimes:jpeg,jpg,png',
+                'max:5048',
+            ],
+
+            'turned_frame' => [
+                'required',
+                'image',
+                'mimes:jpeg,jpg,png',
+                'max:5048',
+            ],
+
+            'returned_frame' => [
+                'required',
+                'image',
+                'mimes:jpeg,jpg,png',
+                'max:5048',
+            ],
+
+            'blink_frame' => [
+                'nullable',
+                'image',
+                'mimes:jpeg,jpg,png',
+                'max:5048',
+            ],
+
+            'smile_frame' => [
+                'nullable',
+                'image',
+                'mimes:jpeg,jpg,png',
+                'max:5048',
+            ],
         ]);
 
-        $event = Event::findOrFail($request->event_id);
+        $event = Event::findOrFail(
+            $validated['event_id']
+        );
 
-        if (!$event->is_active) {
+        /*
+         * Consume the liveness challenge.
+         */
+        $challenge = $challenges->consume(
+            $student->student_id,
+            $validated['challenge_nonce'],
+            $validated['session_id'],
+            'attendance',
+            (int) $event->event_id
+        );
+
+        if (!($challenge['valid'] ?? false)) {
             return back()->withErrors([
-                'attendance' => 'Attendance check-in for this event is currently closed.'
+                'attendance' =>
+                    'Your liveness challenge is invalid or expired. Please start again.',
             ]);
         }
 
-        // 2. Prevent duplicate check-in for the same event
-        $alreadyCheckedIn = Attendance::where('student_id', $student->student_id)
-            ->where('event_id', $event->event_id)
-            ->exists();
+        $direction = $challenge['direction'];
 
-        if ($alreadyCheckedIn) {
-            return back()->withErrors([
-                'attendance' => 'You have already checked in for this event.'
-            ]);
-        }
-
-        // 3. Convert uploaded camera frame to Base64 for Python microservice
-        $liveFrameFile = $request->file('live_camera_frame');
-        $base64Image = 'data:image/jpeg;base64,' . base64_encode(file_get_contents($liveFrameFile->getRealPath()));
-
-        // 4. Request 512-D vector extraction from Python AI Service
+        /*
+         * Verify the actual requested direction.
+         */
         try {
-            $response = Http::timeout(10)->post('http://127.0.0.1:5000/extract-embedding', [
-                'image_base64' => $base64Image,
-            ]);
-
-            if ($response->failed()) {
-                return back()->withErrors([
-                    'attendance' => $response->json()['detail'] ?? 'Face scan failed. Ensure proper camera lighting.'
-                ]);
-            }
-
-            $scannedEmbedding = $response->json()['embedding'];
-
-        } catch (\Exception $e) {
+            $liveness = $bio->verifyLiveness(
+                $direction,
+                $request->file('center_frame'),
+                $request->file('turned_frame'),
+                $request->file('returned_frame')
+            );
+        } catch (\Throwable $e) {
             return back()->withErrors([
-                'attendance' => 'Unable to connect to biometric verification service.'
+                'attendance' => $e->getMessage(),
             ]);
         }
 
-        // 5. Compare Scanned Vector against Stored Student Vector
-        $similarity = $this->calculateCosineSimilarity($scannedEmbedding, $student->face_embedding);
-
-        // Verification threshold (0.60 matches enrollment face)
-        if ($similarity < 0.60) {
+        if (!($liveness['passed'] ?? false)) {
             return back()->withErrors([
-                'attendance' => 'Face verification failed. Scanned face does not match your profile.'
+                'attendance' =>
+                    $liveness['detail']
+                    ?? 'Liveness verification failed.',
             ]);
         }
 
-        // 6. Record Attendance Entry
-        Attendance::create([
-            'student_id'       => $student->student_id,
-            'event_id'         => $event->event_id,
-            'logged_at'        => now(),
-            'status'           => 'present',
-            'confidence_score' => round($similarity, 4),
-        ]);
-
-        return back()->with('success', 'Attendance marked successfully!');
-    }
-
-    /**
-     * Calculate Cosine Similarity between two 512-D vector arrays.
-     */
-    private function calculateCosineSimilarity(array $vecA, array $vecB): float
-    {
-        $dotProduct = 0.0;
-        $normA = 0.0;
-        $normB = 0.0;
-
-        for ($i = 0; $i < count($vecA); $i++) {
-            $dotProduct += $vecA[$i] * $vecB[$i];
-            $normA += $vecA[$i] ** 2;
-            $normB += $vecB[$i] ** 2;
+        /*
+         * Record attendance through the common service.
+         */
+        try {
+            $attendance = $service->record(
+                user: $user,
+                event: $event,
+                liveCameraFrame: $request->file(
+                    'returned_frame'
+                ),
+                latitude: (float) $validated['latitude'],
+                longitude: (float) $validated['longitude'],
+                locationAccuracy:
+                    isset($validated['location_accuracy'])
+                        ? (float) $validated['location_accuracy']
+                        : null,
+                livenessPassed: true,
+                source: 'web_online',
+                isOfflineSync: false
+            );
+        } catch (AttendanceException $e) {
+            return back()->withErrors([
+                'attendance' => $e->getMessage(),
+            ]);
         }
 
-        if ($normA == 0 || $normB == 0) {
-            return 0.0;
-        }
-
-        return $dotProduct / (sqrt($normA) * sqrt($normB));
+        return back()->with(
+            'success',
+            'Attendance recorded successfully.'
+        );
     }
 }

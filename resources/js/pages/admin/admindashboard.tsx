@@ -116,13 +116,13 @@ export default function AdminDashboard({
                         </p>
                     </div>
                     <div className="flex items-center gap-2">
-                        <Link
-                            href="/admin/events/create"
-                            className="inline-flex items-center gap-1.5 rounded-lg bg-[#1B1F5C] px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-[#141747] transition-colors"
-                        >
-                            <Plus className="h-4 w-4" />
-                            Create Event
-                        </Link>
+                    <Link
+                        href="/admin/events"
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-[#1B1F5C] px-3.5 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-[#141747]"
+                    >
+                        <Plus className="h-4 w-4" />
+                        Create Event
+                    </Link>
                     </div>
                 </div>
 
