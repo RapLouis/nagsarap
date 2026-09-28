@@ -53,7 +53,7 @@ class AttendanceController extends Controller
     }
 
     /**
-     * Online mobile attendance.
+     * Online mobile attendance using center + server-selected turn.
      */
     public function mobileCheckIn(
         Request $request,
@@ -109,27 +109,6 @@ class AttendanceController extends Controller
 
             'turned_frame' => [
                 'required',
-                'image',
-                'mimes:jpeg,jpg,png',
-                'max:5048',
-            ],
-
-            'returned_frame' => [
-                'required',
-                'image',
-                'mimes:jpeg,jpg,png',
-                'max:5048',
-            ],
-
-            'blink_frame' => [
-                'nullable',
-                'image',
-                'mimes:jpeg,jpg,png',
-                'max:5048',
-            ],
-
-            'smile_frame' => [
-                'nullable',
                 'image',
                 'mimes:jpeg,jpg,png',
                 'max:5048',
@@ -195,7 +174,7 @@ class AttendanceController extends Controller
                 $direction,
                 $request->file('center_frame'),
                 $request->file('turned_frame'),
-                $request->file('returned_frame')
+                $request->file('center_frame')
             );
         } catch (\Throwable $e) {
             $this->notify(
@@ -242,7 +221,7 @@ class AttendanceController extends Controller
                 user: $user,
                 event: $event,
                 liveCameraFrame:
-                    $request->file('returned_frame'),
+                    $request->file('center_frame'),
                 latitude:
                     (float) $validated['latitude'],
                 longitude:
@@ -367,27 +346,6 @@ class AttendanceController extends Controller
                 'mimes:jpeg,jpg,png',
                 'max:5048',
             ],
-
-            'returned_frame' => [
-                'required',
-                'image',
-                'mimes:jpeg,jpg,png',
-                'max:5048',
-            ],
-
-            'blink_frame' => [
-                'nullable',
-                'image',
-                'mimes:jpeg,jpg,png',
-                'max:5048',
-            ],
-
-            'smile_frame' => [
-                'nullable',
-                'image',
-                'mimes:jpeg,jpg,png',
-                'max:5048',
-            ],
         ]);
 
         $user = $request->user();
@@ -401,14 +359,14 @@ class AttendanceController extends Controller
 
         /*
          * Offline attendance still performs server-side
-         * liveness verification when synchronization occurs.
+         * liveness verification using center + turn when synchronization occurs.
          */
         try {
             $liveness = $bio->verifyLiveness(
                 $direction,
                 $request->file('center_frame'),
                 $request->file('turned_frame'),
-                $request->file('returned_frame')
+                $request->file('center_frame')
             );
         } catch (\Throwable $e) {
             return response()->json([
@@ -437,7 +395,7 @@ class AttendanceController extends Controller
                 user: $user,
                 event: $event,
                 liveCameraFrame:
-                    $request->file('returned_frame'),
+                    $request->file('center_frame'),
                 latitude:
                     (float) $validated['latitude'],
                 longitude:

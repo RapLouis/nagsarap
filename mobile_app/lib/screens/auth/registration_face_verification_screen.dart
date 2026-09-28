@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import '../../services/registration_service.dart';
 import 'auth_gate.dart';
 
-enum _ChallengeStep { preparing, center, turn, returnCenter, verifying, failed }
+enum _ChallengeStep { preparing, center, turn, verifying, failed }
 
 class RegistrationFaceVerificationScreen extends StatefulWidget {
   const RegistrationFaceVerificationScreen({super.key});
@@ -24,12 +24,10 @@ class _RegistrationFaceVerificationScreenState
   // The final Laravel/Python verification remains authoritative.
   static const double centerYawLimit = 0.30;
   static const double turnYawDelta = 0.07;
-  static const double returnYawDelta = 0.16;
-
   // Do not process every camera frame. Two consistent observations per
   // challenge step are enough to prevent noisy single-frame transitions.
-  static const Duration captureInterval = Duration(milliseconds: 400);
-  static const int stableFramesRequired = 2;
+  static const Duration captureInterval = Duration(milliseconds: 300);
+  static const int stableFramesRequired = 1;
   static const int maxBadFramesBeforeMessage = 8;
 
   CameraController? _camera;
@@ -49,17 +47,14 @@ class _RegistrationFaceVerificationScreenState
 
   XFile? _centerFrame;
   XFile? _turnedFrame;
-  XFile? _returnedFrame;
 
   double? _centerYaw;
 
   int _badFrames = 0;
   int _stableCenterFrames = 0;
   int _stableTurnFrames = 0;
-  int _stableReturnFrames = 0;
 
   double? _bestTurnDelta;
-  double? _bestReturnDelta;
 
   @override
   void initState() {
@@ -204,16 +199,13 @@ class _RegistrationFaceVerificationScreenState
   void _resetChallenge() {
     _centerFrame = null;
     _turnedFrame = null;
-    _returnedFrame = null;
 
     _centerYaw = null;
 
     _badFrames = 0;
     _stableCenterFrames = 0;
     _stableTurnFrames = 0;
-    _stableReturnFrames = 0;
     _bestTurnDelta = null;
-    _bestReturnDelta = null;
   }
 
   Future<void> _captureAndAnalyze() async {
@@ -375,48 +367,13 @@ class _RegistrationFaceVerificationScreenState
           }
 
           if (_stableTurnFrames >= stableFramesRequired) {
-            if (!mounted) {
-              return;
-            }
-
-            setState(() {
-              _step = _ChallengeStep.returnCenter;
-              _error = null;
-            });
+            await _verifyFinalFrames();
           }
         } else {
           _stableTurnFrames = 0;
         }
         break;
 
-      case _ChallengeStep.returnCenter:
-        final centerYaw = _centerYaw;
-
-        if (centerYaw == null) {
-          _stableReturnFrames = 0;
-          return;
-        }
-
-        final centered = yaw.abs() <= centerYawLimit;
-        final returned = (yaw - centerYaw).abs() <= returnYawDelta;
-
-        if (centered && returned) {
-          _stableReturnFrames++;
-
-          final difference = (yaw - centerYaw).abs();
-
-          if (_bestReturnDelta == null || difference < _bestReturnDelta!) {
-            _bestReturnDelta = difference;
-            _returnedFrame = frame;
-          }
-
-          if (_stableReturnFrames >= stableFramesRequired) {
-            await _verifyFinalFrames();
-          }
-        } else {
-          _stableReturnFrames = 0;
-        }
-        break;
 
       case _ChallengeStep.preparing:
       case _ChallengeStep.verifying:
@@ -428,9 +385,7 @@ class _RegistrationFaceVerificationScreenState
   Future<void> _verifyFinalFrames() async {
     final centerFrame = _centerFrame;
     final turnedFrame = _turnedFrame;
-    final returnedFrame = _returnedFrame;
-
-    if (centerFrame == null || turnedFrame == null || returnedFrame == null) {
+    if (centerFrame == null || turnedFrame == null) {
       _fail('Some biometric frames were not captured. Please try again.');
       return;
     }
@@ -445,24 +400,9 @@ class _RegistrationFaceVerificationScreenState
       _error = null;
     });
 
-    // Laravel currently expects the old five-frame payload.
-    //
-    // We keep that API unchanged so no service/controller changes
-    // are required:
-    //
-    // center  -> center
-    // blink   -> center
-    // turn    -> turned
-    // smile   -> turned
-    // return  -> returned
-    //
-    // Blink and smile are NOT user challenges anymore.
     final result = await RegistrationService.instance.verifyRegistrationFace(
       centerFrame: centerFrame,
-      blinkFrame: centerFrame,
       turnedFrame: turnedFrame,
-      smileFrame: turnedFrame,
-      returnedFrame: returnedFrame,
       challengeNonce: _challengeNonce!,
       sessionId: _challengeSessionId!,
     );
@@ -609,9 +549,6 @@ class _RegistrationFaceVerificationScreenState
             ? 'Turn your head to your RIGHT →'
             : '← Turn your head to your LEFT';
 
-      case _ChallengeStep.returnCenter:
-        return 'Return your face to center';
-
       case _ChallengeStep.verifying:
         return 'Verifying your identity...';
 
@@ -626,13 +563,10 @@ class _RegistrationFaceVerificationScreenState
         return 'Preparing camera';
 
       case _ChallengeStep.center:
-        return 'Step 1 of 3';
+        return 'Step 1 of 2';
 
       case _ChallengeStep.turn:
-        return 'Step 2 of 3';
-
-      case _ChallengeStep.returnCenter:
-        return 'Step 3 of 3';
+        return 'Step 2 of 2';
 
       case _ChallengeStep.verifying:
         return 'MediaPipe + OpenCV + InsightFace';
@@ -651,11 +585,8 @@ class _RegistrationFaceVerificationScreenState
       case _ChallengeStep.turn:
         return 1;
 
-      case _ChallengeStep.returnCenter:
-        return 2;
-
       case _ChallengeStep.verifying:
-        return 3;
+        return 2;
 
       case _ChallengeStep.failed:
         return -1;
@@ -666,7 +597,6 @@ class _RegistrationFaceVerificationScreenState
     switch (_step) {
       case _ChallengeStep.preparing:
       case _ChallengeStep.center:
-      case _ChallengeStep.returnCenter:
         return Icons.face_retouching_natural_rounded;
 
       case _ChallengeStep.turn:

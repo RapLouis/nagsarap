@@ -40,7 +40,7 @@ class RegistrationController extends Controller
 
     public function verifyFace(Request $request,BiometricService $bio,FaceChallengeService $challenges): JsonResponse
     {
-        $request->validate(['challenge_nonce'=>['required','string','max:100'],'session_id'=>['required','string','min:16','max:100'],'center_frame'=>['required','image','mimes:jpeg,jpg,png','max:5048'],'turned_frame'=>['required','image','mimes:jpeg,jpg,png','max:5048'],'returned_frame'=>['required','image','mimes:jpeg,jpg,png','max:5048']]);
+        $request->validate(['challenge_nonce'=>['required','string','max:100'],'session_id'=>['required','string','min:16','max:100'],'center_frame'=>['required','image','mimes:jpeg,jpg,png','max:5048'],'turned_frame'=>['required','image','mimes:jpeg,jpg,png','max:5048']]);
         $student=$request->user()?->student; if (!$student) return response()->json(['success'=>false,'code'=>'STUDENT_NOT_FOUND','message'=>'Student record not found.'],404);
         if ($student->verification_status==='verified') return response()->json(['success'=>true,'code'=>'ALREADY_VERIFIED','message'=>'Biometric registration is already complete.','data'=>['student'=>$student,'verification_status'=>'verified']]);
         $challenge=$challenges->consume($student->student_id,$request->input('challenge_nonce'),$request->input('session_id'),'registration');
@@ -48,7 +48,7 @@ class RegistrationController extends Controller
             return response()->json(['success'=>false,'code'=>'LIVENESS_CHALLENGE_INVALID','message'=>'Your liveness challenge is invalid or expired. Please start again.'],422);
         }
         $direction=$challenge['direction'];
-        try { $live=$bio->verifyLiveness($direction,$request->file('center_frame'),$request->file('turned_frame'),$request->file('returned_frame')); }
+        try { $live=$bio->verifyLiveness($direction,$request->file('center_frame'),$request->file('turned_frame'),$request->file('center_frame')); }
         catch (BiometricServiceException $e) { return response()->json(['success'=>false,'code'=>'LIVENESS_FAILED','message'=>$e->getMessage()],422); }
         if (!($live['passed']??false)) return response()->json(['success'=>false,'code'=>'LIVENESS_FAILED','message'=>$live['detail']??'Liveness verification failed.','data'=>['reason_code'=>$live['reason_code']??null]],422);
         $reference=$bio->profileEmbedding($student);

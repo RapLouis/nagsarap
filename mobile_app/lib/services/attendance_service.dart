@@ -39,9 +39,6 @@ class AttendanceService {
   // Local frame selection only. Laravel/Python remains authoritative.
   // These values match the tolerant online challenge so an offline record
   // is not rejected merely because one candidate is slightly off-center.
-  static const double _centerLimit = 0.30;
-  static const double _turnDelta = 0.07;
-
   // ===========================================================================
   // SERVER LIVENESS CHALLENGE
   // ===========================================================================
@@ -192,10 +189,7 @@ class AttendanceService {
     required double longitude,
     required double locationAccuracy,
     required XFile centerFrame,
-    required XFile blinkFrame,
     required XFile turnedFrame,
-    required XFile smileFrame,
-    required XFile returnedFrame,
     required String challengeNonce,
     required String sessionId,
   }) async {
@@ -207,30 +201,13 @@ class AttendanceService {
         'latitude': latitude,
         'longitude': longitude,
         'location_accuracy': locationAccuracy,
-
         'center_frame': await MultipartFile.fromFile(
           centerFrame.path,
           filename: 'attendance-center.jpg',
         ),
-
-        'blink_frame': await MultipartFile.fromFile(
-          blinkFrame.path,
-          filename: 'attendance-blink.jpg',
-        ),
-
         'turned_frame': await MultipartFile.fromFile(
           turnedFrame.path,
           filename: 'attendance-turn.jpg',
-        ),
-
-        'smile_frame': await MultipartFile.fromFile(
-          smileFrame.path,
-          filename: 'attendance-smile.jpg',
-        ),
-
-        'returned_frame': await MultipartFile.fromFile(
-          returnedFrame.path,
-          filename: 'attendance-return.jpg',
         ),
       });
 
@@ -273,7 +250,11 @@ class AttendanceService {
   }
 
   // ===========================================================================
-  // STORE OFFLINE ATTENDANCE BURST
+  // STORE OFFLINE ATTENDANCE
+  //
+  // Offline capture uses exactly the same two evidence stages as online:
+  // CENTER -> TURN LEFT/RIGHT -> COMPLETE.
+  // No blink, smile, or return-to-center evidence is stored.
   // ===========================================================================
 
   Future<AttendanceResult> queueOfflineAttendance({
@@ -282,11 +263,8 @@ class AttendanceService {
     required double longitude,
     required double locationAccuracy,
     required DateTime attendanceTime,
-    required List<XFile> centerCandidates,
-    required List<XFile> blinkCandidates,
-    required List<XFile> turnedCandidates,
-    required List<XFile> smileCandidates,
-    required List<XFile> returnedCandidates,
+    required XFile centerFrame,
+    required XFile turnedFrame,
     required String livenessDirection,
   }) async {
     try {
@@ -296,7 +274,8 @@ class AttendanceService {
         return const AttendanceResult(
           success: false,
           code: 'OFFLINE_ALREADY_PENDING',
-          message: 'An offline attendance for this event is already waiting to sync.',
+          message:
+              'An offline attendance for this event is already waiting to sync.',
         );
       }
 
@@ -306,11 +285,8 @@ class AttendanceService {
         longitude: longitude,
         locationAccuracy: locationAccuracy,
         attendanceTime: attendanceTime,
-        centerCandidates: centerCandidates,
-        blinkCandidates: blinkCandidates,
-        turnedCandidates: turnedCandidates,
-        smileCandidates: smileCandidates,
-        returnedCandidates: returnedCandidates,
+        centerFrame: centerFrame,
+        turnedFrame: turnedFrame,
         livenessDirection: livenessDirection,
       );
 
@@ -337,174 +313,10 @@ class AttendanceService {
   }
 
   // ===========================================================================
-  // ANALYZE ALL OFFLINE CANDIDATES
-  // ===========================================================================
-
-  Future<List<_AnalyzedCandidate>> _analyzeCandidates(
-    List<String> paths,
-    String step,
-  ) async {
-    final accepted = <_AnalyzedCandidate>[];
-
-    for (final path in paths) {
-      final result = await analyzeLivenessFrame(frame: XFile(path));
-
-      if (result.networkUnavailable) {
-        throw const _NetworkUnavailable();
-      }
-
-      if (!result.success ||
-          !result.faceDetected ||
-          result.yaw == null ||
-          result.eyeOpenness == null ||
-          result.mouthWidth == null) {
-        debugPrint(
-          'OFFLINE CANDIDATE REJECTED '
-          '[$step] ${result.message}',
-        );
-
-        continue;
-      }
-
-      accepted.add(_AnalyzedCandidate(path: path, result: result));
-    }
-
-    return accepted;
-  }
-
-  // ===========================================================================
-  // SELECT BEST OFFLINE BIOMETRIC FRAMES
-  // ===========================================================================
-
-  Future<_SelectedFrames> _selectBestFrames(
-    PendingAttendanceRecord record,
-  ) async {
-    // -------------------------------------------------------------------------
-    // CENTER
-    // -------------------------------------------------------------------------
-
-    final centerResults = await _analyzeCandidates(
-      record.centerCandidatePaths,
-      'CENTER',
-    );
-
-    final validCenters = centerResults
-        .where((candidate) => candidate.result.yaw!.abs() <= _centerLimit)
-        .toList();
-
-    validCenters.sort((a, b) {
-      final yawOrder = a.result.yaw!.abs().compareTo(b.result.yaw!.abs());
-
-      if (yawOrder != 0) {
-        return yawOrder;
-      }
-
-      return b.quality.compareTo(a.quality);
-    });
-
-    if (validCenters.isEmpty) {
-      throw const _SelectionFailed(
-        'No good centered frame was found. '
-        'Keep your whole face inside the guide and '
-        'look directly at the camera.',
-      );
-    }
-
-    final center = validCenters.first;
-
-    final centerYaw = center.result.yaw!;
-
-    // -------------------------------------------------------------------------
-    // TURN
-    // -------------------------------------------------------------------------
-
-    final turnResults = await _analyzeCandidates(
-      record.turnedCandidatePaths,
-      'TURN',
-    );
-
-    final requestedDirection = record.livenessDirection;
-
-    double requestedDelta(double yaw) {
-      final signedDelta = yaw - centerYaw;
-      return requestedDirection == 'right' ? -signedDelta : signedDelta;
-    }
-
-    final validTurns = turnResults
-        .where(
-          (candidate) => requestedDelta(candidate.result.yaw!) >= _turnDelta,
-        )
-        .toList();
-
-    validTurns.sort(
-      (a, b) =>
-          requestedDelta(b.result.yaw!)
-              .compareTo(requestedDelta(a.result.yaw!)),
-    );
-
-    if (validTurns.isEmpty) {
-      throw const _SelectionFailed(
-        'No valid head-turn frame was found. '
-        'Turn clearly left or right and hold the pose.',
-      );
-    }
-
-    // -------------------------------------------------------------------------
-    // RETURN CENTER
-    // -------------------------------------------------------------------------
-    //
-    // For offline burst capture we do not reject the whole record simply
-    // because the final local yaw measurement is slightly outside the
-    // preferred threshold.
-    //
-    // Instead, choose the usable final frame that is closest to the original
-    // center pose.
-    //
-    // Laravel/Python /verify-liveness remains the authoritative final
-    // liveness check.
-    // -------------------------------------------------------------------------
-
-    final returnResults = await _analyzeCandidates(
-      record.returnedCandidatePaths,
-      'RETURN CENTER',
-    );
-
-    if (returnResults.isEmpty) {
-      throw const _SelectionFailed(
-        'No usable final face frame was found. '
-        'Keep your whole face inside the guide '
-        'when returning to center.',
-      );
-    }
-
-    returnResults.sort((a, b) {
-      final aDifference = (a.result.yaw! - centerYaw).abs();
-
-      final bDifference = (b.result.yaw! - centerYaw).abs();
-
-      final differenceOrder = aDifference.compareTo(bDifference);
-
-      if (differenceOrder != 0) {
-        return differenceOrder;
-      }
-
-      return b.quality.compareTo(a.quality);
-    });
-
-    final returned = returnResults.first;
-
-    return _SelectedFrames(
-      centerPath: center.path,
-      // Legacy API slots reuse frames from the 3-step challenge.
-      blinkPath: center.path,
-      turnedPath: validTurns.first.path,
-      smilePath: validTurns.first.path,
-      returnedPath: returned.path,
-    );
-  }
-
-  // ===========================================================================
   // SYNC ONE OFFLINE RECORD
+  //
+  // The server performs the authoritative liveness verification when the
+  // phone reconnects. Only CENTER + TURN are uploaded.
   // ===========================================================================
 
   Future<AttendanceResult> syncOfflineAttendance(
@@ -519,12 +331,6 @@ class AttendanceService {
     }
 
     try {
-      debugPrint('Selecting best biometric frames...');
-
-      final selected = await _selectBestFrames(record);
-
-      debugPrint('OFFLINE BEST FRAMES SELECTED');
-
       final formData = FormData.fromMap({
         'event_id': record.eventId,
         'attendance_uuid': record.uuid,
@@ -532,35 +338,19 @@ class AttendanceService {
         'latitude': record.latitude,
         'longitude': record.longitude,
         'location_accuracy': record.locationAccuracy,
-
+        'liveness_direction': record.livenessDirection,
         'center_frame': await MultipartFile.fromFile(
-          selected.centerPath,
+          record.centerFramePath,
           filename: 'offline-center.jpg',
         ),
-
-        'blink_frame': await MultipartFile.fromFile(
-          selected.blinkPath,
-          filename: 'offline-blink.jpg',
-        ),
-
         'turned_frame': await MultipartFile.fromFile(
-          selected.turnedPath,
+          record.turnedFramePath,
           filename: 'offline-turn.jpg',
-        ),
-
-        'smile_frame': await MultipartFile.fromFile(
-          selected.smilePath,
-          filename: 'offline-smile.jpg',
-        ),
-
-        'returned_frame': await MultipartFile.fromFile(
-          selected.returnedPath,
-          filename: 'offline-return.jpg',
         ),
       });
 
       final response = await _api.dio.post(
-        '/api/v1/attendance/sync',
+        ApiEndpoints.attendanceSync,
         data: formData,
         options: Options(
           contentType: 'multipart/form-data',
@@ -579,19 +369,6 @@ class AttendanceService {
       }
 
       return AttendanceResult.fromJson(map);
-    } on _NetworkUnavailable {
-      return const AttendanceResult(
-        success: false,
-        code: 'NETWORK_UNAVAILABLE',
-        message: 'Server is unavailable.',
-        networkUnavailable: true,
-      );
-    } on _SelectionFailed catch (e) {
-      return AttendanceResult(
-        success: false,
-        code: 'OFFLINE_LIVENESS_EVIDENCE_FAILED',
-        message: e.message,
-      );
     } on DioException catch (e) {
       debugPrint(
         'OFFLINE SYNC HTTP ERROR: '
@@ -993,52 +770,3 @@ class OfflineSyncResult {
   final int remaining;
 }
 
-// =============================================================================
-// INTERNAL ANALYZED CANDIDATE
-// =============================================================================
-
-class _AnalyzedCandidate {
-  const _AnalyzedCandidate({required this.path, required this.result});
-
-  final String path;
-
-  final AttendanceLivenessFrameResult result;
-
-  double get quality {
-    return ((result.detectionScore ?? 0) * 1000) + (result.blurScore ?? 0);
-  }
-}
-
-// =============================================================================
-// SELECTED OFFLINE FRAMES
-// =============================================================================
-
-class _SelectedFrames {
-  const _SelectedFrames({
-    required this.centerPath,
-    required this.blinkPath,
-    required this.turnedPath,
-    required this.smilePath,
-    required this.returnedPath,
-  });
-
-  final String centerPath;
-  final String blinkPath;
-  final String turnedPath;
-  final String smilePath;
-  final String returnedPath;
-}
-
-// =============================================================================
-// INTERNAL EXCEPTIONS
-// =============================================================================
-
-class _SelectionFailed implements Exception {
-  const _SelectionFailed(this.message);
-
-  final String message;
-}
-
-class _NetworkUnavailable implements Exception {
-  const _NetworkUnavailable();
-}

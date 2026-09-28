@@ -1,5 +1,3 @@
-import 'dart:math';
-
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
@@ -11,7 +9,6 @@ enum _AttendanceStep {
   preparing,
   center,
   turn,
-  returnCenter,
   verifying,
   failed,
 }
@@ -36,20 +33,10 @@ class _AttendanceFaceVerificationScreenState
   // Final Laravel/Python verification remains authoritative.
   static const double centerYawLimit = 0.30;
   static const double turnYawDelta = 0.07;
-  static const double returnYawDelta = 0.16;
+  static const Duration captureInterval = Duration(milliseconds: 300);
+  static const int stableFramesRequired = 1;
 
-  static const Duration captureInterval = Duration(milliseconds: 400);
-  static const int stableFramesRequired = 2;
-
-  // Offline capture still collects multiple frames because
-  // MediaPipe cannot be reached while the phone is offline.
-  static const int centerBurstCount = 3;
-  static const int turnBurstCount = 4;
-  static const int returnBurstCount = 3;
-
-  static const Duration offlinePoseDelay = Duration(milliseconds: 1400);
-
-  static const Duration offlineBurstGap = Duration(milliseconds: 160);
+  static const Duration offlinePoseDelay = Duration(milliseconds: 900);
 
   static const int maxBadFramesBeforeMessage = 8;
 
@@ -68,22 +55,16 @@ class _AttendanceFaceVerificationScreenState
   int _badFrames = 0;
   int _stableCenterFrames = 0;
   int _stableTurnFrames = 0;
-  int _stableReturnFrames = 0;
-
   double? _bestTurnDelta;
-  double? _bestReturnDelta;
-
   String? _error;
 
   _AttendanceStep _step = _AttendanceStep.preparing;
 
   XFile? _centerFrame;
   XFile? _turnedFrame;
-  XFile? _returnedFrame;
 
-  List<XFile> _centerCandidates = <XFile>[];
-  List<XFile> _turnedCandidates = <XFile>[];
-  List<XFile> _returnedCandidates = <XFile>[];
+  XFile? _offlineCenterFrame;
+  XFile? _offlineTurnedFrame;
 
   double? _centerYaw;
 
@@ -138,7 +119,12 @@ class _AttendanceFaceVerificationScreenState
       }
 
       if (challengeResult.networkUnavailable) {
-        _offlineDirection = Random.secure().nextBool() ? 'right' : 'left';
+        // When the phone is already offline before a challenge can be issued,
+        // there is no server available to select the direction. Use a local
+        // fallback only for that exceptional case. If the challenge was issued
+        // before connectivity was lost, _offlineDirection is already the server
+        // selected direction.
+        _offlineDirection = DateTime.now().microsecond.isEven ? 'right' : 'left';
         _beginOffline();
         return;
       }
@@ -291,20 +277,16 @@ class _AttendanceFaceVerificationScreenState
   void _resetEvidence() {
     _centerFrame = null;
     _turnedFrame = null;
-    _returnedFrame = null;
 
-    _centerCandidates = <XFile>[];
-    _turnedCandidates = <XFile>[];
-    _returnedCandidates = <XFile>[];
+    _offlineCenterFrame = null;
+    _offlineTurnedFrame = null;
 
     _centerYaw = null;
 
     _badFrames = 0;
     _stableCenterFrames = 0;
     _stableTurnFrames = 0;
-    _stableReturnFrames = 0;
     _bestTurnDelta = null;
-    _bestReturnDelta = null;
   }
 
   Future<void> _startOnline() async {
@@ -494,48 +476,13 @@ class _AttendanceFaceVerificationScreenState
           }
 
           if (_stableTurnFrames >= stableFramesRequired) {
-            if (!mounted) {
-              return;
-            }
-
-            setState(() {
-              _step = _AttendanceStep.returnCenter;
-              _error = null;
-            });
+            await _submitOnline();
           }
         } else {
           _stableTurnFrames = 0;
         }
         break;
 
-      case _AttendanceStep.returnCenter:
-        final centerYaw = _centerYaw;
-
-        if (centerYaw == null) {
-          _stableReturnFrames = 0;
-          return;
-        }
-
-        final centered = yaw.abs() <= centerYawLimit;
-        final returned = (yaw - centerYaw).abs() <= returnYawDelta;
-
-        if (centered && returned) {
-          _stableReturnFrames++;
-
-          final difference = (yaw - centerYaw).abs();
-
-          if (_bestReturnDelta == null || difference < _bestReturnDelta!) {
-            _bestReturnDelta = difference;
-            _returnedFrame = frame;
-          }
-
-          if (_stableReturnFrames >= stableFramesRequired) {
-            await _submitOnline();
-          }
-        } else {
-          _stableReturnFrames = 0;
-        }
-        break;
 
       case _AttendanceStep.preparing:
       case _AttendanceStep.verifying:
@@ -547,23 +494,20 @@ class _AttendanceFaceVerificationScreenState
   Future<void> _submitOnline() async {
     final eventId = widget.event.id;
     final position = _position;
-
     final centerFrame = _centerFrame;
     final turnedFrame = _turnedFrame;
-    final returnedFrame = _returnedFrame;
 
     if (eventId == null ||
         position == null ||
         centerFrame == null ||
         turnedFrame == null ||
-        returnedFrame == null) {
+        _challengeNonce == null ||
+        _challengeSessionId == null) {
       _fail('Attendance evidence is incomplete. Please try again.');
       return;
     }
 
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
 
     setState(() {
       _running = false;
@@ -571,40 +515,24 @@ class _AttendanceFaceVerificationScreenState
       _error = null;
     });
 
-    // Keep the current backend/service API unchanged.
-    //
-    // Only these actual challenges are performed:
-    //
-    // center -> turn -> center
-    //
-    // The old blink/smile parameters are filled
-    // with existing accepted frames for compatibility.
     final result = await AttendanceService.instance.mobileCheckIn(
       eventId: eventId,
       latitude: position.latitude,
       longitude: position.longitude,
       locationAccuracy: position.accuracy,
       centerFrame: centerFrame,
-      blinkFrame: centerFrame,
       turnedFrame: turnedFrame,
-      smileFrame: turnedFrame,
-      returnedFrame: returnedFrame,
       challengeNonce: _challengeNonce!,
       sessionId: _challengeSessionId!,
     );
 
-    if (!mounted || _disposed) {
-      return;
-    }
+    if (!mounted || _disposed) return;
 
     if (result.networkUnavailable) {
-      _centerCandidates = <XFile>[centerFrame];
-
-      _turnedCandidates = <XFile>[turnedFrame];
-
-      _returnedCandidates = <XFile>[returnedFrame];
-
-      await _saveOffline();
+      await _saveOffline(
+        centerFrame: centerFrame,
+        turnedFrame: turnedFrame,
+      );
       return;
     }
 
@@ -621,16 +549,12 @@ class _AttendanceFaceVerificationScreenState
   }
 
   void _beginOffline() {
-    if (_offlineMode || _disposed) {
-      return;
-    }
+    if (_offlineMode || _disposed) return;
 
     _offlineGeneration++;
-
     final generation = _offlineGeneration;
 
     _resetEvidence();
-
     _offlineMode = true;
     _running = false;
 
@@ -653,10 +577,7 @@ class _AttendanceFaceVerificationScreenState
 
   Future<void> _runOfflineSequence(int generation) async {
     try {
-      // CENTER
-      if (!_offlineSequenceActive(generation)) {
-        return;
-      }
+      if (!_offlineSequenceActive(generation)) return;
 
       setState(() {
         _step = _AttendanceStep.center;
@@ -664,141 +585,81 @@ class _AttendanceFaceVerificationScreenState
       });
 
       await Future<void>.delayed(offlinePoseDelay);
+      if (!_offlineSequenceActive(generation)) return;
 
-      if (!_offlineSequenceActive(generation)) {
-        return;
+      final camera = _camera;
+      if (camera == null || !camera.value.isInitialized) {
+        throw Exception('Camera is not ready.');
       }
 
-      _centerCandidates = await _captureOfflineBurst(
-        centerBurstCount,
-        generation,
-      );
-
-      // TURN LEFT OR RIGHT
-      if (!_offlineSequenceActive(generation)) {
-        return;
+      if (mounted) {
+        setState(() => _offlineCaptureBusy = true);
       }
 
-      setState(() {
-        _step = _AttendanceStep.turn;
-      });
+      final center = await camera.takePicture();
+      _offlineCenterFrame = center;
+
+      if (mounted) {
+        setState(() {
+          _offlineCaptureBusy = false;
+          _step = _AttendanceStep.turn;
+        });
+      }
 
       await Future<void>.delayed(offlinePoseDelay);
+      if (!_offlineSequenceActive(generation)) return;
 
-      if (!_offlineSequenceActive(generation)) {
-        return;
+      if (mounted) {
+        setState(() => _offlineCaptureBusy = true);
       }
 
-      _turnedCandidates = await _captureOfflineBurst(
-        turnBurstCount,
-        generation,
+      final turned = await camera.takePicture();
+      _offlineTurnedFrame = turned;
+
+      if (mounted) {
+        setState(() {
+          _offlineCaptureBusy = false;
+          _step = _AttendanceStep.verifying;
+        });
+      }
+
+      if (!_offlineSequenceActive(generation)) return;
+
+      await _saveOffline(
+        centerFrame: center,
+        turnedFrame: turned,
       );
-
-      // RETURN CENTER
-      if (!_offlineSequenceActive(generation)) {
-        return;
-      }
-
-      setState(() {
-        _step = _AttendanceStep.returnCenter;
-      });
-
-      await Future<void>.delayed(offlinePoseDelay);
-
-      if (!_offlineSequenceActive(generation)) {
-        return;
-      }
-
-      _returnedCandidates = await _captureOfflineBurst(
-        returnBurstCount,
-        generation,
-      );
-
-      if (!_offlineSequenceActive(generation)) {
-        return;
-      }
-
-      await _saveOffline();
     } catch (e) {
-      if (!_offlineSequenceActive(generation)) {
-        return;
-      }
-
-      _fail(_cleanError(e));
-    }
-  }
-
-  Future<List<XFile>> _captureOfflineBurst(int count, int generation) async {
-    final camera = _camera;
-
-    if (camera == null || !camera.value.isInitialized) {
-      throw Exception('Camera is not ready.');
-    }
-
-    final frames = <XFile>[];
-
-    if (mounted) {
-      setState(() {
-        _offlineCaptureBusy = true;
-      });
-    }
-
-    try {
-      for (var i = 0; i < count; i++) {
-        if (!_offlineSequenceActive(generation)) {
-          break;
-        }
-
-        while (camera.value.isTakingPicture) {
-          await Future<void>.delayed(const Duration(milliseconds: 30));
-
-          if (!_offlineSequenceActive(generation)) {
-            return frames;
-          }
-        }
-
-        final frame = await camera.takePicture();
-
-        frames.add(frame);
-
-        if (i < count - 1) {
-          await Future<void>.delayed(offlineBurstGap);
-        }
+      if (_offlineSequenceActive(generation)) {
+        _fail(_cleanError(e));
       }
     } finally {
       if (mounted && !_disposed) {
-        setState(() {
-          _offlineCaptureBusy = false;
-        });
+        setState(() => _offlineCaptureBusy = false);
       }
     }
-
-    if (frames.isEmpty) {
-      throw Exception('Unable to capture offline biometric evidence.');
-    }
-
-    return frames;
   }
 
-  Future<void> _saveOffline() async {
+  Future<void> _saveOffline({
+    XFile? centerFrame,
+    XFile? turnedFrame,
+  }) async {
     final eventId = widget.event.id;
     final position = _position;
+    final center = centerFrame ?? _offlineCenterFrame;
+    final turned = turnedFrame ?? _offlineTurnedFrame;
 
     if (eventId == null || position == null) {
       _fail('Event or GPS data is missing.');
       return;
     }
 
-    if (_centerCandidates.isEmpty ||
-        _turnedCandidates.isEmpty ||
-        _returnedCandidates.isEmpty) {
+    if (center == null || turned == null) {
       _fail('Offline biometric evidence is incomplete.');
       return;
     }
 
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
 
     setState(() {
       _offlineMode = true;
@@ -808,33 +669,20 @@ class _AttendanceFaceVerificationScreenState
       _error = null;
     });
 
-    // The existing offline service still expects
-    // five candidate lists.
-    //
-    // Reuse the center and turn lists for the old
-    // blink/smile slots so no service/database
-    // changes are required.
     final result = await AttendanceService.instance.queueOfflineAttendance(
       eventId: eventId,
       latitude: position.latitude,
       longitude: position.longitude,
       locationAccuracy: position.accuracy,
       attendanceTime: DateTime.now(),
-      centerCandidates: _centerCandidates,
-      blinkCandidates: _centerCandidates,
-      turnedCandidates: _turnedCandidates,
-      smileCandidates: _turnedCandidates,
-      returnedCandidates: _returnedCandidates,
+      centerFrame: center,
+      turnedFrame: turned,
       livenessDirection: _offlineDirection,
     );
 
-    if (!mounted || _disposed) {
-      return;
-    }
+    if (!mounted || _disposed) return;
 
-    setState(() {
-      _offlineCaptureBusy = false;
-    });
+    setState(() => _offlineCaptureBusy = false);
 
     if (!result.success) {
       _fail(result.message);
@@ -1026,20 +874,15 @@ class _AttendanceFaceVerificationScreenState
       switch (_step) {
         case _AttendanceStep.center:
           return _offlineCaptureBusy
-              ? 'Capturing centered frames...'
+              ? 'Capturing your centered face...'
               : 'Look straight and hold still';
 
         case _AttendanceStep.turn:
           return _offlineCaptureBusy
-              ? 'Capturing head-turn frames...'
+              ? 'Capturing your head turn...'
               : (_offlineDirection == 'right'
                     ? 'Turn your head to your RIGHT → and hold'
                     : '← Turn your head to your LEFT and hold');
-
-        case _AttendanceStep.returnCenter:
-          return _offlineCaptureBusy
-              ? 'Capturing final centered frames...'
-              : 'Return your face to center and hold';
 
         case _AttendanceStep.verifying:
           return 'Saving offline attendance...';
@@ -1064,9 +907,6 @@ class _AttendanceFaceVerificationScreenState
             ? 'Turn your head to your RIGHT →'
             : '← Turn your head to your LEFT';
 
-      case _AttendanceStep.returnCenter:
-        return 'Return your face to center';
-
       case _AttendanceStep.verifying:
         return 'Verifying attendance...';
 
@@ -1082,9 +922,6 @@ class _AttendanceFaceVerificationScreenState
 
       case _AttendanceStep.turn:
         return 2;
-
-      case _AttendanceStep.returnCenter:
-        return 3;
 
       case _AttendanceStep.preparing:
       case _AttendanceStep.verifying:
@@ -1338,7 +1175,7 @@ class _AttendanceFaceVerificationScreenState
                   children: [
                     if (_stepNumber > 0) ...[
                       Text(
-                        'Step $_stepNumber of 3',
+                        'Step $_stepNumber of 2',
                         style: const TextStyle(
                           color: Color(0xFF777787),
                           fontSize: 12,

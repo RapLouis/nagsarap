@@ -418,27 +418,11 @@ class RegistrationService {
 
   Future<BiometricVerificationResult> verifyRegistrationFace({
     required XFile centerFrame,
-    required XFile blinkFrame,
     required XFile turnedFrame,
-    required XFile smileFrame,
-    required XFile returnedFrame,
     required String challengeNonce,
     required String sessionId,
   }) async {
     try {
-      /*
-       * returnedFrame is also the final live_camera_frame.
-       *
-       * Laravel requires:
-       *
-       * center_frame
-       * blink_frame
-       * turned_frame
-       * smile_frame
-       * returned_frame
-       * live_camera_frame
-       */
-
       final formData = FormData.fromMap({
         'challenge_nonce': challengeNonce,
         'session_id': sessionId,
@@ -447,29 +431,10 @@ class RegistrationService {
           filename: 'center.jpg',
         ),
 
-        'blink_frame': await MultipartFile.fromFile(
-          blinkFrame.path,
-          filename: 'blink.jpg',
-        ),
 
         'turned_frame': await MultipartFile.fromFile(
           turnedFrame.path,
           filename: 'turned.jpg',
-        ),
-
-        'smile_frame': await MultipartFile.fromFile(
-          smileFrame.path,
-          filename: 'smile.jpg',
-        ),
-
-        'returned_frame': await MultipartFile.fromFile(
-          returnedFrame.path,
-          filename: 'returned.jpg',
-        ),
-
-        'live_camera_frame': await MultipartFile.fromFile(
-          returnedFrame.path,
-          filename: 'live-camera.jpg',
         ),
       });
 

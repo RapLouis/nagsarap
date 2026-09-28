@@ -15,7 +15,8 @@ class AttendanceController extends Controller
     /**
      * Mark attendance from the web application.
      *
-     * This uses the same attendance service used by the mobile API.
+     * Uses the same two-step liveness flow:
+     * CENTER -> TURN LEFT or TURN RIGHT.
      */
     public function markAttendance(
         Request $request,
@@ -96,27 +97,6 @@ class AttendanceController extends Controller
                 'mimes:jpeg,jpg,png',
                 'max:5048',
             ],
-
-            'returned_frame' => [
-                'required',
-                'image',
-                'mimes:jpeg,jpg,png',
-                'max:5048',
-            ],
-
-            'blink_frame' => [
-                'nullable',
-                'image',
-                'mimes:jpeg,jpg,png',
-                'max:5048',
-            ],
-
-            'smile_frame' => [
-                'nullable',
-                'image',
-                'mimes:jpeg,jpg,png',
-                'max:5048',
-            ],
         ]);
 
         $event = Event::findOrFail(
@@ -125,6 +105,9 @@ class AttendanceController extends Controller
 
         /*
          * Consume the liveness challenge.
+         *
+         * The server determines whether the student
+         * must turn LEFT or RIGHT.
          */
         $challenge = $challenges->consume(
             $student->student_id,
@@ -144,14 +127,21 @@ class AttendanceController extends Controller
         $direction = $challenge['direction'];
 
         /*
-         * Verify the actual requested direction.
+         * Verify:
+         *
+         * CENTER -> requested TURN LEFT/RIGHT
+         *
+         * BiometricService currently expects a third
+         * frame argument, so the center frame is reused
+         * for that legacy parameter. No returned, blink,
+         * or smile frame is required or uploaded.
          */
         try {
             $liveness = $bio->verifyLiveness(
                 $direction,
                 $request->file('center_frame'),
                 $request->file('turned_frame'),
-                $request->file('returned_frame')
+                $request->file('center_frame')
             );
         } catch (\Throwable $e) {
             return back()->withErrors([
@@ -168,15 +158,16 @@ class AttendanceController extends Controller
         }
 
         /*
-         * Record attendance through the common service.
+         * Record attendance.
+         *
+         * The turned frame is used as the final camera
+         * evidence instead of a returned frame.
          */
         try {
-            $attendance = $service->record(
+            $service->record(
                 user: $user,
                 event: $event,
-                liveCameraFrame: $request->file(
-                    'returned_frame'
-                ),
+                liveCameraFrame: $request->file('turned_frame'),
                 latitude: (float) $validated['latitude'],
                 longitude: (float) $validated['longitude'],
                 locationAccuracy:

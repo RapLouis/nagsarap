@@ -624,3 +624,11 @@ Did you mean one of these?
 #60 /Users/raphaellouisgabion/Documents/Attendance/Attendance/ccis-attendance-merged/vendor/laravel/framework/src/Illuminate/Foundation/resources/server.php(23): require_once('/Users/raphaell...')
 #61 {main}
 "} 
+[2026-09-28 23:19:15] local.ERROR: Cannot redeclare class App\Http\Controllers\Api\AttendanceController (previously declared in /Users/raphaellouisgabion/Documents/Attendance/Attendance/ccis-attendance-merged/app/Http/Controllers/Api/AttendanceController.php:16) {"exception":"[object] (Symfony\\Component\\ErrorHandler\\Error\\FatalError(code: 0): Cannot redeclare class App\\Http\\Controllers\\Api\\AttendanceController (previously declared in /Users/raphaellouisgabion/Documents/Attendance/Attendance/ccis-attendance-merged/app/Http/Controllers/Api/AttendanceController.php:16) at /Users/raphaellouisgabion/Documents/Attendance/Attendance/ccis-attendance-merged/app/Http/Controllers/AttendanceController.php:16)
+[stacktrace]
+#0 {main}
+"} 
+[2026-09-28 23:19:55] local.ERROR: Cannot redeclare class App\Http\Controllers\Api\AttendanceController (previously declared in /Users/raphaellouisgabion/Documents/Attendance/Attendance/ccis-attendance-merged/app/Http/Controllers/Api/AttendanceController.php:16) {"exception":"[object] (Symfony\\Component\\ErrorHandler\\Error\\FatalError(code: 0): Cannot redeclare class App\\Http\\Controllers\\Api\\AttendanceController (previously declared in /Users/raphaellouisgabion/Documents/Attendance/Attendance/ccis-attendance-merged/app/Http/Controllers/Api/AttendanceController.php:16) at /Users/raphaellouisgabion/Documents/Attendance/Attendance/ccis-attendance-merged/app/Http/Controllers/AttendanceController.php:16)
+[stacktrace]
+#0 {main}
+"} 
