@@ -6,7 +6,6 @@ import '../../models/event_item.dart';
 import '../../services/attendance_service.dart';
 
 enum _AttendanceStep {
-  preparing,
   center,
   turn,
   verifying,
@@ -29,12 +28,11 @@ class _AttendanceFaceVerificationScreenState
   static const Color gold = Color(0xFFFFC800);
   static const Color background = Color(0xFFF7F7FB);
 
-  // Tolerant live guidance: the face can sit slightly off-center.
-  // Final Laravel/Python verification remains authoritative.
-  static const double centerYawLimit = 0.30;
-  static const double turnYawDelta = 0.07;
-  static const Duration captureInterval = Duration(milliseconds: 300);
-  static const int stableFramesRequired = 1;
+  // Fast two-capture flow. The final Laravel/Python verification remains
+  // authoritative, so the phone does not upload camera frames repeatedly
+  // while the user is moving.
+  static const Duration centerCaptureDelay = Duration(milliseconds: 450);
+  static const Duration turnCaptureDelay = Duration(milliseconds: 750);
 
   static const Duration offlinePoseDelay = Duration(milliseconds: 900);
 
@@ -43,30 +41,22 @@ class _AttendanceFaceVerificationScreenState
   CameraController? _camera;
   Position? _position;
 
-  bool _initializing = true;
   bool _running = false;
-  bool _analyzing = false;
   bool _disposed = false;
 
   bool _offlineMode = false;
   bool _offlineCaptureBusy = false;
 
   int _offlineGeneration = 0;
-  int _badFrames = 0;
-  int _stableCenterFrames = 0;
-  int _stableTurnFrames = 0;
-  double? _bestTurnDelta;
   String? _error;
 
-  _AttendanceStep _step = _AttendanceStep.preparing;
+  _AttendanceStep _step = _AttendanceStep.center;
 
   XFile? _centerFrame;
   XFile? _turnedFrame;
 
   XFile? _offlineCenterFrame;
   XFile? _offlineTurnedFrame;
-
-  double? _centerYaw;
 
   String? _challengeDirection;
   String? _challengeNonce;
@@ -81,55 +71,54 @@ class _AttendanceFaceVerificationScreenState
 
   Future<void> _prepare() async {
     try {
-      if (widget.event.id == null) {
+      final eventId = widget.event.id;
+      if (eventId == null) {
         throw Exception('Invalid event ID.');
       }
 
-      await _startCamera();
+      // Start all independent work together. This removes the old
+      // camera -> GPS -> 300ms wait -> challenge waterfall.
+      final cameraFuture = _startCamera();
+      final positionFuture = _getPosition();
+      final challengeFuture =
+          AttendanceService.instance.requestLivenessChallenge(
+        eventId: eventId,
+      );
+
+      await cameraFuture;
 
       if (!mounted || _disposed) {
         return;
       }
 
-      final position = await _getPosition();
+      setState(() {
+        _step = _AttendanceStep.center;
+        _error = null;
+      });
+
+      final results = await Future.wait<Object>([
+        positionFuture,
+        challengeFuture,
+      ]);
 
       if (!mounted || _disposed) {
         return;
       }
+
+      final position = results[0] as Position;
+      final challengeResult = results[1] as LivenessChallengeResult;
 
       _position = position;
-
       _checkLocalGeofence(position);
 
-      if (!mounted || _disposed) {
-        return;
-      }
-
-      await Future<void>.delayed(const Duration(milliseconds: 300));
-
-      if (!mounted || _disposed) {
-        return;
-      }
-
-      final challengeResult = await AttendanceService.instance
-          .requestLivenessChallenge(eventId: widget.event.id!);
-
-      if (!mounted || _disposed) {
-        return;
-      }
-
-      if (challengeResult.networkUnavailable) {
-        // When the phone is already offline before a challenge can be issued,
-        // there is no server available to select the direction. Use a local
-        // fallback only for that exceptional case. If the challenge was issued
-        // before connectivity was lost, _offlineDirection is already the server
-        // selected direction.
-        _offlineDirection = DateTime.now().microsecond.isEven ? 'right' : 'left';
-        _beginOffline();
-        return;
-      }
-
       if (!challengeResult.success || challengeResult.challenge == null) {
+        if (challengeResult.networkUnavailable) {
+          _offlineDirection =
+              DateTime.now().microsecond.isEven ? 'right' : 'left';
+          _beginOffline();
+          return;
+        }
+
         throw Exception(challengeResult.message);
       }
 
@@ -146,7 +135,6 @@ class _AttendanceFaceVerificationScreenState
       }
 
       setState(() {
-        _initializing = false;
         _running = false;
         _step = _AttendanceStep.failed;
         _error = _cleanError(e);
@@ -163,8 +151,7 @@ class _AttendanceFaceVerificationScreenState
 
     if (!enabled) {
       throw Exception(
-        'Location services are disabled. '
-        'Turn on Location/GPS and try again.',
+        'Location services are disabled. Turn on Location/GPS and try again.',
       );
     }
 
@@ -180,16 +167,17 @@ class _AttendanceFaceVerificationScreenState
 
     if (permission == LocationPermission.deniedForever) {
       throw Exception(
-        'Location permission is permanently denied. '
-        'Enable it from the app settings.',
+        'Location permission is permanently denied. Enable it from the app settings.',
       );
     }
 
+    // Medium accuracy is enough for the event geofence and is substantially
+    // faster than waiting for a high-accuracy GPS fix.
     try {
       return await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 8),
+          accuracy: LocationAccuracy.medium,
+          timeLimit: Duration(seconds: 3),
         ),
       );
     } catch (_) {
@@ -200,8 +188,7 @@ class _AttendanceFaceVerificationScreenState
       }
 
       throw Exception(
-        'Unable to get your location. '
-        'Keep Location/GPS turned on and try again.',
+        'Unable to get your location. Keep Location/GPS turned on and try again.',
       );
     }
   }
@@ -269,7 +256,6 @@ class _AttendanceFaceVerificationScreenState
     _camera = controller;
 
     setState(() {
-      _initializing = false;
       _error = null;
     });
   }
@@ -277,28 +263,21 @@ class _AttendanceFaceVerificationScreenState
   void _resetEvidence() {
     _centerFrame = null;
     _turnedFrame = null;
-
     _offlineCenterFrame = null;
     _offlineTurnedFrame = null;
-
-    _centerYaw = null;
-
-    _badFrames = 0;
-    _stableCenterFrames = 0;
-    _stableTurnFrames = 0;
-    _bestTurnDelta = null;
   }
 
   Future<void> _startOnline() async {
+    final camera = _camera;
+
     if (_running ||
-        _camera == null ||
-        !_camera!.value.isInitialized ||
+        camera == null ||
+        !camera.value.isInitialized ||
         _disposed) {
       return;
     }
 
     _resetEvidence();
-
     _offlineMode = false;
 
     if (!mounted) {
@@ -311,183 +290,48 @@ class _AttendanceFaceVerificationScreenState
       _error = null;
     });
 
-    while (mounted &&
-        !_disposed &&
-        _running &&
-        !_offlineMode &&
-        _step != _AttendanceStep.verifying &&
-        _step != _AttendanceStep.failed) {
-      await _analyzeOnlineFrame();
-
-      if (!_running || _offlineMode || _disposed) {
-        break;
-      }
-
-      await Future<void>.delayed(captureInterval);
-    }
-  }
-
-  Future<void> _analyzeOnlineFrame() async {
-    if (_analyzing || !_running || _disposed) {
-      return;
-    }
-
-    final camera = _camera;
-
-    if (camera == null ||
-        !camera.value.isInitialized ||
-        camera.value.isTakingPicture) {
-      return;
-    }
-
-    _analyzing = true;
-
     try {
-      final frame = await camera.takePicture();
+      // One local capture instead of repeatedly uploading frames to Laravel
+      // while waiting for a centered pose.
+      await Future<void>.delayed(centerCaptureDelay);
 
-      final result = await AttendanceService.instance.analyzeLivenessFrame(
-        frame: frame,
-      );
-
-      if (!mounted || _disposed) {
+      if (!mounted || _disposed || !_running) {
         return;
       }
 
-      if (result.networkUnavailable) {
-        _beginOffline();
+      _centerFrame = await camera.takePicture();
+
+      if (!mounted || _disposed || !_running) {
         return;
       }
 
-      if (!result.success || !result.faceDetected) {
-        _badFrames++;
+      setState(() {
+        _step = _AttendanceStep.turn;
+        _error = null;
+      });
 
-        if (_badFrames >= maxBadFramesBeforeMessage) {
-          setState(() {
-            _error = result.message.isNotEmpty
-                ? result.message
-                : 'Keep one face clearly visible inside the camera.';
-          });
-        }
+      // Give the user a short, predictable window to turn toward the
+      // server-selected direction. Python performs the authoritative pose
+      // check on the two submitted frames.
+      await Future<void>.delayed(turnCaptureDelay);
 
-        // Do not move to another challenge.
+      if (!mounted || _disposed || !_running) {
         return;
       }
 
-      final yaw = result.yaw;
+      _turnedFrame = await camera.takePicture();
 
-      if (yaw == null) {
-        _badFrames++;
-
-        if (_badFrames >= maxBadFramesBeforeMessage) {
-          setState(() {
-            _error = 'Keep your face clearly visible while the camera reads your head position.';
-          });
-        }
-
+      if (!mounted || _disposed || !_running) {
         return;
       }
 
-      if (!result.faceInComfortableZone) {
-        _badFrames++;
-
-        if (_badFrames >= maxBadFramesBeforeMessage) {
-          setState(() {
-            _error = 'Move slightly closer to the middle so your whole face stays visible.';
-          });
-        }
-
-        return;
-      }
-
-      _badFrames = 0;
-
-      if (_error != null) {
-        setState(() {
-          _error = null;
-        });
-      }
-
-      await _processOnlineMeasurement(frame: frame, yaw: yaw);
+      await _submitOnline();
     } catch (e) {
       if (!mounted || _disposed) {
         return;
       }
 
-      setState(() {
-        _error = _cleanError(e);
-      });
-    } finally {
-      _analyzing = false;
-    }
-  }
-
-  Future<void> _processOnlineMeasurement({
-    required XFile frame,
-    required double yaw,
-  }) async {
-    switch (_step) {
-      case _AttendanceStep.center:
-        if (yaw.abs() <= centerYawLimit) {
-          _stableCenterFrames++;
-
-          final currentBest = _centerYaw;
-          if (currentBest == null || yaw.abs() < currentBest.abs()) {
-            _centerFrame = frame;
-            _centerYaw = yaw;
-          }
-
-          if (_stableCenterFrames >= stableFramesRequired) {
-            if (!mounted) {
-              return;
-            }
-
-            setState(() {
-              _step = _AttendanceStep.turn;
-              _error = null;
-            });
-          }
-        } else {
-          _stableCenterFrames = 0;
-        }
-        break;
-
-      case _AttendanceStep.turn:
-        final centerYaw = _centerYaw;
-
-        if (centerYaw == null) {
-          _stableCenterFrames = 0;
-          return;
-        }
-
-        final direction = _challengeDirection;
-        if (direction == null) {
-          return;
-        }
-
-        final signedDelta = yaw - centerYaw;
-        final requestedDelta = direction == 'left' ? signedDelta : -signedDelta;
-
-        if (requestedDelta >= turnYawDelta) {
-          _stableTurnFrames++;
-
-          if (_bestTurnDelta == null || requestedDelta > _bestTurnDelta!) {
-            _bestTurnDelta = requestedDelta;
-            _turnedFrame = frame;
-          }
-
-          if (_stableTurnFrames >= stableFramesRequired) {
-            await _submitOnline();
-          }
-        } else {
-          _stableTurnFrames = 0;
-        }
-        break;
-
-
-      case _AttendanceStep.preparing:
-      case _AttendanceStep.verifying:
-      case _AttendanceStep.failed:
-        break;
+      _fail(_cleanError(e));
     }
   }
 
@@ -721,22 +565,18 @@ class _AttendanceFaceVerificationScreenState
     _running = false;
     _offlineMode = false;
     _offlineCaptureBusy = false;
-
     _offlineGeneration++;
-
     _resetEvidence();
 
-    setState(() {
-      _step = _AttendanceStep.preparing;
-      _error = null;
-    });
+    if (mounted) {
+      setState(() {
+        _step = _AttendanceStep.center;
+        _error = null;
+      });
+    }
 
     try {
       if (_camera == null || !_camera!.value.isInitialized) {
-        setState(() {
-          _initializing = true;
-        });
-
         await _startCamera();
       }
 
@@ -744,15 +584,43 @@ class _AttendanceFaceVerificationScreenState
         return;
       }
 
-      final position = await _getPosition();
+      final positionFuture = _getPosition();
+      final challengeFuture =
+          AttendanceService.instance.requestLivenessChallenge(
+        eventId: widget.event.id!,
+      );
+
+      final results = await Future.wait<Object>([
+        positionFuture,
+        challengeFuture,
+      ]);
 
       if (!mounted || _disposed) {
         return;
       }
 
-      _position = position;
+      final position = results[0] as Position;
+      final challengeResult = results[1] as LivenessChallengeResult;
 
+      _position = position;
       _checkLocalGeofence(position);
+
+      if (!challengeResult.success || challengeResult.challenge == null) {
+        if (challengeResult.networkUnavailable) {
+          _offlineDirection =
+              DateTime.now().microsecond.isEven ? 'right' : 'left';
+          _beginOffline();
+          return;
+        }
+
+        throw Exception(challengeResult.message);
+      }
+
+      final challenge = challengeResult.challenge!;
+      _challengeDirection = challenge.direction;
+      _offlineDirection = challenge.direction;
+      _challengeNonce = challenge.nonce;
+      _challengeSessionId = challenge.sessionId;
 
       await _startOnline();
     } catch (e) {
@@ -890,15 +758,10 @@ class _AttendanceFaceVerificationScreenState
         case _AttendanceStep.failed:
           return 'Attendance stopped';
 
-        case _AttendanceStep.preparing:
-          return 'Preparing camera...';
       }
     }
 
     switch (_step) {
-      case _AttendanceStep.preparing:
-        return 'Preparing camera...';
-
       case _AttendanceStep.center:
         return 'Look straight at the camera';
 
@@ -923,7 +786,6 @@ class _AttendanceFaceVerificationScreenState
       case _AttendanceStep.turn:
         return 2;
 
-      case _AttendanceStep.preparing:
       case _AttendanceStep.verifying:
       case _AttendanceStep.failed:
         return 0;
@@ -1059,12 +921,8 @@ class _AttendanceFaceVerificationScreenState
                   borderRadius: BorderRadius.circular(24),
                 ),
                 child:
-                    _initializing ||
-                        camera == null ||
-                        !camera.value.isInitialized
-                    ? const Center(
-                        child: CircularProgressIndicator(color: gold),
-                      )
+                    camera == null || !camera.value.isInitialized
+                    ? const SizedBox.expand()
                     : Stack(
                         fit: StackFit.expand,
                         children: [

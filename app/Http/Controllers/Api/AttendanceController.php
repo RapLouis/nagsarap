@@ -15,33 +15,20 @@ use Illuminate\Http\Request;
 
 class AttendanceController extends Controller
 {
-    /**
-     * Analyze one liveness frame.
-     */
     public function analyzeLivenessFrame(
         Request $request,
         BiometricService $bio
     ): JsonResponse {
         $request->validate([
-            'frame' => [
-                'required',
-                'image',
-                'mimes:jpeg,jpg,png',
-                'max:5048',
-            ],
+            'frame' => ['required', 'image', 'mimes:jpeg,jpg,png', 'max:5048'],
         ]);
 
         try {
-            $data = $bio->analyzeLivenessFrame(
-                $request->file('frame')
-            );
-
             return response()->json([
                 'success' => true,
                 'code' => 'LIVENESS_FRAME_ANALYZED',
-                'message' =>
-                    'Attendance liveness frame analyzed.',
-                'data' => $data,
+                'message' => 'Attendance liveness frame analyzed.',
+                'data' => $bio->analyzeLivenessFrame($request->file('frame')),
             ]);
         } catch (\Throwable $e) {
             return response()->json([
@@ -53,7 +40,11 @@ class AttendanceController extends Controller
     }
 
     /**
-     * Online mobile attendance using center + server-selected turn.
+     * Mobile attendance uses exactly two biometric frames:
+     * 1. straight/frontal frame
+     * 2. requested left/right turn frame
+     *
+     * No blink, smile, or return-to-center frame is accepted or required.
      */
     public function mobileCheckIn(
         Request $request,
@@ -62,83 +53,29 @@ class AttendanceController extends Controller
         FaceChallengeService $challenges
     ): JsonResponse {
         $validated = $request->validate([
-            'event_id' => [
-                'required',
-                'integer',
-                'exists:events,event_id',
-            ],
-
-            'challenge_nonce' => [
-                'required',
-                'string',
-                'max:100',
-            ],
-
-            'session_id' => [
-                'required',
-                'string',
-                'min:16',
-                'max:100',
-            ],
-
-            'latitude' => [
-                'required',
-                'numeric',
-                'between:-90,90',
-            ],
-
-            'longitude' => [
-                'required',
-                'numeric',
-                'between:-180,180',
-            ],
-
-            'location_accuracy' => [
-                'nullable',
-                'numeric',
-                'min:0',
-                'max:10000',
-            ],
-
-            'center_frame' => [
-                'required',
-                'image',
-                'mimes:jpeg,jpg,png',
-                'max:5048',
-            ],
-
-            'turned_frame' => [
-                'required',
-                'image',
-                'mimes:jpeg,jpg,png',
-                'max:5048',
-            ],
+            'event_id' => ['required', 'integer', 'exists:events,event_id'],
+            'challenge_nonce' => ['required', 'string', 'max:100'],
+            'session_id' => ['required', 'string', 'min:16', 'max:100'],
+            'latitude' => ['required', 'numeric', 'between:-90,90'],
+            'longitude' => ['required', 'numeric', 'between:-180,180'],
+            'location_accuracy' => ['nullable', 'numeric', 'min:0', 'max:10000'],
+            'center_frame' => ['required', 'image', 'mimes:jpeg,jpg,png', 'max:5048'],
+            'turned_frame' => ['required', 'image', 'mimes:jpeg,jpg,png', 'max:5048'],
         ]);
 
         $user = $request->user();
-
         $student = $user?->student;
 
         if (!$student) {
             return response()->json([
                 'success' => false,
                 'code' => 'STUDENT_REQUIRED',
-                'message' =>
-                    'Student record not found.',
+                'message' => 'Student record not found.',
             ], 403);
         }
 
-        $event = Event::findOrFail(
-            $validated['event_id']
-        );
+        $event = Event::findOrFail($validated['event_id']);
 
-        /*
-         * Consume the challenge.
-         *
-         * The server determines whether the user must turn
-         * LEFT or RIGHT. The mobile application must follow
-         * this direction.
-         */
         $challenge = $challenges->consume(
             $student->student_id,
             $validated['challenge_nonce'],
@@ -157,32 +94,21 @@ class AttendanceController extends Controller
 
             return response()->json([
                 'success' => false,
-                'code' =>
-                    'LIVENESS_CHALLENGE_INVALID',
-                'message' =>
-                    'Your liveness challenge is invalid or expired. Please start again.',
+                'code' => 'LIVENESS_CHALLENGE_INVALID',
+                'message' => 'Your liveness challenge is invalid or expired. Please start again.',
             ], 422);
         }
 
         $direction = $challenge['direction'];
 
-        /*
-         * Verify the requested direction.
-         */
         try {
             $liveness = $bio->verifyLiveness(
                 $direction,
                 $request->file('center_frame'),
-                $request->file('turned_frame'),
-                $request->file('center_frame')
+                $request->file('turned_frame')
             );
         } catch (\Throwable $e) {
-            $this->notify(
-                $request,
-                $event,
-                false,
-                $e->getMessage()
-            );
+            $this->notify($request, $event, false, $e->getMessage());
 
             return response()->json([
                 'success' => false,
@@ -192,59 +118,33 @@ class AttendanceController extends Controller
         }
 
         if (!($liveness['passed'] ?? false)) {
-            $message =
-                $liveness['detail']
-                ?? 'Liveness verification failed.';
-
-            $this->notify(
-                $request,
-                $event,
-                false,
-                $message
-            );
+            $message = $liveness['detail'] ?? 'Liveness verification failed.';
+            $this->notify($request, $event, false, $message);
 
             return response()->json([
                 'success' => false,
                 'code' => 'LIVENESS_FAILED',
                 'message' => $message,
-                'data' => [
-                    'direction' => $direction,
-                ],
+                'data' => ['direction' => $direction],
             ], 422);
         }
 
-        /*
-         * Record attendance.
-         */
         try {
             $attendance = $service->record(
                 user: $user,
                 event: $event,
-                liveCameraFrame:
-                    $request->file('center_frame'),
-                latitude:
-                    (float) $validated['latitude'],
-                longitude:
-                    (float) $validated['longitude'],
-                locationAccuracy:
-                    isset(
-                        $validated['location_accuracy']
-                    )
-                        ? (float) $validated[
-                            'location_accuracy'
-                        ]
-                        : null,
+                liveCameraFrame: $request->file('center_frame'),
+                latitude: (float) $validated['latitude'],
+                longitude: (float) $validated['longitude'],
+                locationAccuracy: isset($validated['location_accuracy'])
+                    ? (float) $validated['location_accuracy']
+                    : null,
                 livenessPassed: true,
                 source: 'mobile_online',
                 isOfflineSync: false
             );
         } catch (AttendanceException $e) {
-            $this->notify(
-                $request,
-                $event,
-                false,
-                $e->getMessage()
-            );
+            $this->notify($request, $event, false, $e->getMessage());
 
             return response()->json([
                 'success' => false,
@@ -265,27 +165,21 @@ class AttendanceController extends Controller
         return response()->json([
             'success' => true,
             'code' => 'ATTENDANCE_RECORDED',
-            'message' =>
-                'Attendance recorded successfully.',
+            'message' => 'Attendance recorded successfully.',
             'data' => [
-                'attendance' =>
-                    $attendance->load('event'),
-
+                'attendance' => $attendance->load('event'),
                 'liveness' => $liveness,
-
                 'geofence' => [
                     'passed' => true,
-                    'distance_meters' =>
-                        $attendance->distance_from_event,
-                    'allowed_radius_meters' =>
-                        $event->radius_meters,
+                    'distance_meters' => $attendance->distance_from_event,
+                    'allowed_radius_meters' => $event->radius_meters,
                 ],
             ],
         ]);
     }
 
     /**
-     * Synchronize an offline attendance record.
+     * Synchronize an offline center + turn attendance record.
      */
     public function sync(
         Request $request,
@@ -293,80 +187,26 @@ class AttendanceController extends Controller
         BiometricService $bio
     ): JsonResponse {
         $validated = $request->validate([
-            'event_id' => [
-                'required',
-                'integer',
-                'exists:events,event_id',
-            ],
-
-            'liveness_direction' => [
-                'required',
-                'in:left,right',
-            ],
-
-            'attendance_uuid' => [
-                'required',
-                'uuid',
-            ],
-
-            'attendance_time' => [
-                'required',
-                'date',
-            ],
-
-            'latitude' => [
-                'required',
-                'numeric',
-                'between:-90,90',
-            ],
-
-            'longitude' => [
-                'required',
-                'numeric',
-                'between:-180,180',
-            ],
-
-            'location_accuracy' => [
-                'nullable',
-                'numeric',
-                'min:0',
-                'max:10000',
-            ],
-
-            'center_frame' => [
-                'required',
-                'image',
-                'mimes:jpeg,jpg,png',
-                'max:5048',
-            ],
-
-            'turned_frame' => [
-                'required',
-                'image',
-                'mimes:jpeg,jpg,png',
-                'max:5048',
-            ],
+            'event_id' => ['required', 'integer', 'exists:events,event_id'],
+            'liveness_direction' => ['required', 'in:left,right'],
+            'attendance_uuid' => ['required', 'uuid'],
+            'attendance_time' => ['required', 'date'],
+            'latitude' => ['required', 'numeric', 'between:-90,90'],
+            'longitude' => ['required', 'numeric', 'between:-180,180'],
+            'location_accuracy' => ['nullable', 'numeric', 'min:0', 'max:10000'],
+            'center_frame' => ['required', 'image', 'mimes:jpeg,jpg,png', 'max:5048'],
+            'turned_frame' => ['required', 'image', 'mimes:jpeg,jpg,png', 'max:5048'],
         ]);
 
         $user = $request->user();
+        $event = Event::findOrFail($validated['event_id']);
+        $direction = $validated['liveness_direction'];
 
-        $event = Event::findOrFail(
-            $validated['event_id']
-        );
-
-        $direction =
-            $validated['liveness_direction'];
-
-        /*
-         * Offline attendance still performs server-side
-         * liveness verification using center + turn when synchronization occurs.
-         */
         try {
             $liveness = $bio->verifyLiveness(
                 $direction,
                 $request->file('center_frame'),
-                $request->file('turned_frame'),
-                $request->file('center_frame')
+                $request->file('turned_frame')
             );
         } catch (\Throwable $e) {
             return response()->json([
@@ -380,39 +220,23 @@ class AttendanceController extends Controller
             return response()->json([
                 'success' => false,
                 'code' => 'LIVENESS_FAILED',
-                'message' =>
-                    $liveness['detail']
-                    ?? 'Liveness verification failed.',
+                'message' => $liveness['detail'] ?? 'Liveness verification failed.',
             ], 422);
         }
 
-        /*
-         * Record the offline attendance using the original
-         * attendance timestamp and UUID.
-         */
         try {
             $attendance = $service->record(
                 user: $user,
                 event: $event,
-                liveCameraFrame:
-                    $request->file('center_frame'),
-                latitude:
-                    (float) $validated['latitude'],
-                longitude:
-                    (float) $validated['longitude'],
-                locationAccuracy:
-                    isset(
-                        $validated['location_accuracy']
-                    )
-                        ? (float) $validated[
-                            'location_accuracy'
-                        ]
-                        : null,
+                liveCameraFrame: $request->file('center_frame'),
+                latitude: (float) $validated['latitude'],
+                longitude: (float) $validated['longitude'],
+                locationAccuracy: isset($validated['location_accuracy'])
+                    ? (float) $validated['location_accuracy']
+                    : null,
                 livenessPassed: true,
-                attendanceUuid:
-                    $validated['attendance_uuid'],
-                attendanceTime:
-                    $validated['attendance_time'],
+                attendanceUuid: $validated['attendance_uuid'],
+                attendanceTime: $validated['attendance_time'],
                 source: 'mobile_offline',
                 isOfflineSync: true
             );
@@ -435,33 +259,22 @@ class AttendanceController extends Controller
 
         return response()->json([
             'success' => true,
-            'code' =>
-                'OFFLINE_ATTENDANCE_SYNCED',
-            'message' =>
-                'Offline attendance synchronized successfully.',
+            'code' => 'OFFLINE_ATTENDANCE_SYNCED',
+            'message' => 'Offline attendance synchronized successfully.',
             'data' => [
-                'attendance' =>
-                    $attendance->load('event'),
-
+                'attendance' => $attendance->load('event'),
                 'liveness' => $liveness,
-
                 'geofence' => [
                     'passed' => true,
-                    'distance_meters' =>
-                        $attendance->distance_from_event,
-                    'allowed_radius_meters' =>
-                        $event->radius_meters,
+                    'distance_meters' => $attendance->distance_from_event,
+                    'allowed_radius_meters' => $event->radius_meters,
                 ],
             ],
         ]);
     }
 
-    /**
-     * Get attendance history for the authenticated student.
-     */
-    public function history(
-        Request $request
-    ): JsonResponse {
+    public function history(Request $request): JsonResponse
+    {
         $user = $request->user();
 
         if (!$user) {
@@ -479,28 +292,15 @@ class AttendanceController extends Controller
             return response()->json([
                 'success' => false,
                 'code' => 'STUDENT_NOT_FOUND',
-                'message' =>
-                    'Student record not found.',
+                'message' => 'Student record not found.',
                 'data' => [],
             ], 404);
         }
 
-        $limit = min(
-            max(
-                (int) $request->input(
-                    'limit',
-                    50
-                ),
-                1
-            ),
-            100
-        );
+        $limit = min(max((int) $request->input('limit', 50), 1), 100);
 
         $records = Attendance::with('event')
-            ->where(
-                'student_id',
-                $student->student_id
-            )
+            ->where('student_id', $student->student_id)
             ->orderByDesc('attendance_time')
             ->orderByDesc('logged_at')
             ->limit($limit)
@@ -508,19 +308,12 @@ class AttendanceController extends Controller
 
         return response()->json([
             'success' => true,
-            'code' =>
-                'ATTENDANCE_HISTORY_RETRIEVED',
-            'message' =>
-                'Attendance history retrieved successfully.',
+            'code' => 'ATTENDANCE_HISTORY_RETRIEVED',
+            'message' => 'Attendance history retrieved successfully.',
             'data' => $records,
         ]);
     }
 
-    /**
-     * Compatibility endpoint.
-     *
-     * Uses the same implementation as mobileCheckIn.
-     */
     public function checkIn(
         Request $request,
         AttendanceService $service
@@ -533,9 +326,6 @@ class AttendanceController extends Controller
         );
     }
 
-    /**
-     * Create a notification after attendance activity.
-     */
     private function notify(
         Request $request,
         Event $event,
@@ -543,38 +333,21 @@ class AttendanceController extends Controller
         string $message,
         ?string $status = null
     ): void {
-        $studentId =
-            $request->user()?->student_id;
+        $studentId = $request->user()?->student_id;
 
         if (!$studentId) {
             return;
         }
 
-        rescue(
-            function () use (
-                $studentId,
-                $success,
-                $message,
-                $status
-            ) {
-                StudentNotification::create([
-                    'student_id' => $studentId,
-
-                    'type' =>
-                        $success
-                            ? 'attendance_success'
-                            : 'attendance_error',
-
-                    'title' =>
-                        $success
-                            ? 'Attendance recorded'
-                            : 'Attendance update',
-
-                    'message' => $status
-                        ? "{$message} Status: {$status}."
-                        : $message,
-                ]);
-            }
-        );
+        rescue(function () use ($studentId, $success, $message, $status) {
+            StudentNotification::create([
+                'student_id' => $studentId,
+                'type' => $success ? 'attendance_success' : 'attendance_error',
+                'title' => $success ? 'Attendance recorded' : 'Attendance update',
+                'message' => $status
+                    ? "{$message} Status: {$status}."
+                    : $message,
+            ]);
+        });
     }
 }

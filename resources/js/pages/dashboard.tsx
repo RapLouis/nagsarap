@@ -57,7 +57,7 @@ type DashboardProps = {
 };
 
 type Direction = 'left' | 'right';
-type LivenessStep = 'DETECT' | 'LOOK_CENTER' | 'TURN' | 'VERIFYING' | 'PASSED';
+type LivenessStep = 'LOOK_CENTER' | 'TURN' | 'VERIFYING' | 'PASSED';
 type Landmark = { x: number; y: number };
 
 const GOLD = '#C9973E';
@@ -75,8 +75,7 @@ const VIDEO_CONSTRAINTS: MediaStreamConstraints = {
 
 const PROCESS_EVERY_N_FRAMES = 3;
 const FRONTAL_YAW_MAX = 0.12;
-const FRONTAL_HOLD_FRAMES = 8;
-const MID_TURN_YAW = 0.15;
+const FRONTAL_HOLD_FRAMES = 3;
 const TURN_YAW_MIN = 0.25;
 const TURN_HOLD_FRAMES = 3;
 const WRONG_WAY_YAW = 0.15;
@@ -449,7 +448,7 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
     const requestRef = useRef<number | null>(null);
     const mountedRef = useRef(true);
 
-    const stepRef = useRef<LivenessStep>('DETECT');
+    const stepRef = useRef<LivenessStep>('LOOK_CENTER');
     const frameCountRef = useRef(0);
     const lastVideoTimeRef = useRef(-1);
     const holdCountRef = useRef(0);
@@ -458,10 +457,9 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
     const hasSubmittedRef = useRef(false);
 
     const frontalFrameRef = useRef<Promise<Blob | null> | null>(null);
-    const midFrameRef = useRef<Promise<Blob | null> | null>(null);
     const peakFrameRef = useRef<Promise<Blob | null> | null>(null);
 
-    const [step, setStep] = useState<LivenessStep>('DETECT');
+    const [step, setStep] = useState<LivenessStep>('LOOK_CENTER');
     const [streamStarted, setStreamStarted] = useState(false);
     const [modelReady, setModelReady] = useState(false);
     const [cameraError, setCameraError] = useState<string | null>(null);
@@ -485,12 +483,12 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
     const resetChallenge = () => {
         holdCountRef.current = 0;
         turnHoldRef.current = 0;
+        hasSubmittedRef.current = false;
         challengeStartRef.current = null;
         frontalFrameRef.current = null;
-        midFrameRef.current = null;
         peakFrameRef.current = null;
         setHoldProgress(0);
-        goToStep('DETECT');
+        goToStep('LOOK_CENTER');
     };
 
     useEffect(() => {
@@ -579,10 +577,6 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
             const turned = yaw * DIRECTION_SIGN[direction];
 
             switch (stepRef.current) {
-                case 'DETECT':
-                    goToStep('LOOK_CENTER');
-                    break;
-
                 case 'LOOK_CENTER': {
                     const placementIssue = getPlacementIssue(landmarks);
                     if (placementIssue) {
@@ -628,15 +622,11 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
 
                     setHint(null);
 
-                    if (!midFrameRef.current && turned >= MID_TURN_YAW) {
-                        midFrameRef.current = captureFrame(video);
-                    }
-
                     if (turned >= TURN_YAW_MIN) {
                         turnHoldRef.current += 1;
                         if (turnHoldRef.current >= TURN_HOLD_FRAMES) {
                             peakFrameRef.current = captureFrame(video);
-                            void submitAttendance(frontalFrameRef.current, midFrameRef.current, peakFrameRef.current);
+                            void submitAttendance(frontalFrameRef.current, peakFrameRef.current);
                             return;
                         }
                     } else {
@@ -668,7 +658,6 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
 
     const submitAttendance = async (
         frontalPromise: Promise<Blob | null> | null,
-        midPromise: Promise<Blob | null> | null,
         peakPromise: Promise<Blob | null> | null
     ) => {
         if (hasSubmittedRef.current) return;
@@ -677,14 +666,13 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
         setHint(null);
 
         try {
-            const [frontal, mid, peak] = await Promise.all([frontalPromise, midPromise, peakPromise]);
+            const [frontal, peak] = await Promise.all([frontalPromise, peakPromise]);
             if (!frontal || !peak) throw new Error('Failed to capture camera frames.');
 
             setIsSubmitting(true);
             const formData = new FormData();
             formData.append('event_id', String(event.event_id));
             formData.append('live_camera_frame', frontal, 'frontal.jpg');
-            if (mid) formData.append('turn_mid_frame', mid, 'turn-mid.jpg');
             formData.append('turn_peak_frame', peak, 'turn-peak.jpg');
             formData.append('direction', direction);
 
@@ -708,9 +696,8 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
 
     const instruction = (() => {
         switch (step) {
-            case 'DETECT':
             case 'LOOK_CENTER':
-                return { text: 'Look straight and hold still', icon: Eye, spin: false };
+                return { text: 'Look straight at the camera', icon: Eye, spin: false };
             case 'TURN':
                 return { text: `Turn your head to your ${direction}`, icon: direction === 'left' ? ArrowLeft : ArrowRight, spin: false };
             case 'VERIFYING':
@@ -718,7 +705,7 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
             case 'PASSED':
                 return { text: 'Checked in successfully!', icon: CheckCircle2, spin: false };
             default:
-                return { text: 'Loading camera...', icon: Loader2, spin: true };
+                return { text: 'Look straight at the camera', icon: Eye, spin: false };
         }
     })();
     const ActiveIcon = instruction.icon;

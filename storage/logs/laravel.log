@@ -632,3 +632,21 @@ Did you mean one of these?
 [stacktrace]
 #0 {main}
 "} 
+[2026-09-29 22:44:17] local.ERROR: There are no commands defined in the "routes" namespace.
+
+Did you mean one of these?
+    roster
+    route {"exception":"[object] (Symfony\\Component\\Console\\Exception\\NamespaceNotFoundException(code: 0): There are no commands defined in the \"routes\" namespace.
+
+Did you mean one of these?
+    roster
+    route at /Users/raphaellouisgabion/Documents/Attendance/Attendance/ccis-attendance-merged/vendor/symfony/console/Application.php:694)
+[stacktrace]
+#0 /Users/raphaellouisgabion/Documents/Attendance/Attendance/ccis-attendance-merged/vendor/symfony/console/Application.php(743): Symfony\\Component\\Console\\Application->findNamespace('routes')
+#1 /Users/raphaellouisgabion/Documents/Attendance/Attendance/ccis-attendance-merged/vendor/symfony/console/Application.php(298): Symfony\\Component\\Console\\Application->find('routes:clear')
+#2 /Users/raphaellouisgabion/Documents/Attendance/Attendance/ccis-attendance-merged/vendor/symfony/console/Application.php(195): Symfony\\Component\\Console\\Application->doRun(Object(Symfony\\Component\\Console\\Input\\ArgvInput), Object(Symfony\\Component\\Console\\Output\\ConsoleOutput))
+#3 /Users/raphaellouisgabion/Documents/Attendance/Attendance/ccis-attendance-merged/vendor/laravel/framework/src/Illuminate/Foundation/Console/Kernel.php(198): Symfony\\Component\\Console\\Application->run(Object(Symfony\\Component\\Console\\Input\\ArgvInput), Object(Symfony\\Component\\Console\\Output\\ConsoleOutput))
+#4 /Users/raphaellouisgabion/Documents/Attendance/Attendance/ccis-attendance-merged/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1242): Illuminate\\Foundation\\Console\\Kernel->handle(Object(Symfony\\Component\\Console\\Input\\ArgvInput), Object(Symfony\\Component\\Console\\Output\\ConsoleOutput))
+#5 /Users/raphaellouisgabion/Documents/Attendance/Attendance/ccis-attendance-merged/artisan(16): Illuminate\\Foundation\\Application->handleCommand(Object(Symfony\\Component\\Console\\Input\\ArgvInput))
+#6 {main}
+"} 

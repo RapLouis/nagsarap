@@ -21,8 +21,8 @@ class ApiConfig {
   /// --------------------------------------------------------------------------
 
   static const String baseUrl = String.fromEnvironment(
-    'API_BASE_URL',
-    defaultValue: 'https://www.cabiebies.tech',
+    'API_BASE_URL', 
+      defaultValue: 'https://femur-sulfur-capricorn.ngrok-free.dev',
   );
 
   /// Laravel connection timeout.
