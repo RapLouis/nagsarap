@@ -66,15 +66,38 @@ class AttendanceController extends Controller
         $user = $request->user();
         $student = $user?->student;
 
-        if (!$student) {
+        // 1. Verify student record and face biometrics registration status (matches web controller)
+        if (!$student || $student->verification_status !== 'verified' || !$student->face_embedding) {
             return response()->json([
                 'success' => false,
-                'code' => 'STUDENT_REQUIRED',
-                'message' => 'Student record not found.',
+                'code' => 'STUDENT_NOT_VERIFIED',
+                'message' => 'Your face biometrics are not registered or verified yet.',
             ], 403);
         }
 
         $event = Event::findOrFail($validated['event_id']);
+
+        // 2. Ensure event is active (matches web controller)
+        if (!($event->is_active ?? true)) {
+            return response()->json([
+                'success' => false,
+                'code' => 'EVENT_INACTIVE',
+                'message' => 'Attendance check-in for this event is currently closed.',
+            ], 422);
+        }
+
+        // 3. Prevent duplicate check-ins (matches web controller)
+        $alreadyCheckedIn = Attendance::where('student_id', $student->student_id)
+            ->where('event_id', $event->event_id)
+            ->exists();
+
+        if ($alreadyCheckedIn) {
+            return response()->json([
+                'success' => false,
+                'code' => 'ALREADY_CHECKED_IN',
+                'message' => 'You have already checked in for this event.',
+            ], 422);
+        }
 
         $challenge = $challenges->consume(
             $student->student_id,
@@ -129,6 +152,34 @@ class AttendanceController extends Controller
             ], 422);
         }
 
+        // 4. Extract live frontal embedding and perform Cosine Similarity check against profile embedding (matches web controller)
+        $liveEmbedding = $liveness['frontal_embedding'] ?? null;
+
+        if (!is_array($liveEmbedding) || !$liveEmbedding) {
+            return response()->json([
+                'success' => false,
+                'code' => 'EMBEDDING_EXTRACTION_FAILED',
+                'message' => 'The camera could not produce a usable face embedding. Please try again.',
+            ], 422);
+        }
+
+        $similarity = BiometricService::cosineSimilarity(
+            $liveEmbedding,
+            $student->face_embedding
+        );
+
+        $threshold = (float) config('face_verification.profile_match_threshold', 0.50);
+
+        if ($similarity < $threshold) {
+            $this->notify($request, $event, false, 'Face verification failed.');
+
+            return response()->json([
+                'success' => false,
+                'code' => 'FACE_MISMATCH',
+                'message' => 'Face verification failed. Please face the camera clearly and try again.',
+            ], 422);
+        }
+
         try {
             $attendance = $service->record(
                 user: $user,
@@ -143,6 +194,10 @@ class AttendanceController extends Controller
                 source: 'mobile_online',
                 isOfflineSync: false
             );
+
+            // Update attendance confidence score with the computed cosine similarity
+            $attendance->update(['confidence_score' => round($similarity, 4)]);
+
         } catch (AttendanceException $e) {
             $this->notify($request, $event, false, $e->getMessage());
 
@@ -169,6 +224,7 @@ class AttendanceController extends Controller
             'data' => [
                 'attendance' => $attendance->load('event'),
                 'liveness' => $liveness,
+                'similarity_score' => round($similarity, 4),
                 'geofence' => [
                     'passed' => true,
                     'distance_meters' => $attendance->distance_from_event,
@@ -199,6 +255,16 @@ class AttendanceController extends Controller
         ]);
 
         $user = $request->user();
+        $student = $user?->student;
+
+        if (!$student || $student->verification_status !== 'verified' || !$student->face_embedding) {
+            return response()->json([
+                'success' => false,
+                'code' => 'STUDENT_NOT_VERIFIED',
+                'message' => 'Your face biometrics are not registered or verified yet.',
+            ], 403);
+        }
+
         $event = Event::findOrFail($validated['event_id']);
         $direction = $validated['liveness_direction'];
 
@@ -224,6 +290,20 @@ class AttendanceController extends Controller
             ], 422);
         }
 
+        $liveEmbedding = $liveness['frontal_embedding'] ?? null;
+        if (is_array($liveEmbedding) && $liveEmbedding) {
+            $similarity = BiometricService::cosineSimilarity($liveEmbedding, $student->face_embedding);
+            $threshold = (float) config('face_verification.profile_match_threshold', 0.50);
+
+            if ($similarity < $threshold) {
+                return response()->json([
+                    'success' => false,
+                    'code' => 'FACE_MISMATCH',
+                    'message' => 'Face verification failed. Please face the camera clearly and try again.',
+                ], 422);
+            }
+        }
+
         try {
             $attendance = $service->record(
                 user: $user,
@@ -240,6 +320,11 @@ class AttendanceController extends Controller
                 source: 'mobile_offline',
                 isOfflineSync: true
             );
+
+            if (isset($similarity)) {
+                $attendance->update(['confidence_score' => round($similarity, 4)]);
+            }
+
         } catch (AttendanceException $e) {
             return response()->json([
                 'success' => false,
