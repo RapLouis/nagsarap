@@ -48,3 +48,4 @@ class StudentCheckInController extends Controller
             'activeEvents' => $activeEvents,
         ]);
     }
+}

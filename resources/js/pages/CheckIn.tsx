@@ -563,24 +563,24 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
             formData.append('turn_peak_frame', peak, 'turn-peak.jpg');
             formData.append('direction', direction);
 
-           router.post('/attendance/check-in', formData, {
-            forceFormData: true,
-            onSuccess: () => {
-                setIsSubmitting(false);
-                goToStep('PASSED');
-                setSuccessMessage('Successfully checked in!');
-                onSuccess(event.event_id);
+            router.post('/attendance/check-in', formData, {
+                forceFormData: true,
+                onSuccess: () => {
+                    setIsSubmitting(false);
+                    goToStep('PASSED');
+                    setSuccessMessage('Successfully checked in!');
+                    onSuccess(event.event_id);
 
-                // Tell Inertia to immediately fetch fresh props from the server
-                router.reload({ only: ['student', 'activeEvents'] });
+                    // Tell Inertia to immediately fetch fresh props from the server
+                    router.reload({ only: ['student', 'activeEvents'] });
 
-                setTimeout(() => onClose(), 1800);
-            },
-            onError: (errors: any) => {
-                setIsSubmitting(false);
-                setModalError(errors.attendance || errors.live_camera_frame || 'Verification failed.');
-            },
-        });
+                    setTimeout(() => onClose(), 1800);
+                },
+                onError: (errors: any) => {
+                    setIsSubmitting(false);
+                    setModalError(errors.attendance || errors.live_camera_frame || 'Verification failed.');
+                },
+            });
         
         } catch (err) {
             setIsSubmitting(false);

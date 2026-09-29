@@ -6,6 +6,7 @@ use App\Http\Controllers\AttendanceController;
 use App\Http\Controllers\EventController;
 use App\Http\Controllers\FaceVerificationController;
 use App\Http\Controllers\Admin\AnalyticsController;
+use App\Http\Controllers\StudentCheckInController;
 use App\Models\Event;
 use App\Models\Student;
 use Illuminate\Support\Facades\Auth;
@@ -55,6 +56,16 @@ Route::middleware(['auth', 'verified'])->group(function () {
             'activeEvents' => $activeEvents,
         ]);
     })->name('dashboard');
+
+
+    // =========================================================================
+    // STUDENT CHECK-IN HUB
+    // =========================================================================
+
+    Route::get(
+        '/check-in',
+        [StudentCheckInController::class, 'index']
+    )->name('check-in');
 
 
     // =========================================================================
