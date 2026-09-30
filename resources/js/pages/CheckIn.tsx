@@ -15,6 +15,7 @@ import {
     Loader2,
     Check,
     Eye,
+    MapPin,
 } from 'lucide-react';
 
 type Event = {
@@ -26,6 +27,10 @@ type Event = {
     end_time?: string | null;
     location?: string | null;
     is_active?: boolean;
+    geofence_enabled?: boolean;
+    latitude?: number | null;
+    longitude?: number | null;
+    radius_meters?: number;
 };
 
 type AttendanceLog = {
@@ -229,8 +234,6 @@ export default function CheckIn({ student, activeEvents }: CheckInProps) {
             <Head title="Student Check-in Hub" />
 
             <div className="w-full min-h-screen bg-gray-50 dark:bg-[#030712] text-gray-900 dark:text-white p-6 space-y-6 transition-colors duration-200">
-                
-                {/* HEADER INFO */}
                 <div className="flex w-full items-center justify-between rounded-xl bg-white dark:bg-[#090d16] p-6 shadow-sm border border-gray-100 dark:border-slate-800/60">
                     <div>
                         <h1 className="text-xl font-bold text-gray-900 dark:text-white">
@@ -246,7 +249,6 @@ export default function CheckIn({ student, activeEvents }: CheckInProps) {
                     </div>
                 </div>
 
-                {/* ACTIVE EVENTS GRID / LIST */}
                 <div className="w-full rounded-xl bg-white dark:bg-[#090d16] shadow-sm border border-gray-100 dark:border-slate-800/60 overflow-hidden">
                     <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-slate-800/60">
                         <h2 className="text-base font-bold text-gray-900 dark:text-white">Events open for check-in</h2>
@@ -347,6 +349,10 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
     const [hint, setHint] = useState<string | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
+    // Geolocation states
+    const [locating, setLocating] = useState(true);
+    const [userCoords, setUserCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+
     const stopCameraStream = () => {
         if (videoRef.current?.srcObject) {
             const stream = videoRef.current.srcObject as MediaStream;
@@ -377,9 +383,65 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
         goToStep('LOOK_CENTER');
     };
 
+    // 1. Check Location First Before Initializing Camera
+    const verifyLocationAndStart = () => {
+        setLocating(true);
+        setModalError(null);
+
+        if (!navigator.geolocation) {
+            setLocating(false);
+            setModalError('Geolocation is not supported by your browser.');
+            return;
+        }
+
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                if (!mountedRef.current) return;
+                const lat = position.coords.latitude;
+                const lng = position.coords.longitude;
+
+                setUserCoords({ latitude: lat, longitude: lng });
+
+                // Client-side quick geofence calculation if event data is present
+                if (event.geofence_enabled && event.latitude && event.longitude && event.radius_meters) {
+                    const distance = getDistanceFromLatLonInMeters(lat, lng, event.latitude, event.longitude);
+                    if (distance > event.radius_meters) {
+                        setLocating(false);
+                        const remaining = Math.round(distance - event.radius_meters);
+                        setModalError(`You are outside the event area. Move about ${remaining}m closer to check in.`);
+                        return;
+                    }
+                }
+
+                setLocating(false);
+                initializeCameraAndModel();
+            },
+            (error) => {
+                if (!mountedRef.current) return;
+                setLocating(false);
+                setModalError('Location access is required. Please enable GPS permissions.');
+            },
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        );
+    };
+
+    // Haversine formula for distance check on client side
+    const getDistanceFromLatLonInMeters = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+        const R = 6371000; // Radius of the earth in meters
+        const dLat = deg2rad(lat2 - lat1);
+        const dLon = deg2rad(lon2 - lon1);
+        const a =
+            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    };
+
+    const deg2rad = (deg: number) => deg * (Math.PI / 180);
+
     const initializeCameraAndModel = async () => {
         setCameraError(null);
-        setModalError(null);
         setStreamStarted(false);
         setModelReady(false);
 
@@ -420,7 +482,7 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
 
     useEffect(() => {
         mountedRef.current = true;
-        initializeCameraAndModel();
+        verifyLocationAndStart(); // Trigger location check first upon modal open
 
         return () => {
             mountedRef.current = false;
@@ -431,7 +493,7 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
     }, []);
 
     useEffect(() => {
-        if (!streamStarted || !modelReady || modalError !== null || successMessage !== null) return;
+        if (!streamStarted || !modelReady || modalError !== null || successMessage !== null || locating) return;
 
         let stopped = false;
 
@@ -538,7 +600,7 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
             stopped = true;
             if (requestRef.current !== null) cancelAnimationFrame(requestRef.current);
         };
-    }, [streamStarted, modelReady, modalError, successMessage, direction]);
+    }, [streamStarted, modelReady, modalError, successMessage, direction, locating]);
 
     const submitAttendance = async (
         frontalPromise: Promise<Blob | null> | null,
@@ -562,6 +624,11 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
             formData.append('live_camera_frame', frontal, 'frontal.jpg');
             formData.append('turn_peak_frame', peak, 'turn-peak.jpg');
             formData.append('direction', direction);
+            
+            if (userCoords) {
+                formData.append('latitude', String(userCoords.latitude));
+                formData.append('longitude', String(userCoords.longitude));
+            }
 
             router.post('/attendance/check-in', formData, {
                 forceFormData: true,
@@ -570,10 +637,7 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
                     goToStep('PASSED');
                     setSuccessMessage('Successfully checked in!');
                     onSuccess(event.event_id);
-
-                    // Tell Inertia to immediately fetch fresh props from the server
                     router.reload({ only: ['student', 'activeEvents'] });
-
                     setTimeout(() => onClose(), 1800);
                 },
                 onError: (errors: any) => {
@@ -581,7 +645,6 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
                     setModalError(errors.attendance || errors.live_camera_frame || 'Verification failed.');
                 },
             });
-        
         } catch (err) {
             setIsSubmitting(false);
             setModalError('Failed to process frames.');
@@ -589,6 +652,7 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
     };
 
     const instruction = (() => {
+        if (locating) return { text: 'Checking your location...', icon: MapPin, spin: true };
         switch (step) {
             case 'LOOK_CENTER':
                 return { text: 'Look straight at the camera', icon: Eye, spin: false };
@@ -613,7 +677,7 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
                         <X className="h-5 w-5" />
                     </button>
                     <h2 className="text-lg font-bold pr-8">{event.title}</h2>
-                    <p className="mt-1 text-xs text-gray-500">Active Liveness Attendance Check-in</p>
+                    <p className="text-xs text-gray-500">Active Liveness & Geofence Check-in</p>
                 </div>
 
                 <div className="flex flex-col items-center px-6 py-6">
@@ -634,25 +698,19 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
                                     playsInline 
                                     muted 
                                     onCanPlay={() => setStreamStarted(true)}
-                                    className={`h-full w-full object-cover scale-x-[-1] transition-opacity duration-300 ${(!streamStarted || !modelReady) ? 'opacity-0' : 'opacity-100'}`} 
+                                    className={`h-full w-full object-cover scale-x-[-1] transition-opacity duration-300 ${(!streamStarted || !modelReady || locating) ? 'opacity-0' : 'opacity-100'}`} 
                                 />
 
-                                {(!streamStarted || !modelReady) && !cameraError && (
+                                {(locating || !streamStarted || !modelReady) && !cameraError && !modalError && (
                                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900/90 text-white p-4 text-center z-10">
                                         <Loader2 className="h-8 w-8 animate-spin text-[#C9973E] mb-2" />
                                         <p className="text-[11px] font-medium">
-                                            {!streamStarted ? 'Opening camera...' : 'Initializing AI model...'}
+                                            {locating ? 'Acquiring GPS location...' : !streamStarted ? 'Opening camera...' : 'Initializing AI model...'}
                                         </p>
                                     </div>
                                 )}
 
                                 <div className="pointer-events-none absolute inset-2 rounded-full border-2 border-dashed border-[#F5A623] animate-pulse z-20" />
-                                
-                                {step === 'TURN' && (
-                                    <div className={`absolute top-1/2 -translate-y-1/2 rounded-full bg-black/60 p-2 text-white z-30 ${direction === 'left' ? 'left-2' : 'right-2'}`}>
-                                        <ActiveIcon className="h-6 w-6 animate-pulse" />
-                                    </div>
-                                )}
                             </div>
 
                             <div className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold border mb-2 transition-colors duration-200 ${
@@ -670,7 +728,7 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
                                 <div className="mt-2 flex flex-col items-center gap-2">
                                     <p className="text-[11px] text-red-600 text-center">{modalError}</p>
                                     <button 
-                                        onClick={() => { setModalError(null); resetChallenge(); }}
+                                        onClick={() => { setModalError(null); verifyLocationAndStart(); }}
                                         className="mt-1 rounded-full bg-gray-100 dark:bg-slate-800 px-3 py-1 text-[11px] font-semibold text-gray-700 dark:text-gray-300"
                                     >
                                         Try Again

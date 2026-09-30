@@ -66,8 +66,12 @@ class AttendanceController extends Controller
         $user = $request->user();
         $student = $user?->student;
 
-        // 1. Verify student record and face biometrics registration status (matches web controller)
-        if (!$student || $student->verification_status !== 'verified' || !$student->face_embedding) {
+        // 1. Verify student and biometric registration.
+        if (
+            !$student ||
+            $student->verification_status !== 'verified' ||
+            !$student->face_embedding
+        ) {
             return response()->json([
                 'success' => false,
                 'code' => 'STUDENT_NOT_VERIFIED',
@@ -77,7 +81,7 @@ class AttendanceController extends Controller
 
         $event = Event::findOrFail($validated['event_id']);
 
-        // 2. Ensure event is active (matches web controller)
+        // 2. Ensure the event is active.
         if (!($event->is_active ?? true)) {
             return response()->json([
                 'success' => false,
@@ -86,7 +90,7 @@ class AttendanceController extends Controller
             ], 422);
         }
 
-        // 3. Prevent duplicate check-ins (matches web controller)
+        // 3. Prevent duplicate check-ins.
         $alreadyCheckedIn = Attendance::where('student_id', $student->student_id)
             ->where('event_id', $event->event_id)
             ->exists();
@@ -99,6 +103,7 @@ class AttendanceController extends Controller
             ], 422);
         }
 
+        // 4. Validate the server-issued liveness challenge.
         $challenge = $challenges->consume(
             $student->student_id,
             $validated['challenge_nonce'],
@@ -124,6 +129,7 @@ class AttendanceController extends Controller
 
         $direction = $challenge['direction'];
 
+        // 5. Perform liveness verification.
         try {
             $liveness = $bio->verifyLiveness(
                 $direction,
@@ -131,7 +137,12 @@ class AttendanceController extends Controller
                 $request->file('turned_frame')
             );
         } catch (\Throwable $e) {
-            $this->notify($request, $event, false, $e->getMessage());
+            $this->notify(
+                $request,
+                $event,
+                false,
+                $e->getMessage()
+            );
 
             return response()->json([
                 'success' => false,
@@ -142,17 +153,25 @@ class AttendanceController extends Controller
 
         if (!($liveness['passed'] ?? false)) {
             $message = $liveness['detail'] ?? 'Liveness verification failed.';
-            $this->notify($request, $event, false, $message);
+
+            $this->notify(
+                $request,
+                $event,
+                false,
+                $message
+            );
 
             return response()->json([
                 'success' => false,
                 'code' => 'LIVENESS_FAILED',
                 'message' => $message,
-                'data' => ['direction' => $direction],
+                'data' => [
+                    'direction' => $direction,
+                ],
             ], 422);
         }
 
-        // 4. Extract live frontal embedding and perform Cosine Similarity check against profile embedding (matches web controller)
+        // 6. Verify the live face against the registered student face.
         $liveEmbedding = $liveness['frontal_embedding'] ?? null;
 
         if (!is_array($liveEmbedding) || !$liveEmbedding) {
@@ -168,18 +187,40 @@ class AttendanceController extends Controller
             $student->face_embedding
         );
 
-        $threshold = (float) config('face_verification.profile_match_threshold', 0.50);
+        $threshold = (float) config(
+            'face_verification.profile_match_threshold',
+            0.50
+        );
 
         if ($similarity < $threshold) {
-            $this->notify($request, $event, false, 'Face verification failed.');
+            $this->notify(
+                $request,
+                $event,
+                false,
+                'Face verification failed.'
+            );
 
             return response()->json([
                 'success' => false,
                 'code' => 'FACE_MISMATCH',
                 'message' => 'Face verification failed. Please face the camera clearly and try again.',
+                'data' => [
+                    'similarity_score' => round($similarity, 4),
+                    'required_score' => $threshold,
+                ],
             ], 422);
         }
 
+        // 7. Record attendance.
+        //
+        // AttendanceService is the authoritative server-side validation layer.
+        // This includes:
+        // - student verification
+        // - event window
+        // - GPS accuracy
+        // - radius geofence
+        // - duplicate protection
+        // - attendance creation
         try {
             $attendance = $service->record(
                 user: $user,
@@ -195,11 +236,18 @@ class AttendanceController extends Controller
                 isOfflineSync: false
             );
 
-            // Update attendance confidence score with the computed cosine similarity
-            $attendance->update(['confidence_score' => round($similarity, 4)]);
+            // Keep the similarity calculated from the verified liveness result.
+            $attendance->update([
+                'confidence_score' => round($similarity, 4),
+            ]);
 
         } catch (AttendanceException $e) {
-            $this->notify($request, $event, false, $e->getMessage());
+            $this->notify(
+                $request,
+                $event,
+                false,
+                $e->getMessage()
+            );
 
             return response()->json([
                 'success' => false,
@@ -227,12 +275,13 @@ class AttendanceController extends Controller
                 'similarity_score' => round($similarity, 4),
                 'geofence' => [
                     'passed' => true,
-                    'distance_meters' => $attendance->distance_from_event,
+                    'distance_meters' => $attendance->distance_from_event ?? 0,
                     'allowed_radius_meters' => $event->radius_meters,
                 ],
             ],
         ]);
     }
+
 
     /**
      * Synchronize an offline center + turn attendance record.
