@@ -30,15 +30,14 @@ class _AttendanceFaceVerificationScreenState
   static const Color gold = Color(0xFFFFC800);
   static const Color background = Color(0xFFF7F7FB);
 
-  // Tolerant live guidance: the face can sit slightly off-center.
-  // Final Laravel/Python verification remains authoritative.
   static const double centerYawLimit = 0.30;
   static const double turnYawDelta = 0.07;
   static const int stableFramesRequired = 1;
-
   static const Duration offlinePoseDelay = Duration(milliseconds: 300);
-
   static const int maxBadFramesBeforeMessage = 8;
+  
+  // Throttle interval to prevent spamming backend requests
+  static const Duration analysisThrottle = Duration(milliseconds: 1000);
 
   CameraController? _camera;
   Position? _position;
@@ -59,6 +58,7 @@ class _AttendanceFaceVerificationScreenState
   double? _bestTurnDelta;
   String? _error;
 
+  DateTime? _lastAnalysisTime;
   _AttendanceStep _step = _AttendanceStep.center;
 
   XFile? _centerFrame;
@@ -90,10 +90,6 @@ class _AttendanceFaceVerificationScreenState
 
       _positionFuture = null;
 
-      // Permission order is deliberate: camera permission is requested first
-      // so iOS/Android do not show two system permission dialogs at once.
-      // Once the user grants camera access, GPS permission and the server
-      // challenge are started together.
       await _startCamera();
 
       if (!mounted || _disposed) {
@@ -115,10 +111,6 @@ class _AttendanceFaceVerificationScreenState
         eventId: eventId,
       );
 
-      // Start biometric frame analysis immediately after camera permission is
-      // granted. Center-face detection does not need the LEFT/RIGHT challenge,
-      // so the phone can capture the centered frame while the challenge and GPS
-      // are still loading. This removes avoidable network wait time.
       unawaited(_startOnline());
 
       final challengeResult = await challengeFuture;
@@ -145,18 +137,12 @@ class _AttendanceFaceVerificationScreenState
       _challengeNonce = challenge.nonce;
       _challengeSessionId = challenge.sessionId;
 
-      // If CENTER was captured while the challenge was loading, go directly
-      // to the requested turn without another preparation phase.
       if (_centerFrame != null && mounted && _step == _AttendanceStep.center) {
         setState(() {
           _step = _AttendanceStep.turn;
           _error = null;
         });
       }
-
-      // _startOnline() is already running. Do not start a second analysis loop.
-      // GPS may still be finishing; _submitOnline waits only if necessary.
-
     } catch (e) {
       if (!mounted || _disposed) {
         return;
@@ -207,8 +193,7 @@ class _AttendanceFaceVerificationScreenState
 
     if (!enabled) {
       throw Exception(
-        'Location services are disabled. '
-        'Turn on Location/GPS and try again.',
+        'Location services are disabled. Turn on Location/GPS and try again.',
       );
     }
 
@@ -224,8 +209,7 @@ class _AttendanceFaceVerificationScreenState
 
     if (permission == LocationPermission.deniedForever) {
       throw Exception(
-        'Location permission is permanently denied. '
-        'Enable it from the app settings.',
+        'Location permission is permanently denied. Enable it from settings.',
       );
     }
 
@@ -238,15 +222,10 @@ class _AttendanceFaceVerificationScreenState
       );
     } catch (_) {
       final lastKnown = await Geolocator.getLastKnownPosition();
-
       if (lastKnown != null) {
         return lastKnown;
       }
-
-      throw Exception(
-        'Unable to get your location. '
-        'Keep Location/GPS turned on and try again.',
-      );
+      throw Exception('Unable to get your location. Keep GPS turned on.');
     }
   }
 
@@ -272,10 +251,8 @@ class _AttendanceFaceVerificationScreenState
 
     if (distance > radius) {
       final remaining = distance - radius;
-
       throw Exception(
-        'You are outside the event area. Move about '
-        '${remaining.round()} m closer to the event location and try again.',
+        'You are outside the event area. Move about ${remaining.round()} m closer.',
       );
     }
   }
@@ -283,13 +260,11 @@ class _AttendanceFaceVerificationScreenState
   Future<void> _startCamera() async {
     try {
       final cameras = await availableCameras();
-
       if (cameras.isEmpty) {
         throw Exception('No camera is available on this device.');
       }
 
       CameraDescription selectedCamera = cameras.first;
-
       for (final camera in cameras) {
         if (camera.lensDirection == CameraLensDirection.front) {
           selectedCamera = camera;
@@ -299,36 +274,12 @@ class _AttendanceFaceVerificationScreenState
 
       final controller = CameraController(
         selectedCamera,
-        // Low is used for the repeated liveness-analysis frames. The server
-        // only needs enough detail to estimate face pose; this keeps uploads
-        // small and makes the mobile flow much more responsive.
         ResolutionPreset.low,
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.jpeg,
       );
 
-      try {
-        await controller.initialize();
-      } on CameraException catch (e) {
-        await controller.dispose();
-
-        if (e.code == 'CameraAccessDenied' ||
-            e.code == 'CameraAccessDeniedWithoutPrompt') {
-          throw Exception(
-            'Camera permission is denied. Allow camera access for CCIS Attendance in Settings, then tap Try Again.',
-          );
-        }
-
-        if (e.code == 'CameraAccessRestricted') {
-          throw Exception(
-            'Camera access is restricted on this device. Enable camera access and try again.',
-          );
-        }
-
-        throw Exception(
-          'Unable to start the camera (${e.code}). Please try again.',
-        );
-      }
+      await controller.initialize();
 
       if (!mounted || _disposed) {
         await controller.dispose();
@@ -336,35 +287,22 @@ class _AttendanceFaceVerificationScreenState
       }
 
       _camera = controller;
-
       setState(() {
         _initializing = false;
         _error = null;
         _step = _AttendanceStep.center;
       });
     } on CameraException catch (e) {
-      if (e.code == 'CameraAccessDenied' ||
-          e.code == 'CameraAccessDeniedWithoutPrompt') {
-        throw Exception(
-          'Camera permission is denied. Allow camera access for CCIS Attendance in Settings, then tap Try Again.',
-        );
-      }
-
-      throw Exception(
-        'Unable to start the camera (${e.code}). Please try again.',
-      );
+      throw Exception('Unable to start the camera (${e.code}).');
     }
   }
 
   void _resetEvidence() {
     _centerFrame = null;
     _turnedFrame = null;
-
     _offlineCenterFrame = null;
     _offlineTurnedFrame = null;
-
     _centerYaw = null;
-
     _badFrames = 0;
     _stableCenterFrames = 0;
     _stableTurnFrames = 0;
@@ -380,7 +318,6 @@ class _AttendanceFaceVerificationScreenState
     }
 
     _resetEvidence();
-
     _offlineMode = false;
 
     if (!mounted) {
@@ -399,14 +336,10 @@ class _AttendanceFaceVerificationScreenState
         !_offlineMode &&
         _step != _AttendanceStep.verifying &&
         _step != _AttendanceStep.failed) {
+      
+      // Enforce pacing/throttling between frame checks
+      await Future.delayed(const Duration(milliseconds: 200));
       await _analyzeOnlineFrame();
-
-      if (!_running || _offlineMode || _disposed) {
-        break;
-      }
-
-      // The network request itself provides the pacing. Do not add another
-      // artificial delay after each analyzed frame.
     }
   }
 
@@ -415,8 +348,14 @@ class _AttendanceFaceVerificationScreenState
       return;
     }
 
-    final camera = _camera;
+    // Apply strict time throttling to prevent network spamming
+    final now = DateTime.now();
+    if (_lastAnalysisTime != null &&
+        now.difference(_lastAnalysisTime!) < analysisThrottle) {
+      return;
+    }
 
+    final camera = _camera;
     if (camera == null ||
         !camera.value.isInitialized ||
         camera.value.isTakingPicture) {
@@ -424,6 +363,7 @@ class _AttendanceFaceVerificationScreenState
     }
 
     _analyzing = true;
+    _lastAnalysisTime = now;
 
     try {
       final frame = await camera.takePicture();
@@ -443,7 +383,6 @@ class _AttendanceFaceVerificationScreenState
 
       if (!result.success || !result.faceDetected) {
         _badFrames++;
-
         if (_badFrames >= maxBadFramesBeforeMessage) {
           setState(() {
             _error = result.message.isNotEmpty
@@ -451,39 +390,21 @@ class _AttendanceFaceVerificationScreenState
                 : 'Keep one face clearly visible inside the camera.';
           });
         }
-
-        // Do not move to another challenge.
         return;
       }
 
       final yaw = result.yaw;
-
-      if (yaw == null) {
+      if (yaw == null || !result.faceInComfortableZone) {
         _badFrames++;
-
         if (_badFrames >= maxBadFramesBeforeMessage) {
           setState(() {
-            _error = 'Keep your face clearly visible while the camera reads your head position.';
+            _error = 'Position your face clearly in the center frame.';
           });
         }
-
-        return;
-      }
-
-      if (!result.faceInComfortableZone) {
-        _badFrames++;
-
-        if (_badFrames >= maxBadFramesBeforeMessage) {
-          setState(() {
-            _error = 'Move slightly closer to the middle so your whole face stays visible.';
-          });
-        }
-
         return;
       }
 
       _badFrames = 0;
-
       if (_error != null) {
         setState(() {
           _error = null;
@@ -495,7 +416,6 @@ class _AttendanceFaceVerificationScreenState
       if (!mounted || _disposed) {
         return;
       }
-
       setState(() {
         _error = _cleanError(e);
       });
@@ -512,7 +432,6 @@ class _AttendanceFaceVerificationScreenState
       case _AttendanceStep.center:
         if (yaw.abs() <= centerYawLimit) {
           _stableCenterFrames++;
-
           final currentBest = _centerYaw;
           if (currentBest == null || yaw.abs() < currentBest.abs()) {
             _centerFrame = frame;
@@ -520,13 +439,7 @@ class _AttendanceFaceVerificationScreenState
           }
 
           if (_stableCenterFrames >= stableFramesRequired) {
-            if (!mounted) {
-              return;
-            }
-
-            // Keep the captured center evidence immediately. If the server
-            // challenge has already arrived, move straight to TURN. If it is
-            // still in flight, remain on CENTER until the direction arrives.
+            if (!mounted) return;
             if (_challengeDirection != null) {
               setState(() {
                 _step = _AttendanceStep.turn;
@@ -541,23 +454,19 @@ class _AttendanceFaceVerificationScreenState
 
       case _AttendanceStep.turn:
         final centerYaw = _centerYaw;
-
         if (centerYaw == null) {
           _stableCenterFrames = 0;
           return;
         }
 
         final direction = _challengeDirection;
-        if (direction == null) {
-          return;
-        }
+        if (direction == null) return;
 
         final signedDelta = yaw - centerYaw;
         final requestedDelta = direction == 'left' ? signedDelta : -signedDelta;
 
         if (requestedDelta >= turnYawDelta) {
           _stableTurnFrames++;
-
           if (_bestTurnDelta == null || requestedDelta > _bestTurnDelta!) {
             _bestTurnDelta = requestedDelta;
             _turnedFrame = frame;
@@ -570,7 +479,6 @@ class _AttendanceFaceVerificationScreenState
           _stableTurnFrames = 0;
         }
         break;
-
 
       case _AttendanceStep.verifying:
       case _AttendanceStep.failed:
@@ -627,10 +535,7 @@ class _AttendanceFaceVerificationScreenState
     if (!mounted || _disposed) return;
 
     if (result.networkUnavailable) {
-      await _saveOffline(
-        centerFrame: centerFrame,
-        turnedFrame: turnedFrame,
-      );
+      await _saveOffline(centerFrame: centerFrame, turnedFrame: turnedFrame);
       return;
     }
 
@@ -648,7 +553,6 @@ class _AttendanceFaceVerificationScreenState
 
   void _beginOffline() {
     if (_offlineMode || _disposed) return;
-
     _offlineGeneration++;
     final generation = _offlineGeneration;
 
@@ -690,10 +594,7 @@ class _AttendanceFaceVerificationScreenState
         throw Exception('Camera is not ready.');
       }
 
-      if (mounted) {
-        setState(() => _offlineCaptureBusy = true);
-      }
-
+      if (mounted) setState(() => _offlineCaptureBusy = true);
       final center = await camera.takePicture();
       _offlineCenterFrame = center;
 
@@ -707,10 +608,7 @@ class _AttendanceFaceVerificationScreenState
       await Future<void>.delayed(offlinePoseDelay);
       if (!_offlineSequenceActive(generation)) return;
 
-      if (mounted) {
-        setState(() => _offlineCaptureBusy = true);
-      }
-
+      if (mounted) setState(() => _offlineCaptureBusy = true);
       final turned = await camera.takePicture();
       _offlineTurnedFrame = turned;
 
@@ -723,10 +621,7 @@ class _AttendanceFaceVerificationScreenState
 
       if (!_offlineSequenceActive(generation)) return;
 
-      await _saveOffline(
-        centerFrame: center,
-        turnedFrame: turned,
-      );
+      await _saveOffline(centerFrame: center, turnedFrame: turned);
     } catch (e) {
       if (_offlineSequenceActive(generation)) {
         _fail(_cleanError(e));
@@ -738,10 +633,7 @@ class _AttendanceFaceVerificationScreenState
     }
   }
 
-  Future<void> _saveOffline({
-    XFile? centerFrame,
-    XFile? turnedFrame,
-  }) async {
+  Future<void> _saveOffline({XFile? centerFrame, XFile? turnedFrame}) async {
     final eventId = widget.event.id;
     final position = _position;
     final center = centerFrame ?? _offlineCenterFrame;
@@ -779,7 +671,6 @@ class _AttendanceFaceVerificationScreenState
     );
 
     if (!mounted || _disposed) return;
-
     setState(() => _offlineCaptureBusy = false);
 
     if (!result.success) {
@@ -795,14 +686,11 @@ class _AttendanceFaceVerificationScreenState
   }
 
   void _fail(String message) {
-    if (!mounted || _disposed) {
-      return;
-    }
+    if (!mounted || _disposed) return;
 
     _running = false;
     _offlineMode = false;
     _offlineCaptureBusy = false;
-
     _offlineGeneration++;
 
     setState(() {
@@ -812,9 +700,7 @@ class _AttendanceFaceVerificationScreenState
   }
 
   Future<void> _retry() async {
-    if (_disposed) {
-      return;
-    }
+    if (_disposed) return;
 
     _running = false;
     _offlineMode = false;
@@ -833,41 +719,28 @@ class _AttendanceFaceVerificationScreenState
 
     try {
       final eventId = widget.event.id;
-
-      if (eventId == null) {
-        throw Exception('Invalid event ID.');
-      }
+      if (eventId == null) throw Exception('Invalid event ID.');
 
       if (_camera == null || !_camera!.value.isInitialized) {
         await _startCamera();
       }
 
-      if (!mounted || _disposed) {
-        return;
-      }
+      if (!mounted || _disposed) return;
 
-      // Camera permission has already been granted at this point. Start GPS,
-      // the server challenge, and CENTER analysis together.
       final positionFuture = _getPosition();
       _positionFuture = positionFuture;
       unawaited(_watchPosition(positionFuture));
 
       final challengeFuture =
-          AttendanceService.instance.requestLivenessChallenge(
-        eventId: eventId,
-      );
+          AttendanceService.instance.requestLivenessChallenge(eventId: eventId);
 
       unawaited(_startOnline());
 
       final challengeResult = await challengeFuture;
-
-      if (!mounted || _disposed) {
-        return;
-      }
+      if (!mounted || _disposed) return;
 
       if (challengeResult.networkUnavailable) {
-        _offlineDirection =
-            DateTime.now().microsecond.isEven ? 'right' : 'left';
+        _offlineDirection = DateTime.now().microsecond.isEven ? 'right' : 'left';
         _beginOffline();
         return;
       }
@@ -877,7 +750,6 @@ class _AttendanceFaceVerificationScreenState
       }
 
       final challenge = challengeResult.challenge!;
-
       _challengeDirection = challenge.direction;
       _offlineDirection = challenge.direction;
       _challengeNonce = challenge.nonce;
@@ -890,10 +762,7 @@ class _AttendanceFaceVerificationScreenState
         });
       }
     } catch (e) {
-      if (!mounted || _disposed) {
-        return;
-      }
-
+      if (!mounted || _disposed) return;
       _fail(_cleanError(e));
     }
   }
@@ -903,18 +772,14 @@ class _AttendanceFaceVerificationScreenState
     required String message,
     required bool offline,
   }) async {
-    if (!mounted || _disposed) {
-      return;
-    }
+    if (!mounted || _disposed) return;
 
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) {
         return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(22),
-          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
           contentPadding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -923,19 +788,13 @@ class _AttendanceFaceVerificationScreenState
                 width: 72,
                 height: 72,
                 decoration: BoxDecoration(
-                  color: offline
-                      ? const Color(0xFFFFF3CD)
-                      : const Color(0xFFE8F8EE),
+                  color: offline ? const Color(0xFFFFF3CD) : const Color(0xFFE8F8EE),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
-                  offline
-                      ? Icons.cloud_off_rounded
-                      : Icons.check_circle_rounded,
+                  offline ? Icons.cloud_off_rounded : Icons.check_circle_rounded,
                   size: 42,
-                  color: offline
-                      ? const Color(0xFFB88600)
-                      : const Color(0xFF0A9F4B),
+                  color: offline ? const Color(0xFFB88600) : const Color(0xFF0A9F4B),
                 ),
               ),
               const SizedBox(height: 18),
@@ -954,27 +813,6 @@ class _AttendanceFaceVerificationScreenState
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: Color(0xFF626273), height: 1.4),
               ),
-              if (offline) ...[
-                const SizedBox(height: 14),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFF8DF),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Text(
-                    'This attendance is pending and will be '
-                    'synchronized when internet becomes available.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: navy,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
               const SizedBox(height: 20),
               SizedBox(
                 width: double.infinity,
@@ -984,9 +822,7 @@ class _AttendanceFaceVerificationScreenState
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
-                  onPressed: () {
-                    Navigator.of(dialogContext).pop();
-                  },
+                  onPressed: () => Navigator.of(dialogContext).pop(),
                   child: const Text('Done'),
                 ),
               ),
@@ -996,10 +832,7 @@ class _AttendanceFaceVerificationScreenState
       },
     );
 
-    if (!mounted || _disposed) {
-      return;
-    }
-
+    if (!mounted || _disposed) return;
     Navigator.of(context).pop(true);
   }
 
@@ -1007,41 +840,26 @@ class _AttendanceFaceVerificationScreenState
     if (_offlineMode) {
       switch (_step) {
         case _AttendanceStep.center:
-          return _offlineCaptureBusy
-              ? 'Capturing your centered face...'
-              : 'Look straight at the camera';
-
+          return _offlineCaptureBusy ? 'Capturing...' : 'Look straight at camera';
         case _AttendanceStep.turn:
           return _offlineCaptureBusy
-              ? 'Capturing your head turn...'
-              : (_offlineDirection == 'right'
-                    ? 'Turn your head to your RIGHT →'
-                    : '← Turn your head to your LEFT');
-
+              ? 'Capturing turn...'
+              : (_offlineDirection == 'right' ? 'Turn RIGHT →' : '← Turn LEFT');
         case _AttendanceStep.verifying:
-          return 'Saving offline attendance...';
-
+          return 'Saving offline...';
         case _AttendanceStep.failed:
-          return 'Verification stopped';
+          return 'Stopped';
       }
     }
 
     switch (_step) {
       case _AttendanceStep.center:
         return 'Look straight at the camera';
-
       case _AttendanceStep.turn:
-        if (_challengeDirection == null) {
-          return 'Look straight at the camera';
-        }
-
-        return _challengeDirection == 'right'
-            ? 'Turn your head to your RIGHT →'
-            : '← Turn your head to your LEFT';
-
+        if (_challengeDirection == null) return 'Look straight at the camera';
+        return _challengeDirection == 'right' ? 'Turn RIGHT →' : '← Turn LEFT';
       case _AttendanceStep.verifying:
         return 'Verifying attendance...';
-
       case _AttendanceStep.failed:
         return 'Verification stopped';
     }
@@ -1051,18 +869,12 @@ class _AttendanceFaceVerificationScreenState
     switch (_step) {
       case _AttendanceStep.center:
         return 1;
-
       case _AttendanceStep.turn:
         return 2;
-
       case _AttendanceStep.verifying:
       case _AttendanceStep.failed:
         return 0;
     }
-  }
-
-  Widget _buildCameraPreview(CameraController camera) {
-    return CameraPreview(camera);
   }
 
   @override
@@ -1151,35 +963,6 @@ class _AttendanceFaceVerificationScreenState
                 ],
               ),
             ),
-
-            if (_offlineMode)
-              Container(
-                width: double.infinity,
-                margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                padding: const EdgeInsets.all(11),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFF3CD),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: gold),
-                ),
-                child: const Row(
-                  children: [
-                    Icon(Icons.cloud_off_rounded, color: navy),
-                    SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        'Offline Mode — attendance evidence '
-                        'will be stored on this device.',
-                        style: TextStyle(
-                          color: navy,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
             Expanded(
               child: Container(
                 width: double.infinity,
@@ -1189,24 +972,20 @@ class _AttendanceFaceVerificationScreenState
                   color: Colors.black,
                   borderRadius: BorderRadius.circular(24),
                 ),
-                child:
-                    camera == null || !camera.value.isInitialized
+                child: camera == null || !camera.value.isInitialized
                     ? Center(
                         child: _error == null
                             ? const CircularProgressIndicator(color: gold)
-                            : const Padding(
-                                padding: EdgeInsets.all(24),
-                                child: Icon(
-                                  Icons.videocam_off_rounded,
-                                  color: Colors.white,
-                                  size: 54,
-                                ),
+                            : const Icon(
+                                Icons.videocam_off_rounded,
+                                color: Colors.white,
+                                size: 54,
                               ),
                       )
                     : Stack(
                         fit: StackFit.expand,
                         children: [
-                          _buildCameraPreview(camera),
+                          CameraPreview(camera),
                           Positioned(
                             left: 18,
                             top: 18,
@@ -1219,19 +998,19 @@ class _AttendanceFaceVerificationScreenState
                                 color: Colors.black54,
                                 borderRadius: BorderRadius.circular(20),
                               ),
-                              child: Row(
+                              child: const Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   Container(
                                     width: 8,
                                     height: 8,
-                                    decoration: const BoxDecoration(
+                                    decoration: BoxDecoration(
                                       color: Colors.greenAccent,
                                       shape: BoxShape.circle,
                                     ),
                                   ),
-                                  const SizedBox(width: 6),
-                                  const Text(
+                                  SizedBox(width: 6),
+                                  Text(
                                     'LIVE',
                                     style: TextStyle(
                                       color: Colors.white,
@@ -1243,59 +1022,10 @@ class _AttendanceFaceVerificationScreenState
                               ),
                             ),
                           ),
-                          if (_offlineMode)
-                            Positioned(
-                              right: 18,
-                              top: 18,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 6,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: gold,
-                                  borderRadius: BorderRadius.circular(20),
-                                ),
-                                child: const Text(
-                                  'OFFLINE',
-                                  style: TextStyle(
-                                    color: navy,
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          Positioned(
-                            left: 0,
-                            right: 0,
-                            bottom: 0,
-                            child: Container(
-                              padding: const EdgeInsets.all(18),
-                              decoration: const BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                  colors: [Colors.transparent, Colors.black87],
-                                ),
-                              ),
-                              child: Text(
-                                _offlineMode
-                                    ? 'Offline biometric capture'
-                                    : 'Secure biometric verification',
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                          ),
                         ],
                       ),
               ),
             ),
-
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
               child: Container(
@@ -1335,13 +1065,11 @@ class _AttendanceFaceVerificationScreenState
                 ),
               ),
             ),
-
             if (_offlineCaptureBusy || _step == _AttendanceStep.verifying)
               const Padding(
                 padding: EdgeInsets.only(top: 12),
                 child: CircularProgressIndicator(color: navy),
               ),
-
             if (_error != null)
               Container(
                 width: double.infinity,
@@ -1357,7 +1085,6 @@ class _AttendanceFaceVerificationScreenState
                   style: const TextStyle(color: Color(0xFFB71C1C)),
                 ),
               ),
-
             if (_step == _AttendanceStep.failed)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -1375,12 +1102,11 @@ class _AttendanceFaceVerificationScreenState
                   ),
                 ),
               ),
-
             const SizedBox(height: 16),
           ],
         ),
       ),
-    );
+    );s
   }
 
   @override
@@ -1388,11 +1114,8 @@ class _AttendanceFaceVerificationScreenState
     _disposed = true;
     _running = false;
     _offlineMode = false;
-
     _offlineGeneration++;
-
     _camera?.dispose();
-
     super.dispose();
   }
 }
