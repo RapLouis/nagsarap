@@ -632,24 +632,40 @@ export default function Events({
                                                 </Link>
                                             </td>
 
+                                            {/* TIME-IN WINDOW */}
                                             <td className="px-6 py-4 text-gray-600">
-                                                <Link href={`/admin/analytics/events/${item.event_id}`} className="block">
-                                                    <div className="flex items-center gap-2 font-medium text-emerald-700">
-                                                        <LogIn className="h-4 w-4" />
-                                                        <span>{item.time_in_start}</span>
-                                                        {item.time_in_end && <span className="text-gray-400">- {item.time_in_end}</span>}
-                                                    </div>
+                                                <Link href={`/admin/analytics/events/${item.event_id}`} className="block space-y-1.5">
+                                                    {item?.schedules?.[0]?.slots && item.schedules[0].slots.length > 0 ? (
+                                                        item.schedules[0].slots.map((slot, index) => (
+                                                            <div key={index} className="flex items-center gap-2 font-medium text-emerald-700 text-xs">
+                                                                <LogIn className="h-3.5 w-3.5 shrink-0" />
+                                                                <span>{slot?.time_in_start}</span>
+                                                                {slot?.time_in_end && (
+                                                                    <span className="text-gray-400">- {slot.time_in_end}</span>
+                                                                )}
+                                                            </div>
+                                                        ))
+                                                    ) : (
+                                                        <span className="text-gray-300">N/A</span>
+                                                    )}
                                                 </Link>
                                             </td>
 
+                                            {/* TIME-OUT WINDOW */}
                                             <td className="px-6 py-4 text-gray-600">
-                                                <Link href={`/admin/analytics/events/${item.event_id}`} className="block">
-                                                    {item.time_out_start ? (
-                                                        <div className="flex items-center gap-2 font-medium text-amber-700">
-                                                            <LogOut className="h-4 w-4" />
-                                                            <span>{item.time_out_start}</span>
-                                                            {item.time_out_end && <span className="text-gray-400">- {item.time_out_end}</span>}
-                                                        </div>
+                                                <Link href={`/admin/analytics/events/${item.event_id}`} className="block space-y-1.5">
+                                                    {item?.schedules?.[0]?.slots?.some(slot => slot?.time_out_start) ? (
+                                                        item.schedules[0].slots.map((slot, index) => (
+                                                            slot?.time_out_start ? (
+                                                                <div key={index} className="flex items-center gap-2 font-medium text-amber-700 text-xs">
+                                                                    <LogOut className="h-3.5 w-3.5 shrink-0" />
+                                                                    <span>{slot.time_out_start}</span>
+                                                                    {slot?.time_out_end && (
+                                                                        <span className="text-gray-400">- {slot.time_out_end}</span>
+                                                                    )}
+                                                                </div>
+                                                            ) : null
+                                                        ))
                                                     ) : (
                                                         <span className="text-gray-300">Disabled</span>
                                                     )}

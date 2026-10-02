@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
+use Carbon\Carbon;
 
 class EventController extends Controller
 {
@@ -52,6 +53,19 @@ class EventController extends Controller
                             ->paginate(10)
                             ->withQueryString();
 
+        // Transform the paginated collection to dynamically include 'schedules' 
+        // derived from the 'days' relationship for the frontend table view.
+        $events->getCollection()->transform(function ($event) {
+            $event->schedules = $event->days->map(function ($day) {
+                return [
+                    'date'  => $day->event_date,
+                    'slots' => $day->slots ?? [],
+                ];
+            });
+
+            return $event;
+        });
+
         $counts = [
             'ongoing'   => Event::ongoing()->count(),
             'upcoming'  => Event::upcoming()->count(),
@@ -73,26 +87,26 @@ class EventController extends Controller
     public function store(Request $request)
     {
         $validated = $request->validate([
-            'title'                          => ['required', 'string', 'max:150'],
-            'description'                    => ['nullable', 'string'],
-            'event_date'                     => ['required', 'date'],
-            'event_end_date'                 => ['nullable', 'date', 'after_or_equal:event_date'],
-            'schedules'                      => ['required', 'array', 'min:1'],
-            'schedules.*.date'               => ['required', 'date'],
-            'schedules.*.slots'              => ['required', 'array', 'min:1'],
+            'title'                              => ['required', 'string', 'max:150'],
+            'description'                        => ['nullable', 'string'],
+            'event_date'                         => ['required', 'date'],
+            'event_end_date'                     => ['nullable', 'date', 'after_or_equal:event_date'],
+            'schedules'                          => ['required', 'array', 'min:1'],
+            'schedules.*.date'                   => ['required', 'date'],
+            'schedules.*.slots'                  => ['required', 'array', 'min:1'],
             'schedules.*.slots.*.time_in_start'  => ['required'],
             'schedules.*.slots.*.time_in_end'    => ['nullable'],
             'schedules.*.slots.*.time_out_start' => ['nullable'],
             'schedules.*.slots.*.time_out_end'   => ['nullable'],
-            'location'                       => ['nullable', 'string', 'max:100'],
-            'is_geofenced'                   => ['boolean'],
-            'geofence_type'                  => ['nullable', Rule::in(['radius', 'polygon'])],
-            'latitude'                       => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-90,90'],
-            'longitude'                      => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-180,180'],
-            'radius_meters'                  => ['nullable', 'integer', 'min:10', 'max:5000'],
-            'geofence_polygon'               => ['nullable', 'required_if:geofence_type,polygon', 'array', 'min:3'],
-            'approval_status'                => ['nullable', Rule::in(['approved', 'pending', 'declined'])],
-            'is_active'                      => ['boolean'],
+            'location'                           => ['nullable', 'string', 'max:100'],
+            'is_geofenced'                       => ['boolean'],
+            'geofence_type'                      => ['nullable', Rule::in(['radius', 'polygon'])],
+            'latitude'                           => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-90,90'],
+            'longitude'                          => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-180,180'],
+            'radius_meters'                      => ['nullable', 'integer', 'min:10', 'max:5000'],
+            'geofence_polygon'                   => ['nullable', 'required_if:geofence_type,polygon', 'array', 'min:3'],
+            'approval_status'                    => ['nullable', Rule::in(['approved', 'pending', 'declined'])],
+            'is_active'                          => ['boolean'],
         ]);
 
         $isGeofenced  = $request->boolean('is_geofenced', false);
@@ -105,16 +119,19 @@ class EventController extends Controller
             $dayNumber = $index + 1;
             $totalDays = count($validated['schedules']);
 
+            // Parse and format the date safely to Y-m-d
+            $scheduleDate = Carbon::parse($schedule['date'])->format('Y-m-d');
+
             // Suffix title with Day count if it's a multi-day event
             $eventTitle = $totalDays > 1 
-                ? "{$validated['title']} (Day {$dayNumber} - {$schedule['date']})" 
+                ? "{$validated['title']} (Day {$dayNumber} - {$scheduleDate})" 
                 : $validated['title'];
 
             $event = Event::create([
                 'title'            => $eventTitle,
                 'description'      => $validated['description'] ?? null,
-                'event_date'       => $schedule['date'],
-                'event_end_date'   => $schedule['date'],
+                'event_date'       => $scheduleDate,
+                'event_end_date'   => $scheduleDate,
                 'location'         => $validated['location'] ?? null,
                 'is_geofenced'     => $isGeofenced,
                 'geofence_type'    => $isGeofenced ? $geofenceType : 'radius',
@@ -126,9 +143,9 @@ class EventController extends Controller
                 'is_active'        => $request->boolean('is_active', true),
             ]);
 
-            // Save the slots specifically for this daily event row
+            // Save the slots specifically for this daily event row using the formatted date
             $event->days()->create([
-                'event_date' => $schedule['date'],
+                'event_date' => $scheduleDate,
                 'slots'      => $schedule['slots'],
             ]);
         }
@@ -139,26 +156,26 @@ class EventController extends Controller
     public function update(Request $request, Event $event)
     {
         $validated = $request->validate([
-            'title'                          => ['required', 'string', 'max:150'],
-            'description'                    => ['nullable', 'string'],
-            'event_date'                     => ['required', 'date'],
-            'event_end_date'                 => ['nullable', 'date', 'after_or_equal:event_date'],
-            'schedules'                      => ['required', 'array', 'min:1'],
-            'schedules.*.date'               => ['required', 'date'],
-            'schedules.*.slots'              => ['required', 'array', 'min:1'],
+            'title'                              => ['required', 'string', 'max:150'],
+            'description'                        => ['nullable', 'string'],
+            'event_date'                         => ['required', 'date'],
+            'event_end_date'                     => ['nullable', 'date', 'after_or_equal:event_date'],
+            'schedules'                          => ['required', 'array', 'min:1'],
+            'schedules.*.date'                   => ['required', 'date'],
+            'schedules.*.slots'                  => ['required', 'array', 'min:1'],
             'schedules.*.slots.*.time_in_start'  => ['required'],
             'schedules.*.slots.*.time_in_end'    => ['nullable'],
             'schedules.*.slots.*.time_out_start' => ['nullable'],
             'schedules.*.slots.*.time_out_end'   => ['nullable'],
-            'location'                       => ['nullable', 'string', 'max:100'],
-            'is_geofenced'                   => ['boolean'],
-            'geofence_type'                  => ['nullable', Rule::in(['radius', 'polygon'])],
-            'latitude'                       => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-90,90'],
-            'longitude'                      => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-180,180'],
-            'radius_meters'                  => ['nullable', 'integer', 'min:10', 'max:5000'],
-            'geofence_polygon'               => ['nullable', 'required_if:geofence_type,polygon', 'array', 'min:3'],
-            'approval_status'                => ['required', Rule::in(['approved', 'pending', 'declined'])],
-            'is_active'                      => ['boolean'],
+            'location'                           => ['nullable', 'string', 'max:100'],
+            'is_geofenced'                       => ['boolean'],
+            'geofence_type'                      => ['nullable', Rule::in(['radius', 'polygon'])],
+            'latitude'                           => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-90,90'],
+            'longitude'                          => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-180,180'],
+            'radius_meters'                      => ['nullable', 'integer', 'min:10', 'max:5000'],
+            'geofence_polygon'                   => ['nullable', 'required_if:geofence_type,polygon', 'array', 'min:3'],
+            'approval_status'                    => ['required', Rule::in(['approved', 'pending', 'declined'])],
+            'is_active'                          => ['boolean'],
         ]);
 
         $isGeofenced  = $request->boolean('is_geofenced', false);
@@ -167,8 +184,8 @@ class EventController extends Controller
         $event->update([
             'title'            => $validated['title'],
             'description'      => $validated['description'] ?? null,
-            'event_date'       => $validated['event_date'],
-            'event_end_date'   => $validated['event_end_date'] ?? null,
+            'event_date'       => Carbon::parse($validated['event_date'])->format('Y-m-d'),
+            'event_end_date'   => isset($validated['event_end_date']) ? Carbon::parse($validated['event_end_date'])->format('Y-m-d') : null,
             'location'         => $validated['location'] ?? null,
             'is_geofenced'     => $isGeofenced,
             'geofence_type'    => $isGeofenced ? $geofenceType : 'radius',
@@ -183,8 +200,10 @@ class EventController extends Controller
         $event->days()->delete();
 
         foreach ($validated['schedules'] as $schedule) {
+            $scheduleDate = Carbon::parse($schedule['date'])->format('Y-m-d');
+
             $event->days()->create([
-                'event_date' => $schedule['date'],
+                'event_date' => $scheduleDate,
                 'slots'      => $schedule['slots'],
             ]);
         }
