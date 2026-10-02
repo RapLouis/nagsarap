@@ -27,21 +27,17 @@ import {
     ArrowLeft,
     FileText,
 } from 'lucide-react';
+import { 
+    TimeSlot, 
+    ScheduleItem, 
+    validateTimeSlots, 
+    getEventDays, 
+    formatDate, 
+    relativeDateLabel 
+} from '@/lib/eventValidation';
 
 type TabKey = 'ongoing' | 'upcoming' | 'completed' | 'pending' | 'declined';
 type Point = { lat: number; lng: number };
-
-type TimeSlot = {
-    time_in_start: string;
-    time_in_end: string;
-    time_out_start: string;
-    time_out_end: string;
-};
-
-type ScheduleItem = {
-    date: string;
-    slots: TimeSlot[];
-};
 
 type EventItem = {
     event_id: number;
@@ -84,44 +80,6 @@ const TABS: { key: TabKey; label: string; activeColor: string }[] = [
     { key: 'declined', label: 'Declined', activeColor: 'text-rose-600 border-rose-600 bg-rose-50/50' },
 ];
 
-function relativeDateLabel(dateStr: string): string {
-    const eventDate = new Date(dateStr + 'T00:00:00');
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const diffDays = Math.round((eventDate.getTime() - today.getTime()) / 86400000);
-
-    if (diffDays === 0) return 'Today';
-    if (diffDays === 1) return 'Tomorrow';
-    if (diffDays === -1) return 'Yesterday';
-    if (diffDays > 1 && diffDays <= 7) return `In ${diffDays} days`;
-    if (diffDays < -1 && diffDays >= -7) return `${Math.abs(diffDays)} days ago`;
-    return '';
-}
-
-function formatDate(dateStr: string): string {
-    return new Date(dateStr + 'T00:00:00').toLocaleDateString(undefined, {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-    });
-}
-
-function getEventDays(startDate: string, endDate: string | null): string[] {
-    if (!startDate) return [];
-    if (!endDate || endDate <= startDate) return [startDate];
-
-    const days: string[] = [];
-    const current = new Date(startDate + 'T00:00:00');
-    const end = new Date(endDate + 'T00:00:00');
-
-    while (current <= end) {
-        days.push(current.toISOString().split('T')[0]);
-        current.setDate(current.getDate() + 1);
-    }
-    return days;
-}
-
 export default function Events({
     events,
     counts = { ongoing: 0, upcoming: 0, completed: 0, pending: 0, declined: 0 },
@@ -132,6 +90,7 @@ export default function Events({
     const [isFiltering, setIsFiltering] = useState(false);
     const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const isFirstRun = useRef(true);
+    const isEditingLoad = useRef(false); // Prevents useEffect from wiping slots on edit load
 
     // Wizard Flow States
     const [currentStep, setCurrentStep] = useState<number>(1);
@@ -177,31 +136,16 @@ export default function Events({
 
     const hasFormErrors = Object.keys(errors).length > 0;
 
-    // Time validation check helper
-    const validateTimeSlots = (schedules: ScheduleItem[]): boolean => {
-        for (const sched of schedules) {
-            for (const slot of sched.slots) {
-                if (slot.time_in_start && slot.time_in_end && slot.time_in_start >= slot.time_in_end) {
-                    setTimeValidationError(`Conflict on ${sched.date}: Time-In Start must be earlier than Time-In Cutoff.`);
-                    return false;
-                }
-                if (slot.time_in_end && slot.time_out_start && slot.time_in_end >= slot.time_out_start) {
-                    setTimeValidationError(`Conflict on ${sched.date}: Time-In Cutoff cannot overlap or be after Time-Out Start.`);
-                    return false;
-                }
-                if (slot.time_out_start && slot.time_out_end && slot.time_out_start >= slot.time_out_end) {
-                    setTimeValidationError(`Conflict on ${sched.date}: Time-Out Start must be earlier than Time-Out Cutoff.`);
-                    return false;
-                }
-            }
-        }
-        setTimeValidationError(null);
-        return true;
-    };
-
     // Synchronize schedules automatically when dates, multi-day toggle, or modes change
     useEffect(() => {
         if (!data.event_date) return;
+
+        // Skip resetting schedules if we just loaded an existing event into the edit modal
+        if (isEditingLoad.current) {
+            isEditingLoad.current = false;
+            return;
+        }
+
         const days = getEventDays(data.event_date, isMultiDay ? data.event_end_date : null);
 
         const newSchedules = days.map((day) => {
@@ -229,7 +173,7 @@ export default function Events({
         });
 
         setData('schedules', newSchedules);
-        validateTimeSlots(newSchedules);
+        validateTimeSlots(newSchedules, setTimeValidationError);
     }, [data.event_date, data.event_end_date, isMultiDay, scheduleMode, uniformSchedule]);
 
     const handleUniformChange = (field: keyof TimeSlot, value: string) => {
@@ -242,7 +186,7 @@ export default function Events({
                 slots: s.slots.map((slot) => ({ ...slot, [field]: value })),
             }));
             setData('schedules', updatedSchedules);
-            validateTimeSlots(updatedSchedules);
+            validateTimeSlots(updatedSchedules, setTimeValidationError);
         }
     };
 
@@ -352,6 +296,7 @@ export default function Events({
     };
 
     const openCreateModal = () => {
+        isEditingLoad.current = false;
         setEditingEvent(null);
         reset();
         clearErrors();
@@ -373,6 +318,7 @@ export default function Events({
     };
 
     const openEditModal = (eventItem: EventItem) => {
+        isEditingLoad.current = true; // Mark as editing load to safeguard multi-slots
         setEditingEvent(eventItem);
         clearErrors();
         setCurrentStep(1);
@@ -387,17 +333,36 @@ export default function Events({
         const savedLng =
             eventItem.longitude !== null && eventItem.longitude !== undefined ? Number(eventItem.longitude) : 120.5928;
 
-        const defaultSchedules = getEventDays(eventItem.event_date, eventItem.event_end_date).map((day) => ({
-            date: day,
-            slots: [
-                {
-                    time_in_start: eventItem.time_in_start || '08:00',
-                    time_in_end: eventItem.time_in_end || '',
-                    time_out_start: eventItem.time_out_start || '17:00',
-                    time_out_end: eventItem.time_out_end || '',
-                },
-            ],
-        }));
+        const hasExistingSchedules = eventItem.schedules && eventItem.schedules.length > 0;
+
+        const mappedSchedules = hasExistingSchedules
+            ? eventItem.schedules!.map((sch) => ({
+                  date: sch.date,
+                  slots: sch.slots && sch.slots.length > 0 ? sch.slots : [{
+                      time_in_start: '08:00',
+                      time_in_end: '',
+                      time_out_start: '17:00',
+                      time_out_end: '',
+                  }],
+              }))
+            : getEventDays(eventItem.event_date, eventItem.event_end_date).map((day) => ({
+                  date: day,
+                  slots: [
+                      {
+                          time_in_start: eventItem.time_in_start || '08:00',
+                          time_in_end: eventItem.time_in_end || '',
+                          time_out_start: eventItem.time_out_start || '17:00',
+                          time_out_end: eventItem.time_out_end || '',
+                      },
+                  ],
+              }));
+
+        const containsMultipleSlots = mappedSchedules.some(s => s.slots && s.slots.length > 1);
+        if (containsMultipleSlots || (hasMultiDay && mappedSchedules.length > 1)) {
+            setScheduleMode('custom');
+        } else {
+            setScheduleMode('uniform');
+        }
 
         setData({
             title: eventItem.title,
@@ -412,7 +377,7 @@ export default function Events({
                 eventItem.geofence_polygon && eventItem.geofence_polygon.length >= 3 ? eventItem.geofence_polygon : null,
             event_date: eventItem.event_date,
             event_end_date: eventItem.event_end_date || '',
-            schedules: eventItem.schedules && eventItem.schedules.length > 0 ? eventItem.schedules : defaultSchedules,
+            schedules: mappedSchedules,
             approval_status: eventItem.approval_status || 'approved',
             is_active: Boolean(eventItem.is_active),
         });
@@ -423,7 +388,7 @@ export default function Events({
     const handleFormSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         
-        if (!validateTimeSlots(data.schedules)) {
+        if (!validateTimeSlots(data.schedules, setTimeValidationError)) {
             return;
         }
 
@@ -972,7 +937,7 @@ export default function Events({
                                         </div>
                                     )}
 
-                                    {/* CUSTOM DAILY SCHEDULES OR SINGLE-DAY CONFIG (WITH MULTIPLE SLOTS + ADD BUTTON) */}
+                                    {/* CUSTOM DAILY SCHEDULES OR SINGLE-DAY CONFIG */}
                                     {(!isMultiDay || scheduleMode === 'custom') &&
                                         data.schedules.map((schedule, dayIndex) => {
                                             const dayNumber = dayIndex + 1;
@@ -999,7 +964,7 @@ export default function Events({
                                                                     time_out_end: '17:30',
                                                                 });
                                                                 setData('schedules', updated);
-                                                                validateTimeSlots(updated);
+                                                                validateTimeSlots(updated, setTimeValidationError);
                                                             }}
                                                             className="inline-flex items-center gap-1 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 transition"
                                                         >
@@ -1017,7 +982,7 @@ export default function Events({
                                                                         const updated = [...data.schedules];
                                                                         updated[dayIndex].slots.splice(slotIndex, 1);
                                                                         setData('schedules', updated);
-                                                                        validateTimeSlots(updated);
+                                                                        validateTimeSlots(updated, setTimeValidationError);
                                                                     }}
                                                                     className="absolute right-2 top-2 rounded-lg p-1 text-gray-400 hover:bg-rose-50 hover:text-rose-600 transition"
                                                                     title="Remove Slot"
@@ -1042,7 +1007,7 @@ export default function Events({
                                                                             const updated = [...data.schedules];
                                                                             updated[dayIndex].slots[slotIndex].time_in_start = e.target.value;
                                                                             setData('schedules', updated);
-                                                                            validateTimeSlots(updated);
+                                                                            validateTimeSlots(updated, setTimeValidationError);
                                                                         }}
                                                                         className="mt-1.5 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-gray-800 font-medium text-sm"
                                                                     />
@@ -1056,7 +1021,7 @@ export default function Events({
                                                                             const updated = [...data.schedules];
                                                                             updated[dayIndex].slots[slotIndex].time_in_end = e.target.value;
                                                                             setData('schedules', updated);
-                                                                            validateTimeSlots(updated);
+                                                                            validateTimeSlots(updated, setTimeValidationError);
                                                                         }}
                                                                         className="mt-1.5 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-gray-800 font-medium text-sm"
                                                                     />
@@ -1074,7 +1039,7 @@ export default function Events({
                                                                             const updated = [...data.schedules];
                                                                             updated[dayIndex].slots[slotIndex].time_out_start = e.target.value;
                                                                             setData('schedules', updated);
-                                                                            validateTimeSlots(updated);
+                                                                            validateTimeSlots(updated, setTimeValidationError);
                                                                         }}
                                                                         className="mt-1.5 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-gray-800 font-medium text-sm"
                                                                     />
@@ -1088,7 +1053,7 @@ export default function Events({
                                                                             const updated = [...data.schedules];
                                                                             updated[dayIndex].slots[slotIndex].time_out_end = e.target.value;
                                                                             setData('schedules', updated);
-                                                                            validateTimeSlots(updated);
+                                                                            validateTimeSlots(updated, setTimeValidationError);
                                                                         }}
                                                                         className="mt-1.5 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-gray-800 font-medium text-sm"
                                                                     />

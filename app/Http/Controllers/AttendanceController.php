@@ -8,6 +8,7 @@ use App\Services\BiometricService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
+use Carbon\Carbon;
 
 class AttendanceController extends Controller
 {
@@ -41,6 +42,45 @@ class AttendanceController extends Controller
         if (!$event->is_active) {
             return back()->withErrors([
                 'attendance' => 'Attendance check-in for this event is currently closed.',
+            ]);
+        }
+
+        // 1.5. Strict Time Slot Window Validation using Event Days relation
+        $now = Carbon::now();
+        $today = $now->toDateString();
+        
+        $eventDay = $event->days()->whereDate('event_date', $today)->first();
+
+        if (!$eventDay || empty($eventDay->slots)) {
+            return back()->withErrors([
+                'attendance' => 'No active schedule or time slots configured for today.',
+            ]);
+        }
+
+        $allowedTimeWindow = false;
+        foreach ($eventDay->slots as $slot) {
+            // Check Time-In Window (supports start and optional cutoff/end time)
+            if (!empty($slot['time_in_start'])) {
+                $start = Carbon::parse($today . ' ' . $slot['time_in_start']);
+                $cutoff = !empty($slot['time_in_end']) ? Carbon::parse($today . ' ' . $slot['time_in_end']) : null;
+
+                if ($cutoff) {
+                    if ($now->between($start, $cutoff)) {
+                        $allowedTimeWindow = true;
+                        break;
+                    }
+                } else {
+                    if ($now->greaterThanOrEqualTo($start)) {
+                        $allowedTimeWindow = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!$allowedTimeWindow) {
+            return back()->withErrors([
+                'attendance' => 'Attendance is currently closed. You can only check in during the designated time slot windows.',
             ]);
         }
 

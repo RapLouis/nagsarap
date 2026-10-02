@@ -32,6 +32,7 @@ import {
     getSharedLandmarker,
     distanceInMeters,
 } from '../lib/liveness';
+import { isEventWindowOpen, type ScheduleItem } from '../lib/eventValidation';
 
 type Event = {
     event_id: number;
@@ -46,6 +47,7 @@ type Event = {
     latitude?: number | null;
     longitude?: number | null;
     radius_meters?: number | null;
+    schedules?: ScheduleItem[] | null;
 };
 
 type AttendanceLog = {
@@ -76,20 +78,14 @@ type LivenessStep = 'LOOK_CENTER' | 'TURN' | 'VERIFYING' | 'PASSED';
 
 const GOLD = '#C9973E';
 
-// Liveness tuning (kept local since check-in and registration allow slightly different
-// hold durations by design; the underlying math lives in lib/liveness.ts).
+// Liveness tuning
 const PROCESS_EVERY_N_FRAMES = 3;
 const FRONTAL_YAW_MAX = 0.12;
-const FRONTAL_HOLD_FRAMES = 8; // matches registration; was 3 here, which made the frontal
-// capture fire almost instantly and gave the anti-photo hold check little to actually check.
+const FRONTAL_HOLD_FRAMES = 8;
 const TURN_YAW_MIN = 0.25;
 const TURN_HOLD_FRAMES = 3;
 const WRONG_WAY_YAW = 0.15;
 const CHALLENGE_TIMEOUT_MS = 20_000;
-
-// Below this GPS accuracy (in meters), warn the student rather than silently trusting a
-// possibly-unreliable fix. This does not block check-in — the server re-checks distance
-// against the real event boundary regardless.
 const LOW_ACCURACY_WARNING_METERS = 100;
 
 function formatEventTime(startTime?: string | null, endTime?: string | null): string {
@@ -197,6 +193,8 @@ export default function Dashboard({
                         <ul className="divide-y divide-gray-100 dark:divide-slate-800/60">
                             {activeEvents.map((evt) => {
                                 const isCheckedIn = checkedInEventIds.has(evt.event_id);
+                                const windowIsOpen = isEventWindowOpen(evt.schedules);
+
                                 return (
                                     <li key={evt.event_id}>
                                         <div className="w-full flex items-center gap-4 px-6 py-4 text-left">
@@ -212,12 +210,21 @@ export default function Dashboard({
                                                     )}
                                                     {evt.location ? ` · ${evt.location}` : ' · Location TBA'}
                                                 </p>
+                                                {!isCheckedIn && !windowIsOpen && (
+                                                    <p className="mt-1 text-[11px] font-medium text-amber-600 dark:text-amber-400">
+                                                        Check-in window is currently closed
+                                                    </p>
+                                                )}
                                             </div>
 
                                             {isCheckedIn ? (
                                                 <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 dark:bg-emerald-950/30 px-3 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/40 shrink-0">
                                                     <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
                                                     Checked in
+                                                </span>
+                                            ) : !windowIsOpen ? (
+                                                <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 dark:bg-slate-800 px-3 py-1 text-xs font-medium text-gray-400 dark:text-gray-500 shrink-0 cursor-not-allowed">
+                                                    Window closed
                                                 </span>
                                             ) : (
                                                 <button
@@ -343,7 +350,6 @@ function ConfidenceBadge({ score }: { score: number }) {
     );
 }
 
-/** What stage of the pre-liveness setup we're in, shown while nothing is on camera yet. */
 type SetupStage = 'LOCATING' | 'STARTING_CAMERA' | 'READY';
 
 function CheckInModal({ event, onClose }: { event: Event; onClose: () => void }) {
@@ -375,13 +381,12 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
     const [holdProgress, setHoldProgress] = useState(0);
     const [turnProgress, setTurnProgress] = useState(0);
     const [isSubmitting, setIsSubmitting] = useState(false);
-    const [retryToken, setRetryToken] = useState(0); // bumping this re-runs the setup effect
+    const [retryToken, setRetryToken] = useState(0);
 
     const [userCoords, setUserCoords] = useState<{ latitude: number; longitude: number } | null>(null);
     const [direction, setDirection] = useState<Direction>(randomDirection);
 
     const isReady = setupStage === 'READY' && streamStarted && modelReady;
-    // Any error here is recoverable with "Try again" — nothing here is the student's fault.
     const blockingError = locationError ?? cameraError ?? modalError;
 
     const goToStep = (next: LivenessStep) => {
@@ -414,7 +419,6 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
         setStreamStarted(false);
     };
 
-    // Runs once per mount, and again whenever the student taps "Try again" (retryToken bumps).
     useEffect(() => {
         mountedRef.current = true;
         setCameraError(null);
@@ -442,10 +446,6 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
                         );
                     }
 
-                    // Soft, client-side pre-check only, so the student gets fast feedback
-                    // without waiting for a round trip. The server re-checks this for real
-                    // against the authoritative event boundary — this can't be bypassed by
-                    // skipping or spoofing this step.
                     if (event.geofence_enabled && event.latitude && event.longitude && event.radius_meters) {
                         const distance = distanceInMeters(latitude, longitude, event.latitude, event.longitude);
                         if (distance > event.radius_meters) {
@@ -501,14 +501,11 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
         return () => {
             mountedRef.current = false;
             stopCameraStream();
-            // The landmarker is shared across the whole tab (see lib/liveness.ts) — it is
-            // deliberately NOT closed here so the next check-in doesn't reload the model.
             landmarkerRef.current = null;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [event, retryToken]);
 
-    // Detection loop — only runs once location, camera and model are all ready.
     useEffect(() => {
         if (!isReady || blockingError) return;
 
@@ -522,7 +519,6 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
                 return;
             }
 
-            // Avoid processing the same video frame twice.
             if (video.currentTime === lastVideoTimeRef.current) {
                 return;
             }
@@ -543,14 +539,12 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
                 return;
             }
 
-            // No face detected.
             if (faces.length === 0) {
                 setHint(null);
                 resetChallenge();
                 return;
             }
 
-            // More than one face detected.
             if (faces.length > 1) {
                 setHint('Only one face should be visible.');
                 resetChallenge();
@@ -558,14 +552,12 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
             }
 
             const landmarks = faces[0];
-
             const yaw = calculateYaw(landmarks);
             const turned = yaw * DIRECTION_SIGN[direction];
 
             switch (stepRef.current) {
                 case 'LOOK_CENTER': {
-                    const placementIssue =
-                        getPlacementIssue(landmarks);
+                    const placementIssue = getPlacementIssue(landmarks);
 
                     if (placementIssue) {
                         holdCountRef.current = 0;
@@ -582,107 +574,51 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
                     }
 
                     setHint(null);
-
                     holdCountRef.current += 1;
+                    setHoldProgress(Math.min(holdCountRef.current / FRONTAL_HOLD_FRAMES, 1));
 
-                    setHoldProgress(
-                        Math.min(
-                            holdCountRef.current /
-                                FRONTAL_HOLD_FRAMES,
-                            1
-                        )
-                    );
-
-                    if (
-                        holdCountRef.current >=
-                        FRONTAL_HOLD_FRAMES
-                    ) {
-                        frontalFrameRef.current =
-                            captureFrame(video, {
-                                quality: 0.7,
-                            });
-
-                        challengeStartRef.current =
-                            performance.now();
-
+                    if (holdCountRef.current >= FRONTAL_HOLD_FRAMES) {
+                        frontalFrameRef.current = captureFrame(video, { quality: 0.7 });
+                        challengeStartRef.current = performance.now();
                         turnHoldRef.current = 0;
-
                         goToStep('TURN');
                     }
-
                     return;
                 }
 
                 case 'TURN': {
-                    const startedAt =
-                        challengeStartRef.current ??
-                        performance.now();
+                    const startedAt = challengeStartRef.current ?? performance.now();
 
-                    // Challenge timeout.
-                    if (
-                        performance.now() - startedAt >
-                        CHALLENGE_TIMEOUT_MS
-                    ) {
+                    if (performance.now() - startedAt > CHALLENGE_TIMEOUT_MS) {
                         resetChallenge();
-                        setHint(
-                            "Time ran out. Let's try again."
-                        );
+                        setHint("Time ran out. Let's try again.");
                         return;
                     }
 
-                    // User turned in the wrong direction.
                     if (turned <= -WRONG_WAY_YAW) {
                         turnHoldRef.current = 0;
                         setTurnProgress(0);
-
-                        setHint(
-                            `Turn to your ${direction}, not the other way.`
-                        );
-
+                        setHint(`Turn to your ${direction}, not the other way.`);
                         return;
                     }
 
                     setHint(null);
+                    setTurnProgress(Math.min(Math.max(turned / TURN_YAW_MIN, 0), 1));
 
-                    // Show turn progress.
-                    setTurnProgress(
-                        Math.min(
-                            Math.max(
-                                turned / TURN_YAW_MIN,
-                                0
-                            ),
-                            1
-                        )
-                    );
-
-                    // Correct direction.
                     if (turned >= TURN_YAW_MIN) {
                         turnHoldRef.current += 1;
 
-                        if (
-                            turnHoldRef.current >=
-                            TURN_HOLD_FRAMES
-                        ) {
-                            peakFrameRef.current =
-                                captureFrame(video, {
-                                    quality: 0.7,
-                                });
-
-                            void submitAttendance(
-                                frontalFrameRef.current,
-                                peakFrameRef.current
-                            );
-
+                        if (turnHoldRef.current >= TURN_HOLD_FRAMES) {
+                            peakFrameRef.current = captureFrame(video, { quality: 0.7 });
+                            void submitAttendance(frontalFrameRef.current, peakFrameRef.current);
                             return;
                         }
                     } else {
                         turnHoldRef.current = 0;
                     }
-
                     return;
                 }
 
-                // These states are intentionally not processed here.
                 case 'VERIFYING':
                 case 'PASSED':
                     return;
@@ -690,60 +626,34 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
         };
 
         const tick = () => {
-            if (stopped) {
-                return;
-            }
+            if (stopped) return;
 
-            // Do not process frames while submitting
-            // or after successful verification.
             const currentStep = stepRef.current;
-
-            if (
-                currentStep === 'VERIFYING' ||
-                currentStep === 'PASSED'
-            ) {
+            if (currentStep === 'VERIFYING' || currentStep === 'PASSED') {
                 return;
             }
 
             frameCountRef.current += 1;
-
-            if (
-                frameCountRef.current %
-                    PROCESS_EVERY_N_FRAMES ===
-                0
-            ) {
+            if (frameCountRef.current % PROCESS_EVERY_N_FRAMES === 0) {
                 processFrame();
             }
 
-            // Check again because processFrame() can change
-            // LOOK_CENTER -> TURN or TURN -> VERIFYING.
-            if (
-                stepRef.current === 'VERIFYING' ||
-                stepRef.current === 'PASSED'
-            ) {
+            if (stepRef.current === 'VERIFYING' || stepRef.current === 'PASSED') {
                 return;
             }
 
-            requestRef.current =
-                requestAnimationFrame(tick);
+            requestRef.current = requestAnimationFrame(tick);
         };
 
-        requestRef.current =
-            requestAnimationFrame(tick);
+        requestRef.current = requestAnimationFrame(tick);
 
         return () => {
             stopped = true;
-
             if (requestRef.current !== null) {
-                cancelAnimationFrame(
-                    requestRef.current
-                );
-
+                cancelAnimationFrame(requestRef.current);
                 requestRef.current = null;
             }
         };
-
-        // The challenge is intentionally controlled through refs.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isReady, blockingError, direction]);
 
@@ -760,8 +670,6 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
             const [frontal, peak] = await Promise.all([frontalPromise, peakPromise]);
             if (!frontal || !peak) throw new Error('Failed to capture camera frames.');
 
-            // Stop the camera the moment we have what we need, rather than keeping it open
-            // through the whole "verifying" round trip and the success delay.
             stopCameraStream();
             setIsSubmitting(true);
 
@@ -800,7 +708,7 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
         setModelReady(false);
         setDirection(randomDirection());
         resetChallenge();
-        setRetryToken((n) => n + 1); // re-runs the setup effect from scratch
+        setRetryToken((n) => n + 1);
     };
 
     const instruction = (() => {
@@ -889,7 +797,6 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
                         </div>
                     )}
 
-                    {/* Progress feedback for the two active liveness steps */}
                     {!blockingError && step === 'LOOK_CENTER' && !isSettingUp && (
                         <div className="h-1 w-40 overflow-hidden rounded-full bg-gray-100 dark:bg-slate-800" aria-hidden="true">
                             <div
