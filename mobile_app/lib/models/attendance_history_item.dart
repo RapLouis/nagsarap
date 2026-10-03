@@ -1,159 +1,116 @@
 class AttendanceHistoryItem {
-  final int id;
-  final int? eventId;
+  final Map<String, dynamic> raw;
 
-  final String eventName;
-  final String eventDate;
-  final String startTime;
-  final String endTime;
-  final String venue;
-
-  final String status;
-
-  final DateTime? attendanceTime;
-  final DateTime? syncTime;
-
-  final double? confidenceScore;
-  final double? latitude;
-  final double? longitude;
-  final double? locationAccuracy;
-
-  final String source;
-
-  const AttendanceHistoryItem({
-    required this.id,
-    required this.eventId,
-    required this.eventName,
-    required this.eventDate,
-    required this.startTime,
-    required this.endTime,
-    required this.venue,
-    required this.status,
-    required this.attendanceTime,
-    required this.syncTime,
-    required this.confidenceScore,
-    required this.latitude,
-    required this.longitude,
-    required this.locationAccuracy,
-    required this.source,
-  });
+  const AttendanceHistoryItem({required this.raw});
 
   factory AttendanceHistoryItem.fromJson(Map<String, dynamic> json) {
-    final event = _mapValue(json['event']);
-
-    return AttendanceHistoryItem(
-      id: _intValue(json['attendance_id'] ?? json['id']),
-      eventId: _nullableInt(
-        json['event_id'] ?? event['event_id'] ?? event['id'],
-      ),
-      eventName: _stringValue(
-        event['title'] ?? event['name'] ?? json['event_name'] ?? 'Event',
-      ),
-      eventDate: _stringValue(
-        event['event_date'] ?? event['date'] ?? json['event_date'],
-      ),
-      startTime: _stringValue(event['start_time'] ?? json['start_time']),
-      endTime: _stringValue(event['end_time'] ?? json['end_time']),
-      venue: _stringValue(
-        event['location'] ??
-            event['venue'] ??
-            json['location'] ??
-            json['venue'],
-      ),
-      status: _stringValue(json['status'] ?? 'Recorded'),
-      attendanceTime: _dateValue(
-        json['attendance_time'] ?? json['logged_at'] ?? json['created_at'],
-      ),
-      syncTime: _dateValue(json['sync_time']),
-      confidenceScore: _doubleValue(
-        json['confidence_score'] ??
-            json['face_confidence'] ??
-            json['face_similarity'],
-      ),
-      latitude: _doubleValue(json['latitude']),
-      longitude: _doubleValue(json['longitude']),
-      locationAccuracy: _doubleValue(json['location_accuracy']),
-      source: _stringValue(json['source']),
-    );
+    return AttendanceHistoryItem(raw: json);
   }
 
-  static Map<String, dynamic> _mapValue(dynamic value) {
-    if (value is Map<String, dynamic>) {
-      return value;
-    }
+  int? get id => _readInt(['attendance_id', 'id']);
 
-    if (value is Map) {
-      return Map<String, dynamic>.from(value);
-    }
+  int? get eventId => _readInt(['event_id']);
 
-    return <String, dynamic>{};
+  String get eventName {
+    final eventMap = raw['event'];
+    if (eventMap is Map) {
+      final name = _readStringFromMap(Map<String, dynamic>.from(eventMap), ['title', 'event_name', 'name']);
+      if (name != null) return name;
+    }
+    return _readString(['event_name', 'title', 'name']) ?? 'Event';
   }
 
-  static String _stringValue(dynamic value) {
-    if (value == null) {
-      return '';
+  String get sessionType {
+    final session = _readString(['session_type', 'type', 'session'])?.toLowerCase();
+    if (session == 'time_out' || session == 'out') {
+      return 'time_out';
     }
-
-    final result = value.toString().trim();
-
-    if (result.toLowerCase() == 'null') {
-      return '';
-    }
-
-    return result;
+    return 'time_in';
   }
 
-  static int _intValue(dynamic value) {
-    if (value is int) {
-      return value;
-    }
-
-    if (value is num) {
-      return value.toInt();
-    }
-
-    return int.tryParse(value?.toString() ?? '') ?? 0;
+  String get status {
+    return _readString(['status', 'attendance_status'])?.toLowerCase() ?? 'present';
   }
 
-  static int? _nullableInt(dynamic value) {
-    if (value == null) {
-      return null;
-    }
-
-    if (value is int) {
-      return value;
-    }
-
-    if (value is num) {
-      return value.toInt();
-    }
-
-    return int.tryParse(value.toString());
+  double get confidenceScore {
+    return _readDouble(['confidence_score', 'confidence']) ?? 1.0;
   }
 
-  static double? _doubleValue(dynamic value) {
-    if (value == null) {
-      return null;
-    }
-
-    if (value is num) {
-      return value.toDouble();
-    }
-
-    return double.tryParse(value.toString());
+  DateTime? get loggedAt {
+    final dateStr = _readString(['logged_at', 'recorded_at', 'created_at', 'date', 'attendance_time']);
+    if (dateStr == null) return null;
+    return DateTime.tryParse(dateStr);
   }
 
-  static DateTime? _dateValue(dynamic value) {
-    if (value == null) {
-      return null;
+  String? get formattedTime {
+    final time = loggedAt;
+    if (time == null) return null;
+    final hour = time.hour > 12 ? time.hour - 12 : (time.hour == 0 ? 12 : time.hour);
+    final period = time.hour >= 12 ? 'PM' : 'AM';
+    final minute = time.minute.toString().padLeft(2, '0');
+    return '$hour:$minute $period';
+  }
+
+  // Extended getters for attendance history screen details
+  String? get venue {
+    final eventMap = raw['event'];
+    if (eventMap is Map) {
+      final v = _readStringFromMap(Map<String, dynamic>.from(eventMap), ['location', 'venue', 'location_name']);
+      if (v != null) return v;
     }
+    return _readString(['venue', 'location', 'location_name']);
+  }
 
-    final text = value.toString().trim();
+  double? get locationAccuracy => _readDouble(['location_accuracy', 'accuracy']);
 
-    if (text.isEmpty || text.toLowerCase() == 'null') {
-      return null;
+  String? get source => _readString(['source', 'method', 'check_in_method']);
+
+  String? get eventDate {
+    final eventMap = raw['event'];
+    if (eventMap is Map) {
+      final d = _readStringFromMap(Map<String, dynamic>.from(eventMap), ['event_date', 'date']);
+      if (d != null) return d;
     }
+    return _readString(['event_date', 'date']);
+  }
 
-    return DateTime.tryParse(text);
+  String? get attendanceTime => formattedTime ?? _readString(['attendance_time', 'logged_at', 'time']);
+
+  String? _readString(List<String> keys) => _readStringFromMap(raw, keys);
+
+  String? _readStringFromMap(Map<String, dynamic> map, List<String> keys) {
+    for (final key in keys) {
+      final value = map[key];
+      if (value != null && value.toString().trim().isNotEmpty && value.toString() != 'null') {
+        return value.toString().trim();
+      }
+    }
+    return null;
+  }
+
+  int? _readInt(List<String> keys) {
+    for (final key in keys) {
+      final value = raw[key];
+      if (value is int) return value;
+      if (value is num) return value.toInt();
+      if (value != null) {
+        final parsed = int.tryParse(value.toString());
+        if (parsed != null) return parsed;
+      }
+    }
+    return null;
+  }
+
+  double? _readDouble(List<String> keys) {
+    for (final key in keys) {
+      final value = raw[key];
+      if (value is double) return value;
+      if (value is num) return value.toDouble();
+      if (value != null) {
+        final parsed = double.tryParse(value.toString());
+        if (parsed != null) return parsed;
+      }
+    }
+    return null;
   }
 }

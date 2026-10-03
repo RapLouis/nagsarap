@@ -33,12 +33,6 @@ class _LoginTabState extends State<LoginTab> {
     super.dispose();
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | STUDENT NUMBER FORMAT
-  |--------------------------------------------------------------------------
-  */
-
   void formatStudentNumber(String value) {
     var numbers = value.replaceAll(RegExp(r'[^0-9]'), '');
 
@@ -61,12 +55,6 @@ class _LoginTabState extends State<LoginTab> {
       );
     }
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | LOGIN
-  |--------------------------------------------------------------------------
-  */
 
   Future<void> login() async {
     if (loading) {
@@ -129,7 +117,7 @@ class _LoginTabState extends State<LoginTab> {
 
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(
-        builder: (_) => HomeScreen(user: result.user, student: result.student),
+        builder: (_) => const HomeScreen(),
       ),
       (route) => false,
     );
@@ -155,12 +143,6 @@ class _LoginTabState extends State<LoginTab> {
       },
     );
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | UI
-  |--------------------------------------------------------------------------
-  */
 
   @override
   Widget build(BuildContext context) {
@@ -233,12 +215,7 @@ class _LoginTabState extends State<LoginTab> {
               ),
 
               TextButton(
-                onPressed: () {
-                  /*
-                   * Forgot password
-                   * comes later.
-                   */
-                },
+                onPressed: () {},
                 child: const Text(
                   'Forgot password?',
                   style: TextStyle(fontSize: 12, color: AppColors.textPrimary),

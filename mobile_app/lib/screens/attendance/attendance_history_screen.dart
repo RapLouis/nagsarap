@@ -1,559 +1,202 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 
 import '../../models/attendance_history_item.dart';
 import '../../services/attendance_history_service.dart';
-import '../../widgets/main_bottom_navigation.dart';
 
 class AttendanceHistoryScreen extends StatefulWidget {
-  const AttendanceHistoryScreen({
-    super.key,
-  });
+  const AttendanceHistoryScreen({super.key});
 
   @override
-  State<AttendanceHistoryScreen> createState() =>
-      _AttendanceHistoryScreenState();
+  State<AttendanceHistoryScreen> createState() => _AttendanceHistoryScreenState();
 }
 
-class _AttendanceHistoryScreenState
-    extends State<AttendanceHistoryScreen> {
-  static const Color navy = Color(0xFF080878);
-  static const Color background = Color(0xFFF6F6F6);
-  static const Color muted = Color(0xFF777783);
+class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
+  static const Color brandNavy = Color(0xFF1B1F5C);
+  static const Color brandGold = Color(0xFFC9973E);
+  static const Color bgLight = Color(0xFFF9FAFB);
 
   bool _loading = true;
-
   String? _error;
-
-  bool _networkUnavailable = false;
-
-  List<AttendanceHistoryItem> _records =
-      const <AttendanceHistoryItem>[];
+  List<AttendanceHistoryItem> _records = const [];
 
   @override
   void initState() {
     super.initState();
-
-    _loadHistory();
+    _fetchHistory();
   }
 
-  Future<void> _loadHistory() async {
-    if (mounted) {
+  Future<void> _fetchHistory() async {
+    if (!mounted) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    final result = await AttendanceHistoryService.instance.getHistory();
+    if (!mounted) return;
+
+    if (!result.success) {
       setState(() {
-        _loading = true;
-        _error = null;
-        _networkUnavailable = false;
+        _loading = false;
+        _error = result.message;
       });
-    }
-
-    final result =
-        await AttendanceHistoryService.instance.getHistory();
-
-    if (!mounted) {
       return;
     }
 
     setState(() {
       _loading = false;
-
-      if (result.success) {
-        _records = result.records;
-        _error = null;
-        _networkUnavailable = false;
-      } else {
-        _records = const <AttendanceHistoryItem>[];
-        _error = result.message;
-        _networkUnavailable = result.networkUnavailable;
-      }
+      _records = result.records;
+      _error = null;
     });
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: background,
-      appBar: AppBar(
-        backgroundColor: navy,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        title: const Text(
-          'Attendance History',
-          style: TextStyle(
-            fontWeight: FontWeight.w700,
-          ),
+  void _showRecordDetails(AttendanceHistoryItem item) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          item.eventName,
+          style: const TextStyle(fontWeight: FontWeight.bold, color: brandNavy),
         ),
-      ),
-      body: RefreshIndicator(
-        color: navy,
-        onRefresh: _loadHistory,
-        child: _buildBody(),
-      ),
-      bottomNavigationBar:
-          const MainBottomNavigation(currentIndex: -1),
-      floatingActionButton:
-          MainBottomNavigation.scannerButton(context),
-      floatingActionButtonLocation:
-          FloatingActionButtonLocation.centerDocked,
-    );
-  }
-
-  Widget _buildBody() {
-    if (_loading) {
-      return const Center(
-        child: CircularProgressIndicator(
-          color: navy,
-        ),
-      );
-    }
-
-    if (_error != null) {
-      return ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.all(20),
-        children: [
-          const SizedBox(height: 70),
-          _buildError(),
-        ],
-      );
-    }
-
-    if (_records.isEmpty) {
-      return ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.all(20),
-        children: [
-          const SizedBox(height: 100),
-          _buildEmpty(),
-        ],
-      );
-    }
-
-    return ListView.separated(
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(
-        18,
-        22,
-        18,
-        112,
-      ),
-      itemCount: _records.length,
-      separatorBuilder: (
-        BuildContext context,
-        int index,
-      ) {
-        return const SizedBox(height: 14);
-      },
-      itemBuilder: (
-        BuildContext context,
-        int index,
-      ) {
-        return _buildAttendanceCard(
-          _records[index],
-        );
-      },
-    );
-  }
-
-  Widget _buildAttendanceCard(
-    AttendanceHistoryItem record,
-  ) {
-    final statusColor =
-        _statusColor(record.status);
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(17),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(17),
-        border: Border.all(
-          color: const Color(0xFFE2E2E8),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment:
-            CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment:
-                CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFF4C8),
-                  borderRadius:
-                      BorderRadius.circular(12),
-                ),
-                child: const Icon(
-                  Icons.event_available_rounded,
-                  color: navy,
-                  size: 24,
-                ),
-              ),
-              const SizedBox(width: 13),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment:
-                      CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      record.eventName,
-                      style: const TextStyle(
-                        color: Colors.black,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      _eventDate(record),
-                      style: const TextStyle(
-                        color: muted,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(
-                  horizontal: 11,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: statusColor.withValues(
-                    alpha: 0.12,
-                  ),
-                  borderRadius:
-                      BorderRadius.circular(20),
-                ),
-                child: Text(
-                  _displayStatus(record.status),
-                  style: TextStyle(
-                    color: statusColor,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildDetailRow('Status', item.status.toUpperCase()),
+            const SizedBox(height: 8),
+            _buildDetailRow('Session', item.sessionType == 'time_out' ? 'Time-Out' : 'Time-In'),
+            const SizedBox(height: 8),
+            _buildDetailRow('Recorded Time', item.attendanceTime ?? 'N/A'),
+            if (item.eventDate != null) ...[
+              const SizedBox(height: 8),
+              _buildDetailRow('Event Date', item.eventDate!),
             ],
+            if (item.venue != null) ...[
+              const SizedBox(height: 8),
+              _buildDetailRow('Venue', item.venue!),
+            ],
+            if (item.locationAccuracy != null) ...[
+              const SizedBox(height: 8),
+              _buildDetailRow('GPS Accuracy', '${item.locationAccuracy!.toStringAsFixed(1)} m'),
+            ],
+            if (item.source != null) ...[
+              const SizedBox(height: 8),
+              _buildDetailRow('Check-in Method', item.source!),
+            ],
+            const SizedBox(height: 8),
+            _buildDetailRow('Confidence Score', '${(item.confidenceScore * 100).toStringAsFixed(1)}%'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close', style: TextStyle(color: brandNavy, fontWeight: FontWeight.bold)),
           ),
-
-          const SizedBox(height: 16),
-
-          const Divider(height: 1),
-
-          const SizedBox(height: 14),
-
-          _infoRow(
-            Icons.access_time_rounded,
-            'Attendance Time',
-            _attendanceDateTime(
-              record.attendanceTime,
-            ),
-          ),
-
-          if (record.venue.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            _infoRow(
-              Icons.location_on_outlined,
-              'Location',
-              record.venue,
-            ),
-          ],
-
-          if (record.confidenceScore != null) ...[
-            const SizedBox(height: 10),
-            _infoRow(
-              Icons.verified_user_outlined,
-              'Face Match',
-              _confidence(
-                record.confidenceScore!,
-              ),
-            ),
-          ],
-
-          if (record.locationAccuracy != null) ...[
-            const SizedBox(height: 10),
-            _infoRow(
-              Icons.gps_fixed_rounded,
-              'GPS Accuracy',
-              '±${record.locationAccuracy!.round()} m',
-            ),
-          ],
-
-          if (record.source.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            _infoRow(
-              Icons.devices_rounded,
-              'Source',
-              _sourceName(record.source),
-            ),
-          ],
         ],
       ),
     );
   }
 
-  Widget _infoRow(
-    IconData icon,
-    String label,
-    String value,
-  ) {
+  Widget _buildDetailRow(String label, String value) {
     return Row(
-      crossAxisAlignment:
-          CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(
-          icon,
-          color: navy,
-          size: 18,
-        ),
-        const SizedBox(width: 9),
         SizedBox(
-          width: 112,
+          width: 110,
           child: Text(
             label,
-            style: const TextStyle(
-              color: muted,
-              fontSize: 12,
-            ),
+            style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.grey, fontSize: 13),
           ),
         ),
         Expanded(
           child: Text(
             value,
-            textAlign: TextAlign.right,
-            style: const TextStyle(
-              color: Colors.black,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-            ),
+            style: const TextStyle(fontWeight: FontWeight.bold, color: brandNavy, fontSize: 13),
           ),
         ),
       ],
     );
   }
 
-  Widget _buildEmpty() {
-    return Container(
-      padding: const EdgeInsets.all(28),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius:
-            BorderRadius.circular(18),
-      ),
-      child: const Column(
-        children: [
-          Icon(
-            Icons.history_rounded,
-            color: navy,
-            size: 48,
-          ),
-          SizedBox(height: 14),
-          Text(
-            'No attendance yet',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          SizedBox(height: 7),
-          Text(
-            'Your recorded attendance will appear here.',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: muted,
-              fontSize: 13,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildError() {
-    return Container(
-      padding: const EdgeInsets.all(28),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius:
-            BorderRadius.circular(18),
-        border: Border.all(
-          color: const Color(0xFFE4E4EA),
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: bgLight,
+      appBar: AppBar(
+        backgroundColor: brandNavy,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        title: const Text(
+          'Attendance History',
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
         ),
       ),
-      child: Column(
-        children: [
-          Icon(
-            _networkUnavailable
-                ? Icons.cloud_off_rounded
-                : Icons.error_outline_rounded,
-            color: _networkUnavailable
-                ? Colors.orange
-                : Colors.red,
-            size: 46,
-          ),
+      body: RefreshIndicator(
+        color: brandNavy,
+        onRefresh: _fetchHistory,
+        child: _loading
+            ? const Center(child: CircularProgressIndicator(color: brandNavy))
+            : _error != null
+                ? Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(_error!),
+                        const SizedBox(height: 12),
+                        ElevatedButton(
+                          onPressed: _fetchHistory,
+                          style: ElevatedButton.styleFrom(backgroundColor: brandNavy),
+                          child: const Text('Retry', style: TextStyle(color: Colors.white)),
+                        ),
+                      ],
+                    ),
+                  )
+                : _records.isEmpty
+                    ? const Center(child: Text('No attendance records found.'))
+                    : ListView.builder(
+                        padding: const EdgeInsets.all(16),
+                        itemCount: _records.length,
+                        itemBuilder: (context, index) {
+                          final item = _records[index];
+                          final isTimeOut = item.sessionType == 'time_out';
 
-          const SizedBox(height: 13),
-
-          Text(
-            _networkUnavailable
-                ? 'Server Connection Failed'
-                : 'Unable to Load History',
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-
-          const SizedBox(height: 8),
-
-          Text(
-            _error ?? 'Please try again.',
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: muted,
-              fontSize: 13,
-              height: 1.45,
-            ),
-          ),
-
-          const SizedBox(height: 18),
-
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              onPressed: _loadHistory,
-              style: FilledButton.styleFrom(
-                backgroundColor: navy,
-                foregroundColor: Colors.white,
-              ),
-              icon: const Icon(
-                Icons.refresh_rounded,
-              ),
-              label: const Text(
-                'Try Again',
-              ),
-            ),
-          ),
-        ],
+                          return Card(
+                            margin: const EdgeInsets.only(bottom: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: ListTile(
+                              onTap: () => _showRecordDetails(item),
+                              leading: CircleAvatar(
+                                backgroundColor: isTimeOut
+                                    ? brandGold.withValues(alpha: 0.15)
+                                    : const Color(0xFF10B981).withValues(alpha: 0.15),
+                                child: Icon(
+                                  isTimeOut ? Icons.logout_rounded : Icons.check_circle_rounded,
+                                  color: isTimeOut ? brandGold : const Color(0xFF10B981),
+                                ),
+                              ),
+                              title: Text(
+                                item.eventName,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: brandNavy,
+                                ),
+                              ),
+                              subtitle: Text(
+                                '${isTimeOut ? "Time-Out" : "Time-In"} • ${item.attendanceTime ?? "Recorded"}',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                              trailing: const Icon(
+                                Icons.chevron_right_rounded,
+                                color: Colors.grey,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
       ),
     );
-  }
-
-  String _eventDate(
-    AttendanceHistoryItem record,
-  ) {
-    final parsed =
-        DateTime.tryParse(record.eventDate);
-
-    if (parsed != null) {
-      return DateFormat(
-        'MMMM d, yyyy',
-      ).format(parsed);
-    }
-
-    if (record.eventDate.isNotEmpty) {
-      return record.eventDate;
-    }
-
-    if (record.attendanceTime != null) {
-      return DateFormat(
-        'MMMM d, yyyy',
-      ).format(
-        record.attendanceTime!.toLocal(),
-      );
-    }
-
-    return 'Date unavailable';
-  }
-
-  String _attendanceDateTime(
-    DateTime? value,
-  ) {
-    if (value == null) {
-      return 'Time unavailable';
-    }
-
-    return DateFormat(
-      'MMM d, yyyy • h:mm a',
-    ).format(
-      value.toLocal(),
-    );
-  }
-
-  String _confidence(double score) {
-    final percentage =
-        score <= 1 ? score * 100 : score;
-
-    return '${percentage.toStringAsFixed(1)}%';
-  }
-
-  String _displayStatus(String value) {
-    final normalized = value.trim();
-
-    if (normalized.isEmpty) {
-      return 'Recorded';
-    }
-
-    return normalized
-        .split('_')
-        .map(
-          (word) {
-            if (word.isEmpty) {
-              return '';
-            }
-
-            return '${word[0].toUpperCase()}'
-                '${word.substring(1).toLowerCase()}';
-          },
-        )
-        .join(' ');
-  }
-
-  Color _statusColor(String status) {
-    switch (status.trim().toLowerCase()) {
-      case 'present':
-      case 'verified':
-        return const Color(0xFF159947);
-
-      case 'late':
-        return const Color(0xFFFF8A00);
-
-      case 'absent':
-        return const Color(0xFFD32F2F);
-
-      case 'excused':
-        return const Color(0xFF1976D2);
-
-      default:
-        return navy;
-    }
-  }
-
-  String _sourceName(String value) {
-    switch (value.trim().toLowerCase()) {
-      case 'mobile_online':
-        return 'Mobile';
-
-      case 'mobile_offline':
-      case 'mobile_offline_sync':
-        return 'Mobile Offline';
-
-      case 'kiosk':
-        return 'Kiosk';
-
-      case 'web':
-        return 'Web';
-
-      default:
-        return value;
-    }
   }
 }

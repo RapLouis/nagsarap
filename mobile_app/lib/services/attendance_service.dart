@@ -4,7 +4,6 @@ import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/liveness_challenge.dart';
-
 import '../core/api_endpoints.dart';
 import 'api_service.dart';
 import 'offline_storage_service.dart';
@@ -29,19 +28,9 @@ class AttendanceService {
   static final AttendanceService instance = AttendanceService._();
 
   final ApiService _api = ApiService.instance;
-
   final OfflineStorageService _offlineStorage = OfflineStorageService.instance;
 
-  // Prevents Home load, app resume, pull-to-refresh, or another caller
-  // from synchronizing the same offline biometric files simultaneously.
   Future<OfflineSyncResult>? _activeOfflineSync;
-
-  // Local frame selection only. Laravel/Python remains authoritative.
-  // These values match the tolerant online challenge so an offline record
-  // is not rejected merely because one candidate is slightly off-center.
-  // ===========================================================================
-  // SERVER LIVENESS CHALLENGE
-  // ===========================================================================
 
   Future<LivenessChallengeResult> requestLivenessChallenge({
     required int eventId,
@@ -53,8 +42,8 @@ class AttendanceService {
         ApiEndpoints.attendanceLivenessChallenge,
         data: {'event_id': eventId, 'session_id': sessionId},
         options: Options(
-          sendTimeout: const Duration(seconds: 10),
-          receiveTimeout: const Duration(seconds: 10),
+          sendTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 15),
         ),
       );
 
@@ -69,15 +58,13 @@ class AttendanceService {
           nonce != null &&
           nonce.isNotEmpty &&
           validDirection) {
-        final challengeDirection = direction!;
-
         return LivenessChallengeResult(
           success: true,
           networkUnavailable: false,
           message: 'Liveness challenge issued.',
           challenge: LivenessChallenge(
             nonce: nonce,
-            direction: challengeDirection,
+            direction: direction!,
             sessionId: sessionId,
             expiresAt: data?['expires_at'] is num
                 ? (data!['expires_at'] as num).toInt()
@@ -91,9 +78,12 @@ class AttendanceService {
         networkUnavailable: false,
         message:
             map?['message']?.toString() ??
-            'Unable to start the liveness challenge.',
+            'Unable to start liveness challenge.',
       );
     } on DioException catch (e) {
+      debugPrint(
+        'ATTENDANCE CHALLENGE DIO ERROR: ${e.response?.statusCode} - ${e.response?.data}',
+      );
       return LivenessChallengeResult(
         success: false,
         networkUnavailable: e.response == null,
@@ -104,14 +94,10 @@ class AttendanceService {
       return const LivenessChallengeResult(
         success: false,
         networkUnavailable: false,
-        message: 'Unable to start the liveness challenge.',
+        message: 'Unable to start liveness challenge.',
       );
     }
   }
-
-  // ===========================================================================
-  // ANALYZE ONE ATTENDANCE LIVENESS FRAME
-  // ===========================================================================
 
   Future<AttendanceLivenessFrameResult> analyzeLivenessFrame({
     required XFile frame,
@@ -171,17 +157,12 @@ class AttendanceService {
       );
     } catch (e) {
       debugPrint('LIVENESS FRAME ERROR: $e');
-
       return const AttendanceLivenessFrameResult(
         success: false,
         message: 'Unable to analyze camera frame.',
       );
     }
   }
-
-  // ===========================================================================
-  // NORMAL ONLINE ATTENDANCE
-  // ===========================================================================
 
   Future<AttendanceResult> mobileCheckIn({
     required int eventId,
@@ -232,6 +213,9 @@ class AttendanceService {
 
       return AttendanceResult.fromJson(map);
     } on DioException catch (e) {
+      debugPrint(
+        'CHECKIN DIO ERROR: ${e.response?.statusCode} - ${e.response?.data}',
+      );
       return AttendanceResult(
         success: false,
         code: _extractCode(e),
@@ -241,21 +225,12 @@ class AttendanceService {
       );
     } catch (e) {
       debugPrint('ATTENDANCE ERROR: $e');
-
       return const AttendanceResult(
         success: false,
         message: 'Unable to record attendance.',
       );
     }
   }
-
-  // ===========================================================================
-  // STORE OFFLINE ATTENDANCE
-  //
-  // Offline capture uses exactly the same two evidence stages as online:
-  // CENTER -> TURN LEFT/RIGHT -> COMPLETE.
-  // No blink, smile, or return-to-center evidence is stored.
-  // ===========================================================================
 
   Future<AttendanceResult> queueOfflineAttendance({
     required int eventId,
@@ -274,8 +249,7 @@ class AttendanceService {
         return const AttendanceResult(
           success: false,
           code: 'OFFLINE_ALREADY_PENDING',
-          message:
-              'An offline attendance for this event is already waiting to sync.',
+          message: 'An offline attendance for this event is already waiting to sync.',
         );
       }
 
@@ -303,7 +277,6 @@ class AttendanceService {
       );
     } catch (e) {
       debugPrint('QUEUE OFFLINE ERROR: $e');
-
       return const AttendanceResult(
         success: false,
         code: 'OFFLINE_SAVE_FAILED',
@@ -311,13 +284,6 @@ class AttendanceService {
       );
     }
   }
-
-  // ===========================================================================
-  // SYNC ONE OFFLINE RECORD
-  //
-  // The server performs the authoritative liveness verification when the
-  // phone reconnects. Only CENTER + TURN are uploaded.
-  // ===========================================================================
 
   Future<AttendanceResult> syncOfflineAttendance(
     PendingAttendanceRecord record,
@@ -371,11 +337,8 @@ class AttendanceService {
       return AttendanceResult.fromJson(map);
     } on DioException catch (e) {
       debugPrint(
-        'OFFLINE SYNC HTTP ERROR: '
-        '${e.response?.statusCode} '
-        '${e.response?.data}',
+        'OFFLINE SYNC HTTP ERROR: ${e.response?.statusCode} - ${e.response?.data}',
       );
-
       return AttendanceResult(
         success: false,
         code: _extractCode(e),
@@ -385,7 +348,6 @@ class AttendanceService {
       );
     } catch (e) {
       debugPrint('OFFLINE SYNC ERROR: $e');
-
       return const AttendanceResult(
         success: false,
         code: 'OFFLINE_SYNC_FAILED',
@@ -394,33 +356,16 @@ class AttendanceService {
     }
   }
 
-  // ===========================================================================
-  // SYNC ALL PENDING ATTENDANCE
-  //
-  // SINGLE-FLIGHT GUARANTEE
-  //
-  // Home loading, app-resume, pull-to-refresh, and manual synchronization can
-  // all request synchronization.
-  //
-  // Only one real synchronization operation may access the offline biometric
-  // files at one time.
-  //
-  // Other callers join the same Future instead of starting a second processor.
-  // ===========================================================================
-
   Future<OfflineSyncResult> syncPendingAttendances() {
     final existing = _activeOfflineSync;
 
     if (existing != null) {
       debugPrint('OFFLINE SYNC: already running - joining existing sync.');
-
       return existing;
     }
 
     late final Future<OfflineSyncResult> future;
-
     future = Future<OfflineSyncResult>(_runPendingAttendanceSync);
-
     _activeOfflineSync = future;
 
     future.whenComplete(() {
@@ -432,132 +377,35 @@ class AttendanceService {
     return future;
   }
 
-  // ===========================================================================
-  // ACTUAL OFFLINE QUEUE PROCESSOR
-  // ===========================================================================
+  Future<bool> syncPendingRecords() async {
+    final result = await syncPendingAttendances();
+    return result.synced > 0 || result.remaining == 0;
+  }
 
   Future<OfflineSyncResult> _runPendingAttendanceSync() async {
     final records = await _offlineStorage.getPendingAttendances();
 
-    debugPrint('==========================================');
-
-    debugPrint('OFFLINE SYNC START');
-
-    debugPrint('Pending records: ${records.length}');
-
-    debugPrint('==========================================');
-
     if (records.isEmpty) {
-      debugPrint('OFFLINE SYNC: nothing to synchronize.');
-
       return const OfflineSyncResult(total: 0, synced: 0, remaining: 0);
     }
 
     var synced = 0;
 
     for (final record in records) {
-      debugPrint('OFFLINE SYNC: processing ${record.uuid}');
-
       final result = await syncOfflineAttendance(record);
 
-      debugPrint('==========================================');
-
-      debugPrint('OFFLINE SYNC RESULT');
-
-      debugPrint('Success: ${result.success}');
-
-      debugPrint('Code: ${result.code}');
-
-      debugPrint('Message: ${result.message}');
-
-      debugPrint('Network unavailable: ${result.networkUnavailable}');
-
-      debugPrint('==========================================');
-
-      // -----------------------------------------------------------------------
-      // SUCCESS
-      //
-      // Laravel accepted and stored this attendance.
-      //
-      // The server is now authoritative, so remove its local pending files.
-      // -----------------------------------------------------------------------
-
-      if (result.success) {
+      if (result.success || result.code == 'ALREADY_CHECKED_IN') {
         await _offlineStorage.deletePending(record);
-
         synced++;
-
-        debugPrint(
-          'OFFLINE SYNC: '
-          '${record.uuid} synchronized and removed locally.',
-        );
-
         continue;
       }
-
-      // -----------------------------------------------------------------------
-      // DUPLICATE / IDEMPOTENCY
-      //
-      // Laravel already owns an attendance for this student/event.
-      //
-      // There is no reason to retry this local queue forever.
-      // -----------------------------------------------------------------------
-
-      if (result.code == 'ALREADY_CHECKED_IN') {
-        await _offlineStorage.deletePending(record);
-
-        synced++;
-
-        debugPrint(
-          'OFFLINE SYNC: '
-          '${record.uuid} already exists on server. '
-          'Local copy removed.',
-        );
-
-        continue;
-      }
-
-      // -----------------------------------------------------------------------
-      // NETWORK FAILURE
-      //
-      // Stop and keep all remaining evidence locally.
-      // -----------------------------------------------------------------------
 
       if (result.networkUnavailable) {
-        debugPrint(
-          'OFFLINE SYNC: network unavailable. '
-          'Keeping pending attendance locally.',
-        );
-
         break;
       }
-
-      // -----------------------------------------------------------------------
-      // VERIFICATION OR SERVER REJECTION
-      //
-      // Do not silently destroy biometric evidence when verification fails.
-      // -----------------------------------------------------------------------
-
-      debugPrint(
-        'OFFLINE SYNC: '
-        '${record.uuid} was not accepted. '
-        'Keeping it locally.',
-      );
     }
 
     final remaining = await _offlineStorage.pendingCount();
-
-    debugPrint('==========================================');
-
-    debugPrint('OFFLINE SYNC COMPLETE');
-
-    debugPrint('Total: ${records.length}');
-
-    debugPrint('Synced: $synced');
-
-    debugPrint('Remaining: $remaining');
-
-    debugPrint('==========================================');
 
     return OfflineSyncResult(
       total: records.length,
@@ -566,63 +414,34 @@ class AttendanceService {
     );
   }
 
-  // ===========================================================================
-  // PENDING COUNT
-  // ===========================================================================
-
   Future<int> pendingOfflineCount() {
     return _offlineStorage.pendingCount();
   }
 
-  // ===========================================================================
-  // HELPERS
-  // ===========================================================================
-
   Map<String, dynamic>? _asMap(dynamic value) {
-    if (value is Map) {
-      return Map<String, dynamic>.from(value);
-    }
-
+    if (value is Map) return Map<String, dynamic>.from(value);
     return null;
   }
 
   bool _boolValue(dynamic value) {
-    if (value is bool) {
-      return value;
-    }
-
-    if (value is num) {
-      return value != 0;
-    }
-
+    if (value is bool) return value;
+    if (value is num) return value != 0;
     if (value is String) {
       final normalized = value.trim().toLowerCase();
-
       return normalized == 'true' || normalized == '1';
     }
-
     return false;
   }
 
   double? _doubleValue(dynamic value) {
-    if (value is num) {
-      return value.toDouble();
-    }
-
-    if (value is String) {
-      return double.tryParse(value);
-    }
-
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value);
     return null;
   }
 
   String? _extractCode(DioException exception) {
     final raw = exception.response?.data;
-
-    if (raw is Map) {
-      return raw['code']?.toString();
-    }
-
+    if (raw is Map) return raw['code']?.toString();
     return null;
   }
 
@@ -630,59 +449,44 @@ class AttendanceService {
     final response = exception.response;
 
     if (response == null) {
-      return 'Unable to connect to the server.';
+      return 'Unable to connect to server. Please check your internet connection.';
     }
 
     final raw = response.data;
 
     if (raw is Map) {
       final map = Map<String, dynamic>.from(raw);
-
       final errors = map['errors'];
 
       if (errors is Map && errors.isNotEmpty) {
         final first = errors.values.first;
-
         if (first is List && first.isNotEmpty) {
           return first.first.toString();
         }
-
         return first.toString();
       }
 
-      if (map['message'] != null) {
-        return map['message'].toString();
-      }
+      if (map['message'] != null) return map['message'].toString();
     }
 
     switch (response.statusCode) {
       case 401:
         return 'Your login session has expired.';
-
       case 403:
         return 'Your account cannot record attendance.';
-
       case 404:
-        return 'Event not found.';
-
+        return 'Event or endpoint not found on server.';
       case 409:
         return 'Attendance has already been recorded.';
-
       case 422:
         return 'Attendance verification failed.';
-
       case 429:
         return 'Too many requests. Please wait.';
-
       default:
-        return 'Attendance verification failed.';
+        return 'Server Error (${response.statusCode}): ${response.statusMessage ?? "Attendance verification failed."}';
     }
   }
 }
-
-// =============================================================================
-// ATTENDANCE RESULT
-// =============================================================================
 
 class AttendanceResult {
   const AttendanceResult({
@@ -701,7 +505,6 @@ class AttendanceResult {
 
   factory AttendanceResult.fromJson(Map<String, dynamic> json) {
     final rawData = json['data'];
-
     return AttendanceResult(
       success: json['success'] == true,
       message: json['message']?.toString() ?? 'Unknown response.',
@@ -710,10 +513,6 @@ class AttendanceResult {
     );
   }
 }
-
-// =============================================================================
-// LIVENESS FRAME RESULT
-// =============================================================================
 
 class AttendanceLivenessFrameResult {
   const AttendanceLivenessFrameResult({
@@ -736,27 +535,18 @@ class AttendanceLivenessFrameResult {
   final bool success;
   final String? code;
   final String message;
-
   final bool faceDetected;
-
   final double? yaw;
   final double? faceCenterX;
   final double? faceCenterY;
   final bool faceInComfortableZone;
   final double? eyeOpenness;
   final double? mouthWidth;
-
   final double? blurScore;
   final double? detectionScore;
-
   final Map<String, dynamic>? data;
-
   final bool networkUnavailable;
 }
-
-// =============================================================================
-// OFFLINE SYNC RESULT
-// =============================================================================
 
 class OfflineSyncResult {
   const OfflineSyncResult({
@@ -769,4 +559,3 @@ class OfflineSyncResult {
   final int synced;
   final int remaining;
 }
-

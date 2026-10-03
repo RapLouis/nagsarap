@@ -185,7 +185,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         currentIndex: 1,
         notificationBadge: _unreadCount,
       ),
-      floatingActionButton: MainBottomNavigation.scannerButton(context),
+      floatingActionButton: MainBottomNavigation.scannerButton(
+        context,
+        currentIndex: 1,
+      ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
     );
   }

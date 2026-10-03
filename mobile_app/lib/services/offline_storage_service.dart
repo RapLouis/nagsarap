@@ -61,9 +61,9 @@ class PendingAttendanceRecord {
   }
 
   List<String> get allCandidatePaths => <String>[
-        centerFramePath,
-        turnedFramePath,
-      ];
+    centerFramePath,
+    turnedFramePath,
+  ];
 
   bool get allFilesExist {
     if (centerFramePath.isEmpty || turnedFramePath.isEmpty) {
@@ -242,6 +242,8 @@ class OfflineStorageService {
   }
 
   Future<int> pendingCount() async => (await getPendingAttendances()).length;
+
+  Future<int> getPendingCount() => pendingCount();
 
   Future<void> deletePending(PendingAttendanceRecord record) {
     return deletePendingByUuid(record.uuid);

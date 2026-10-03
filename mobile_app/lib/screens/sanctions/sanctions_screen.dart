@@ -54,11 +54,6 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
       if (result.success) {
         final sorted = List<SanctionItem>.from(result.sanctions);
 
-        /*
-         * Oldest to newest.
-         * This makes the attendance issues increase
-         * naturally over time.
-         */
         sorted.sort((a, b) {
           final first = a.issuedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
 
@@ -117,7 +112,10 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
         child: _buildBody(),
       ),
       bottomNavigationBar: const MainBottomNavigation(currentIndex: 3),
-      floatingActionButton: MainBottomNavigation.scannerButton(context),
+      floatingActionButton: MainBottomNavigation.scannerButton(
+        context,
+        currentIndex: 3,
+      ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
     );
   }
@@ -247,10 +245,6 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
       reason = 'Attendance was not recorded for the scheduled activity.';
     }
 
-    /*
-     * Slightly alternate the background to make a long
-     * table easier to scan without creating large cards.
-     */
     final rowColor = index.isEven ? Colors.white : const Color(0xFFFAFAFC);
 
     return Container(

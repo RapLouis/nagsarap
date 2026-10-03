@@ -1,17 +1,11 @@
 import 'package:flutter/material.dart';
 
-import '../core/app_colors.dart';
 import '../screens/calendar/calendar_screen.dart';
 import '../screens/home/home_screen.dart';
 import '../screens/notifications/notifications_screen.dart';
 import '../screens/sanctions/sanctions_screen.dart';
 
 class MainBottomNavigation extends StatelessWidget {
-  final int currentIndex;
-  final int notificationBadge;
-  final VoidCallback? onHomeRefresh;
-  final VoidCallback? onScan;
-
   const MainBottomNavigation({
     super.key,
     required this.currentIndex,
@@ -20,36 +14,45 @@ class MainBottomNavigation extends StatelessWidget {
     this.onScan,
   });
 
-  void _open(BuildContext context, int index) {
+  final int currentIndex;
+  final int notificationBadge;
+  final VoidCallback? onHomeRefresh;
+  final VoidCallback? onScan;
+
+  static const Color brandNavy = Color(0xFF080878);
+  static const Color brandGold = Color(0xFFFFC800);
+
+  void _onItemTapped(BuildContext context, int index) {
     if (index == currentIndex) {
-      if (index == 0) {
-        onHomeRefresh?.call();
+      if (index == 0 && onHomeRefresh != null) {
+        onHomeRefresh!();
       }
       return;
     }
 
-    // Keep the Home screen as the root route. This preserves the loaded
-    // student identity and dashboard state when the user returns Home.
-    Navigator.of(context).popUntil((route) => route.isFirst);
-
-    if (index == 0) {
-      onHomeRefresh?.call();
-      return;
+    Widget destination;
+    switch (index) {
+      case 0:
+        destination = const HomeScreen();
+        break;
+      case 1:
+        destination = const NotificationsScreen();
+        break;
+      case 2:
+        destination = const CalendarScreen();
+        break;
+      case 3:
+        destination = const SanctionsScreen();
+        break;
+      default:
+        destination = const HomeScreen();
     }
 
-    final Widget page = switch (index) {
-      1 => const NotificationsScreen(),
-      2 => const CalendarScreen(),
-      3 => const SanctionsScreen(),
-      _ => const HomeScreen(),
-    };
-
-    Navigator.of(context).push(
-      PageRouteBuilder<void>(
-        pageBuilder: (_, animation, __) =>
-            FadeTransition(opacity: animation, child: page),
-        transitionDuration: const Duration(milliseconds: 180),
-        reverseTransitionDuration: const Duration(milliseconds: 140),
+    Navigator.of(context).pushReplacement(
+      PageRouteBuilder(
+        pageBuilder: (_, _, _) => destination,
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: Duration.zero,
       ),
     );
   }
@@ -57,139 +60,130 @@ class MainBottomNavigation extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return BottomAppBar(
-      height: 82,
-      padding: EdgeInsets.zero,
-      color: Colors.white,
-      surfaceTintColor: Colors.white,
-      elevation: 12,
+      shape: currentIndex == 0 ? const CircularNotchedRectangle() : null,
       notchMargin: 8,
-      shape: const CircularNotchedRectangle(),
-      child: Row(
-        children: [
-          _item(context, 0, Icons.home_rounded, Icons.home_outlined, 'Home'),
-          _item(
-            context,
-            1,
-            Icons.notifications_rounded,
-            Icons.notifications_none_rounded,
-            'Notifications',
-            badge: notificationBadge,
-          ),
-          const SizedBox(width: 76),
-          _item(
-            context,
-            2,
-            Icons.calendar_month_rounded,
-            Icons.calendar_today_outlined,
-            'Calendar',
-          ),
-          _item(
-            context,
-            3,
-            Icons.assignment_rounded,
-            Icons.assignment_outlined,
-            'Sanction',
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _item(
-    BuildContext context,
-    int index,
-    IconData selectedIcon,
-    IconData icon,
-    String label, {
-    int badge = 0,
-  }) {
-    final selected = currentIndex == index;
-    final color = selected ? AppColors.navy : AppColors.textMuted;
-
-    return Expanded(
-      child: InkWell(
-        onTap: () => _open(context, index),
-        child: Padding(
-          padding: const EdgeInsets.only(top: 9, bottom: 6),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 160),
-                    child: Icon(
-                      selected ? selectedIcon : icon,
-                      key: ValueKey<bool>(selected),
-                      color: color,
-                      size: 24,
-                    ),
-                  ),
-                  if (badge > 0)
-                    Positioned(
-                      right: -10,
-                      top: -7,
-                      child: Container(
-                        constraints: const BoxConstraints(
-                          minWidth: 18,
-                          minHeight: 18,
-                        ),
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        alignment: Alignment.center,
-                        decoration: const BoxDecoration(
-                          color: AppColors.error,
-                          shape: BoxShape.circle,
-                        ),
-                        child: Text(
-                          badge > 99 ? '99+' : '$badge',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 9,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                label,
-                maxLines: 1,
-                style: TextStyle(
-                  color: color,
-                  fontSize: 10.5,
-                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
+      color: Colors.white,
+      elevation: 12,
+      child: SizedBox(
+        height: 60,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _buildNavItem(
+              context: context,
+              index: 0,
+              icon: Icons.home_rounded,
+              label: 'Home',
+            ),
+            _buildNavItem(
+              context: context,
+              index: 1,
+              icon: Icons.notifications_rounded,
+              label: 'Notifications',
+              badgeCount: notificationBadge,
+            ),
+            if (currentIndex == 0) const SizedBox(width: 48),
+            _buildNavItem(
+              context: context,
+              index: 2,
+              icon: Icons.calendar_month_rounded,
+              label: 'Calendar',
+            ),
+            _buildNavItem(
+              context: context,
+              index: 3,
+              icon: Icons.assignment_late_rounded,
+              label: 'Sanction',
+            ),
+          ],
         ),
       ),
     );
   }
 
-  static Widget scannerButton(BuildContext context, {VoidCallback? onPressed}) {
-    return SizedBox(
-      width: 72,
-      height: 72,
-      child: FloatingActionButton(
-        heroTag: null,
-        elevation: 5,
-        backgroundColor: AppColors.gold,
-        foregroundColor: AppColors.navyDark,
-        shape: const CircleBorder(),
-        onPressed:
-            onPressed ??
-            () {
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => const HomeScreen(openScannerOnLoad: true),
-                ),
-              );
-            },
-        child: const Icon(Icons.center_focus_strong_rounded, size: 34),
+  Widget _buildNavItem({
+    required BuildContext context,
+    required int index,
+    required IconData icon,
+    required String label,
+    int badgeCount = 0,
+  }) {
+    final bool isSelected = currentIndex == index;
+    final Color color = isSelected ? brandNavy : Colors.grey.shade500;
+
+    return InkWell(
+      onTap: () => _onItemTapped(context, index),
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Icon(icon, color: color, size: 22),
+                if (badgeCount > 0)
+                  Positioned(
+                    right: -6,
+                    top: -3,
+                    child: Container(
+                      padding: const EdgeInsets.all(3),
+                      decoration: const BoxDecoration(
+                        color: Colors.red,
+                        shape: BoxShape.circle,
+                      ),
+                      constraints: const BoxConstraints(
+                        minWidth: 14,
+                        minHeight: 14,
+                      ),
+                      child: Text(
+                        badgeCount > 9 ? '9+' : '$badgeCount',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 8,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 10,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Scanner button helper that only renders when currentIndex == 0 (Home Screen)
+  static Widget? scannerButton(
+    BuildContext context, {
+    int currentIndex = 0,
+    VoidCallback? onPressed,
+  }) {
+    if (currentIndex != 0) return null;
+
+    return FloatingActionButton(
+      backgroundColor: brandGold,
+      elevation: 4,
+      onPressed: onPressed ??
+          () {
+            Navigator.of(context).pushNamed('/scan');
+          },
+      child: const Icon(
+        Icons.qr_code_scanner_rounded,
+        color: Colors.white,
+        size: 28,
       ),
     );
   }

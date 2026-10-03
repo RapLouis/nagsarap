@@ -3,21 +3,29 @@ import 'dart:async';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:permission_handler/permission_handler.dart';
 
+import '../../core/app_colors.dart';
 import '../../models/event_item.dart';
 import '../../services/attendance_service.dart';
 
-enum _AttendanceStep {
-  center,
-  turn,
-  verifying,
-  failed,
-}
+enum _LivenessStep { lookCenter, turn, verifying, passed, failed }
+
+enum AttendanceSessionType { timeIn, timeOut }
 
 class AttendanceFaceVerificationScreen extends StatefulWidget {
-  const AttendanceFaceVerificationScreen({super.key, required this.event});
+  const AttendanceFaceVerificationScreen({
+    super.key,
+    required this.event,
+    this.studentName,
+    this.hasTimeIn = false,
+    this.hasTimeOut = false,
+  });
 
   final EventItem event;
+  final String? studentName;
+  final bool hasTimeIn;
+  final bool hasTimeOut;
 
   @override
   State<AttendanceFaceVerificationScreen> createState() =>
@@ -25,1374 +33,726 @@ class AttendanceFaceVerificationScreen extends StatefulWidget {
 }
 
 class _AttendanceFaceVerificationScreenState
-    extends State<AttendanceFaceVerificationScreen> {
-  static const Color navy = Color(0xFF080878);
-  static const Color gold = Color(0xFFFFC800);
-  static const Color background = Color(0xFFF7F7FB);
-
-  // Tolerant live guidance: the face can sit slightly off-center.
-  // Final Laravel/Python verification remains authoritative.
-  static const double centerYawLimit = 0.30;
-  static const double turnYawDelta = 0.07;
-  static const int stableFramesRequired = 1;
-
-  static const Duration offlinePoseDelay = Duration(milliseconds: 300);
-
-  static const int maxBadFramesBeforeMessage = 8;
+    extends State<AttendanceFaceVerificationScreen>
+    with SingleTickerProviderStateMixin {
+  static const double frontalYawMax = 0.15;
+  static const int frontalHoldFrames = 2;
+  static const double turnYawMin = 0.18;
+  static const int turnHoldFrames = 1;
+  static const double wrongWayYaw = 0.15;
+  static const Duration challengeTimeout = Duration(seconds: 20);
+  static const Duration captureInterval = Duration(milliseconds: 30);
 
   CameraController? _camera;
   Position? _position;
-  Future<Position>? _positionFuture;
 
-  bool _initializing = true;
+  bool _cameraReady = false;
   bool _running = false;
   bool _analyzing = false;
   bool _disposed = false;
 
-  bool _offlineMode = false;
-  bool _offlineCaptureBusy = false;
+  late bool _hasTimeIn;
+  late bool _hasTimeOut;
+  late AttendanceSessionType _currentSession;
 
-  int _offlineGeneration = 0;
-  int _badFrames = 0;
-  int _stableCenterFrames = 0;
-  int _stableTurnFrames = 0;
-  double? _bestTurnDelta;
+  String _direction = 'left';
+  String? _challengeNonce;
+  String? _challengeSessionId;
   String? _error;
+  String? _hint;
 
-  _AttendanceStep _step = _AttendanceStep.center;
+  _LivenessStep _step = _LivenessStep.lookCenter;
 
   XFile? _centerFrame;
   XFile? _turnedFrame;
 
-  XFile? _offlineCenterFrame;
-  XFile? _offlineTurnedFrame;
-
   double? _centerYaw;
+  int _holdCount = 0;
+  int _turnHoldCount = 0;
+  double _holdProgress = 0.0;
+  double _turnProgress = 0.0;
 
-  String? _challengeDirection;
-  String? _challengeNonce;
-  String? _challengeSessionId;
-  String _offlineDirection = 'left';
+  DateTime? _challengeStartTime;
+  late final AnimationController _pulseController;
 
   @override
   void initState() {
     super.initState();
-    _prepare();
+    _hasTimeIn = widget.hasTimeIn;
+    _hasTimeOut = widget.hasTimeOut;
+
+    _currentSession = !_hasTimeIn
+        ? AttendanceSessionType.timeIn
+        : AttendanceSessionType.timeOut;
+
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat(reverse: true);
+
+    _prepareAndStartParallel();
   }
 
-  Future<void> _prepare() async {
+  /// High-speed parallel initialization for Camera, Geolocation, and Challenge API
+  Future<void> _prepareAndStartParallel() async {
     try {
-      final eventId = widget.event.id;
-
-      if (eventId == null) {
+      if (widget.event.id == null) {
         throw Exception('Invalid event ID.');
       }
 
-      _positionFuture = null;
-
-      // Permission order is deliberate: camera permission is requested first
-      // so iOS/Android do not show two system permission dialogs at once.
-      // Once the user grants camera access, GPS permission and the server
-      // challenge are started together.
-      await _startCamera();
-
-      if (!mounted || _disposed) {
-        return;
+      if (_hasTimeIn && _hasTimeOut) {
+        throw Exception('Attendance is already complete for this event.');
       }
 
-      setState(() {
-        _initializing = false;
-        _step = _AttendanceStep.center;
-        _error = null;
-      });
+      // Execute Camera, Location, and Liveness Challenge in parallel
+      final results = await Future.wait([
+        _initCameraFast(),
+        _getFastPosition(),
+        AttendanceService.instance.requestLivenessChallenge(
+          eventId: widget.event.id!,
+        ),
+      ]);
 
-      final positionFuture = _getPosition();
-      _positionFuture = positionFuture;
-      unawaited(_watchPosition(positionFuture));
+      if (_disposed) return;
 
-      final challengeFuture =
-          AttendanceService.instance.requestLivenessChallenge(
-        eventId: eventId,
-      );
-
-      // Start biometric frame analysis immediately after camera permission is
-      // granted. Center-face detection does not need the LEFT/RIGHT challenge,
-      // so the phone can capture the centered frame while the challenge and GPS
-      // are still loading. This removes avoidable network wait time.
-      unawaited(_startOnline());
-
-      final challengeResult = await challengeFuture;
-
-      if (!mounted || _disposed) {
-        return;
+      _position = results[1] as Position?;
+      if (_position != null) {
+        _checkGeofence(_position!);
       }
 
-      if (challengeResult.networkUnavailable) {
-        _offlineDirection =
-            DateTime.now().microsecond.isEven ? 'right' : 'left';
-        _beginOffline();
-        return;
-      }
+      final challengeResult = results[2] as LivenessChallengeResult;
 
       if (!challengeResult.success || challengeResult.challenge == null) {
         throw Exception(challengeResult.message);
       }
 
       final challenge = challengeResult.challenge!;
-
-      _challengeDirection = challenge.direction;
-      _offlineDirection = challenge.direction;
+      _direction = challenge.direction;
       _challengeNonce = challenge.nonce;
       _challengeSessionId = challenge.sessionId;
 
-      // If CENTER was captured while the challenge was loading, go directly
-      // to the requested turn without another preparation phase.
-      if (_centerFrame != null && mounted && _step == _AttendanceStep.center) {
-        setState(() {
-          _step = _AttendanceStep.turn;
-          _error = null;
-        });
-      }
-
-      // _startOnline() is already running. Do not start a second analysis loop.
-      // GPS may still be finishing; _submitOnline waits only if necessary.
-
+      await _startChallenge();
     } catch (e) {
-      if (!mounted || _disposed) {
-        return;
-      }
-
-      setState(() {
-        _initializing = false;
-        _running = false;
-        _step = _AttendanceStep.failed;
-        _error = _cleanError(e);
-      });
+      if (!mounted || _disposed) return;
+      _fail(e.toString().replaceFirst('Exception: ', ''));
     }
   }
 
-  String _cleanError(Object error) {
-    return error.toString().replaceFirst('Exception: ', '');
-  }
-
-  Future<void> _watchPosition(Future<Position> future) async {
-    try {
-      final position = await future;
-
-      if (!mounted || _disposed) {
-        return;
-      }
-
-      _checkLocalGeofence(position);
-      _position = position;
-
-      if (_error != null && _step != _AttendanceStep.failed) {
-        setState(() {
-          _error = null;
-        });
-      }
-    } catch (e) {
-      if (!mounted || _disposed) {
-        return;
-      }
-
-      setState(() {
-        _error = _cleanError(e);
-      });
-    }
-  }
-
-  Future<Position> _getPosition() async {
-    final enabled = await Geolocator.isLocationServiceEnabled();
-
-    if (!enabled) {
-      throw Exception(
-        'Location services are disabled. '
-        'Turn on Location/GPS and try again.',
-      );
+  Future<void> _initCameraFast() async {
+    final cameraPerm = await Permission.camera.request();
+    if (!cameraPerm.isGranted) {
+      throw Exception('Camera permission is required.');
     }
 
-    var permission = await Geolocator.checkPermission();
-
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
+    final cameras = await availableCameras();
+    if (cameras.isEmpty) {
+      throw Exception('No camera available.');
     }
 
-    if (permission == LocationPermission.denied) {
-      throw Exception('Location permission is required to record attendance.');
-    }
-
-    if (permission == LocationPermission.deniedForever) {
-      throw Exception(
-        'Location permission is permanently denied. '
-        'Enable it from the app settings.',
-      );
-    }
-
-    try {
-      return await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.medium,
-          timeLimit: Duration(seconds: 3),
-        ),
-      );
-    } catch (_) {
-      final lastKnown = await Geolocator.getLastKnownPosition();
-
-      if (lastKnown != null) {
-        return lastKnown;
-      }
-
-      throw Exception(
-        'Unable to get your location. '
-        'Keep Location/GPS turned on and try again.',
-      );
-    }
-  }
-
-  void _checkLocalGeofence(Position position) {
-    if (!widget.event.geofenceEnabled) {
-      return;
-    }
-
-    final latitude = widget.event.latitude;
-    final longitude = widget.event.longitude;
-    final radius = widget.event.geofenceRadius;
-
-    if (latitude == null || longitude == null || radius <= 0) {
-      return;
-    }
-
-    final distance = Geolocator.distanceBetween(
-      position.latitude,
-      position.longitude,
-      latitude,
-      longitude,
+    final selected = cameras.firstWhere(
+      (c) => c.lensDirection == CameraLensDirection.front,
+      orElse: () => cameras.first,
     );
 
-    if (distance > radius) {
-      final remaining = distance - radius;
+    final controller = CameraController(
+      selected,
+      ResolutionPreset.low,
+      enableAudio: false,
+      imageFormatGroup: ImageFormatGroup.jpeg,
+    );
 
-      throw Exception(
-        'You are outside the event area. Move about '
-        '${remaining.round()} m closer to the event location and try again.',
-      );
+    await controller.initialize();
+
+    if (!mounted || _disposed) {
+      await controller.dispose();
+      return;
     }
-  }
 
-  Future<void> _startCamera() async {
-    try {
-      final cameras = await availableCameras();
-
-      if (cameras.isEmpty) {
-        throw Exception('No camera is available on this device.');
-      }
-
-      CameraDescription selectedCamera = cameras.first;
-
-      for (final camera in cameras) {
-        if (camera.lensDirection == CameraLensDirection.front) {
-          selectedCamera = camera;
-          break;
-        }
-      }
-
-      final controller = CameraController(
-        selectedCamera,
-        // Low is used for the repeated liveness-analysis frames. The server
-        // only needs enough detail to estimate face pose; this keeps uploads
-        // small and makes the mobile flow much more responsive.
-        ResolutionPreset.low,
-        enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.jpeg,
-      );
-
-      try {
-        await controller.initialize();
-      } on CameraException catch (e) {
-        await controller.dispose();
-
-        if (e.code == 'CameraAccessDenied' ||
-            e.code == 'CameraAccessDeniedWithoutPrompt') {
-          throw Exception(
-            'Camera permission is denied. Allow camera access for CCIS Attendance in Settings, then tap Try Again.',
-          );
-        }
-
-        if (e.code == 'CameraAccessRestricted') {
-          throw Exception(
-            'Camera access is restricted on this device. Enable camera access and try again.',
-          );
-        }
-
-        throw Exception(
-          'Unable to start the camera (${e.code}). Please try again.',
-        );
-      }
-
-      if (!mounted || _disposed) {
-        await controller.dispose();
-        return;
-      }
-
-      _camera = controller;
-
+    _camera = controller;
+    if (mounted) {
       setState(() {
-        _initializing = false;
-        _error = null;
-        _step = _AttendanceStep.center;
+        _cameraReady = true;
       });
-    } on CameraException catch (e) {
-      if (e.code == 'CameraAccessDenied' ||
-          e.code == 'CameraAccessDeniedWithoutPrompt') {
-        throw Exception(
-          'Camera permission is denied. Allow camera access for CCIS Attendance in Settings, then tap Try Again.',
-        );
-      }
-
-      throw Exception(
-        'Unable to start the camera (${e.code}). Please try again.',
-      );
     }
   }
 
-  void _resetEvidence() {
-    _centerFrame = null;
-    _turnedFrame = null;
+  Future<Position?> _getFastPosition() async {
+    bool enabled = await Geolocator.isLocationServiceEnabled();
+    if (!enabled) return null;
 
-    _offlineCenterFrame = null;
-    _offlineTurnedFrame = null;
+    LocationPermission perm = await Geolocator.checkPermission();
+    if (perm == LocationPermission.denied) {
+      perm = await Geolocator.requestPermission();
+    }
+    if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+      return null;
+    }
 
-    _centerYaw = null;
+    // Attempt instant last-known position first to skip GPS lag
+    final lastKnown = await Geolocator.getLastKnownPosition();
+    if (lastKnown != null) {
+      return lastKnown;
+    }
 
-    _badFrames = 0;
-    _stableCenterFrames = 0;
-    _stableTurnFrames = 0;
-    _bestTurnDelta = null;
+    return await Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.medium,
+        timeLimit: Duration(seconds: 4),
+      ),
+    );
   }
 
-  Future<void> _startOnline() async {
-    if (_running ||
-        _camera == null ||
-        !_camera!.value.isInitialized ||
-        _disposed) {
+  void _checkGeofence(Position pos) {
+    if (!widget.event.geofenceEnabled) return;
+    final lat = widget.event.latitude;
+    final lng = widget.event.longitude;
+    final rad = widget.event.geofenceRadius;
+
+    if (lat == null || lng == null || rad <= 0) return;
+
+    final dist = Geolocator.distanceBetween(pos.latitude, pos.longitude, lat, lng);
+    if (dist > rad) {
+      final remaining = (dist - rad).round();
+      throw Exception('Outside event area. Move $remaining m closer.');
+    }
+  }
+
+  Future<void> _startChallenge() async {
+    final controller = _camera;
+    if (_running || controller == null || !controller.value.isInitialized || _disposed) {
       return;
     }
 
-    _resetEvidence();
-
-    _offlineMode = false;
-
-    if (!mounted) {
-      return;
-    }
+    _resetChallenge();
 
     setState(() {
       _running = true;
-      _step = _AttendanceStep.center;
       _error = null;
+      _step = _LivenessStep.lookCenter;
     });
 
     while (mounted &&
         !_disposed &&
         _running &&
-        !_offlineMode &&
-        _step != _AttendanceStep.verifying &&
-        _step != _AttendanceStep.failed) {
-      await _analyzeOnlineFrame();
-
-      if (!_running || _offlineMode || _disposed) {
-        break;
+        _step != _LivenessStep.verifying &&
+        _step != _LivenessStep.passed &&
+        _step != _LivenessStep.failed) {
+      if (!_analyzing) {
+        await _captureAndAnalyze();
       }
-
-      // The network request itself provides the pacing. Do not add another
-      // artificial delay after each analyzed frame.
+      if (!mounted || _disposed || !_running) break;
+      await Future<void>.delayed(captureInterval);
     }
   }
 
-  Future<void> _analyzeOnlineFrame() async {
-    if (_analyzing || !_running || _disposed) {
-      return;
-    }
+  void _resetChallenge() {
+    _centerFrame = null;
+    _turnedFrame = null;
+    _centerYaw = null;
+    _holdCount = 0;
+    _turnHoldCount = 0;
+    _holdProgress = 0.0;
+    _turnProgress = 0.0;
+    _challengeStartTime = null;
+    _hint = null;
+  }
 
-    final camera = _camera;
-
-    if (camera == null ||
-        !camera.value.isInitialized ||
-        camera.value.isTakingPicture) {
+  Future<void> _captureAndAnalyze() async {
+    if (_analyzing || !_running || _disposed) return;
+    final controller = _camera;
+    if (controller == null || !controller.value.isInitialized || controller.value.isTakingPicture) {
       return;
     }
 
     _analyzing = true;
 
     try {
-      final frame = await camera.takePicture();
+      final frame = await controller.takePicture();
+      if (!mounted || _disposed || !_running) return;
 
       final result = await AttendanceService.instance.analyzeLivenessFrame(
         frame: frame,
       );
-
-      if (!mounted || _disposed) {
-        return;
-      }
-
-      if (result.networkUnavailable) {
-        _beginOffline();
-        return;
-      }
+      if (!mounted || _disposed || !_running) return;
 
       if (!result.success || !result.faceDetected) {
-        _badFrames++;
-
-        if (_badFrames >= maxBadFramesBeforeMessage) {
-          setState(() {
-            _error = result.message.isNotEmpty
-                ? result.message
-                : 'Keep one face clearly visible inside the camera.';
-          });
-        }
-
-        // Do not move to another challenge.
+        _resetProgress('Position face inside frame');
         return;
       }
 
       final yaw = result.yaw;
-
       if (yaw == null) {
-        _badFrames++;
-
-        if (_badFrames >= maxBadFramesBeforeMessage) {
-          setState(() {
-            _error = 'Keep your face clearly visible while the camera reads your head position.';
-          });
-        }
-
+        _resetProgress('Keep face clearly visible');
         return;
       }
 
-      if (!result.faceInComfortableZone) {
-        _badFrames++;
-
-        if (_badFrames >= maxBadFramesBeforeMessage) {
-          setState(() {
-            _error = 'Move slightly closer to the middle so your whole face stays visible.';
-          });
-        }
-
-        return;
-      }
-
-      _badFrames = 0;
-
-      if (_error != null) {
-        setState(() {
-          _error = null;
-        });
-      }
-
-      await _processOnlineMeasurement(frame: frame, yaw: yaw);
-    } catch (e) {
-      if (!mounted || _disposed) {
-        return;
-      }
-
-      setState(() {
-        _error = _cleanError(e);
-      });
+      await _processLivenessFrame(frame: frame, yaw: yaw);
+    } catch (_) {
+      _resetProgress('Analyzing orientation...');
     } finally {
       _analyzing = false;
     }
   }
 
-  Future<void> _processOnlineMeasurement({
+  void _resetProgress(String hint) {
+    if (!mounted) return;
+    setState(() {
+      _holdCount = 0;
+      _turnHoldCount = 0;
+      _holdProgress = 0.0;
+      _turnProgress = 0.0;
+      _hint = hint;
+    });
+  }
+
+  Future<void> _processLivenessFrame({
     required XFile frame,
     required double yaw,
   }) async {
     switch (_step) {
-      case _AttendanceStep.center:
-        if (yaw.abs() <= centerYawLimit) {
-          _stableCenterFrames++;
+      case _LivenessStep.lookCenter:
+        if (yaw.abs() > frontalYawMax) {
+          _resetProgress('Look straight at the camera.');
+          return;
+        }
 
-          final currentBest = _centerYaw;
-          if (currentBest == null || yaw.abs() < currentBest.abs()) {
-            _centerFrame = frame;
-            _centerYaw = yaw;
-          }
+        _holdCount++;
+        setState(() {
+          _hint = null;
+          _holdProgress = (_holdCount / frontalHoldFrames).clamp(0.0, 1.0);
+        });
 
-          if (_stableCenterFrames >= stableFramesRequired) {
-            if (!mounted) {
-              return;
-            }
-
-            // Keep the captured center evidence immediately. If the server
-            // challenge has already arrived, move straight to TURN. If it is
-            // still in flight, remain on CENTER until the direction arrives.
-            if (_challengeDirection != null) {
-              setState(() {
-                _step = _AttendanceStep.turn;
-                _error = null;
-              });
-            }
-          }
-        } else {
-          _stableCenterFrames = 0;
+        if (_holdCount >= frontalHoldFrames) {
+          _centerFrame = frame;
+          _centerYaw = yaw;
+          _challengeStartTime = DateTime.now();
+          _turnHoldCount = 0;
+          setState(() {
+            _step = _LivenessStep.turn;
+            _holdProgress = 1.0;
+          });
         }
         break;
 
-      case _AttendanceStep.turn:
-        final centerYaw = _centerYaw;
-
-        if (centerYaw == null) {
-          _stableCenterFrames = 0;
+      case _LivenessStep.turn:
+        final startTime = _challengeStartTime ?? DateTime.now();
+        if (DateTime.now().difference(startTime) > challengeTimeout) {
+          _prepareAndStartParallel();
+          setState(() {
+            _hint = "Time ran out. Let's try again.";
+          });
           return;
         }
 
-        final direction = _challengeDirection;
-        if (direction == null) {
-          return;
-        }
-
+        final centerYaw = _centerYaw ?? 0.0;
         final signedDelta = yaw - centerYaw;
-        final requestedDelta = direction == 'left' ? signedDelta : -signedDelta;
+        final turned = _direction == 'left' ? signedDelta : -signedDelta;
 
-        if (requestedDelta >= turnYawDelta) {
-          _stableTurnFrames++;
+        if (turned <= -wrongWayYaw) {
+          setState(() {
+            _turnHoldCount = 0;
+            _turnProgress = 0.0;
+            _hint = 'Turn to your $_direction, not the other way.';
+          });
+          return;
+        }
 
-          if (_bestTurnDelta == null || requestedDelta > _bestTurnDelta!) {
-            _bestTurnDelta = requestedDelta;
+        final progress = (turned / turnYawMin).clamp(0.0, 1.0);
+        setState(() {
+          _hint = null;
+          _turnProgress = progress;
+        });
+
+        if (turned >= turnYawMin) {
+          _turnHoldCount++;
+          if (_turnHoldCount >= turnHoldFrames) {
             _turnedFrame = frame;
-          }
-
-          if (_stableTurnFrames >= stableFramesRequired) {
-            await _submitOnline();
+            await _submitAttendance();
           }
         } else {
-          _stableTurnFrames = 0;
+          _turnHoldCount = 0;
         }
         break;
 
-
-      case _AttendanceStep.verifying:
-      case _AttendanceStep.failed:
+      case _LivenessStep.verifying:
+      case _LivenessStep.passed:
+      case _LivenessStep.failed:
         break;
     }
   }
 
-  Future<void> _submitOnline() async {
+  Future<void> _submitAttendance() async {
     final eventId = widget.event.id;
-    var position = _position;
-    final centerFrame = _centerFrame;
-    final turnedFrame = _turnedFrame;
-
-    if (position == null && _positionFuture != null) {
-      try {
-        position = await _positionFuture!;
-        _position = position;
-        _checkLocalGeofence(position);
-      } catch (e) {
-        _fail(_cleanError(e));
-        return;
-      }
-    }
-
-    if (eventId == null ||
-        position == null ||
-        centerFrame == null ||
-        turnedFrame == null ||
-        _challengeNonce == null ||
-        _challengeSessionId == null) {
-      _fail('Attendance evidence is incomplete. Please try again.');
+    final pos = _position ?? Position(longitude: 0, latitude: 0, timestamp: DateTime.now(), accuracy: 0, altitude: 0, altitudeAccuracy: 0, heading: 0, headingAccuracy: 0, speed: 0, speedAccuracy: 0);
+    if (eventId == null || _centerFrame == null || _turnedFrame == null) {
       return;
     }
 
-    if (!mounted) return;
-
     setState(() {
       _running = false;
-      _step = _AttendanceStep.verifying;
-      _error = null;
+      _step = _LivenessStep.verifying;
+      _hint = null;
     });
 
     final result = await AttendanceService.instance.mobileCheckIn(
       eventId: eventId,
-      latitude: position.latitude,
-      longitude: position.longitude,
-      locationAccuracy: position.accuracy,
-      centerFrame: centerFrame,
-      turnedFrame: turnedFrame,
-      challengeNonce: _challengeNonce!,
-      sessionId: _challengeSessionId!,
+      latitude: pos.latitude,
+      longitude: pos.longitude,
+      locationAccuracy: pos.accuracy,
+      centerFrame: _centerFrame!,
+      turnedFrame: _turnedFrame!,
+      challengeNonce: _challengeNonce ?? '',
+      sessionId: _challengeSessionId ?? '',
     );
 
     if (!mounted || _disposed) return;
-
-    if (result.networkUnavailable) {
-      await _saveOffline(
-        centerFrame: centerFrame,
-        turnedFrame: turnedFrame,
-      );
-      return;
-    }
 
     if (!result.success) {
       _fail(result.message);
       return;
     }
 
-    await _showSuccess(
-      title: 'Attendance Recorded',
-      message: result.message,
-      offline: false,
-    );
-  }
-
-  void _beginOffline() {
-    if (_offlineMode || _disposed) return;
-
-    _offlineGeneration++;
-    final generation = _offlineGeneration;
-
-    _resetEvidence();
-    _offlineMode = true;
-    _running = false;
-
-    if (mounted) {
-      setState(() {
-        _step = _AttendanceStep.center;
-        _error = null;
-      });
-    }
-
-    Future<void>.microtask(() => _runOfflineSequence(generation));
-  }
-
-  bool _offlineSequenceActive(int generation) {
-    return mounted &&
-        !_disposed &&
-        _offlineMode &&
-        generation == _offlineGeneration;
-  }
-
-  Future<void> _runOfflineSequence(int generation) async {
-    try {
-      if (!_offlineSequenceActive(generation)) return;
-
-      setState(() {
-        _step = _AttendanceStep.center;
-        _error = null;
-      });
-
-      await Future<void>.delayed(offlinePoseDelay);
-      if (!_offlineSequenceActive(generation)) return;
-
-      final camera = _camera;
-      if (camera == null || !camera.value.isInitialized) {
-        throw Exception('Camera is not ready.');
+    setState(() {
+      _step = _LivenessStep.passed;
+      if (_currentSession == AttendanceSessionType.timeIn) {
+        _hasTimeIn = true;
+      } else {
+        _hasTimeOut = true;
       }
+    });
 
-      if (mounted) {
-        setState(() => _offlineCaptureBusy = true);
-      }
-
-      final center = await camera.takePicture();
-      _offlineCenterFrame = center;
-
-      if (mounted) {
-        setState(() {
-          _offlineCaptureBusy = false;
-          _step = _AttendanceStep.turn;
-        });
-      }
-
-      await Future<void>.delayed(offlinePoseDelay);
-      if (!_offlineSequenceActive(generation)) return;
-
-      if (mounted) {
-        setState(() => _offlineCaptureBusy = true);
-      }
-
-      final turned = await camera.takePicture();
-      _offlineTurnedFrame = turned;
-
-      if (mounted) {
-        setState(() {
-          _offlineCaptureBusy = false;
-          _step = _AttendanceStep.verifying;
-        });
-      }
-
-      if (!_offlineSequenceActive(generation)) return;
-
-      await _saveOffline(
-        centerFrame: center,
-        turnedFrame: turned,
-      );
-    } catch (e) {
-      if (_offlineSequenceActive(generation)) {
-        _fail(_cleanError(e));
-      }
-    } finally {
-      if (mounted && !_disposed) {
-        setState(() => _offlineCaptureBusy = false);
-      }
-    }
-  }
-
-  Future<void> _saveOffline({
-    XFile? centerFrame,
-    XFile? turnedFrame,
-  }) async {
-    final eventId = widget.event.id;
-    final position = _position;
-    final center = centerFrame ?? _offlineCenterFrame;
-    final turned = turnedFrame ?? _offlineTurnedFrame;
-
-    if (eventId == null || position == null) {
-      _fail('Event or GPS data is missing.');
-      return;
-    }
-
-    if (center == null || turned == null) {
-      _fail('Offline biometric evidence is incomplete.');
-      return;
-    }
+    // Show Welcome Popup Modal
+    await _showWelcomeModal();
 
     if (!mounted) return;
-
-    setState(() {
-      _offlineMode = true;
-      _running = false;
-      _step = _AttendanceStep.verifying;
-      _offlineCaptureBusy = true;
-      _error = null;
-    });
-
-    final result = await AttendanceService.instance.queueOfflineAttendance(
-      eventId: eventId,
-      latitude: position.latitude,
-      longitude: position.longitude,
-      locationAccuracy: position.accuracy,
-      attendanceTime: DateTime.now(),
-      centerFrame: center,
-      turnedFrame: turned,
-      livenessDirection: _offlineDirection,
-    );
-
-    if (!mounted || _disposed) return;
-
-    setState(() => _offlineCaptureBusy = false);
-
-    if (!result.success) {
-      _fail(result.message);
-      return;
-    }
-
-    await _showSuccess(
-      title: 'Attendance Saved Offline',
-      message: result.message,
-      offline: true,
-    );
+    Navigator.of(context).pop(true);
   }
 
-  void _fail(String message) {
-    if (!mounted || _disposed) {
-      return;
-    }
+  /// Displays the Pop-Up Welcome Modal on completion
+  Future<void> _showWelcomeModal() async {
+    if (!mounted) return;
 
-    _running = false;
-    _offlineMode = false;
-    _offlineCaptureBusy = false;
-
-    _offlineGeneration++;
-
-    setState(() {
-      _step = _AttendanceStep.failed;
-      _error = message;
-    });
-  }
-
-  Future<void> _retry() async {
-    if (_disposed) {
-      return;
-    }
-
-    _running = false;
-    _offlineMode = false;
-    _offlineCaptureBusy = false;
-    _offlineGeneration++;
-    _resetEvidence();
-    _positionFuture = null;
-
-    if (mounted) {
-      setState(() {
-        _initializing = _camera == null || !_camera!.value.isInitialized;
-        _step = _AttendanceStep.center;
-        _error = null;
-      });
-    }
-
-    try {
-      final eventId = widget.event.id;
-
-      if (eventId == null) {
-        throw Exception('Invalid event ID.');
-      }
-
-      if (_camera == null || !_camera!.value.isInitialized) {
-        await _startCamera();
-      }
-
-      if (!mounted || _disposed) {
-        return;
-      }
-
-      // Camera permission has already been granted at this point. Start GPS,
-      // the server challenge, and CENTER analysis together.
-      final positionFuture = _getPosition();
-      _positionFuture = positionFuture;
-      unawaited(_watchPosition(positionFuture));
-
-      final challengeFuture =
-          AttendanceService.instance.requestLivenessChallenge(
-        eventId: eventId,
-      );
-
-      unawaited(_startOnline());
-
-      final challengeResult = await challengeFuture;
-
-      if (!mounted || _disposed) {
-        return;
-      }
-
-      if (challengeResult.networkUnavailable) {
-        _offlineDirection =
-            DateTime.now().microsecond.isEven ? 'right' : 'left';
-        _beginOffline();
-        return;
-      }
-
-      if (!challengeResult.success || challengeResult.challenge == null) {
-        throw Exception(challengeResult.message);
-      }
-
-      final challenge = challengeResult.challenge!;
-
-      _challengeDirection = challenge.direction;
-      _offlineDirection = challenge.direction;
-      _challengeNonce = challenge.nonce;
-      _challengeSessionId = challenge.sessionId;
-
-      if (_centerFrame != null && mounted && _step == _AttendanceStep.center) {
-        setState(() {
-          _step = _AttendanceStep.turn;
-          _error = null;
-        });
-      }
-    } catch (e) {
-      if (!mounted || _disposed) {
-        return;
-      }
-
-      _fail(_cleanError(e));
-    }
-  }
-
-  Future<void> _showSuccess({
-    required String title,
-    required String message,
-    required bool offline,
-  }) async {
-    if (!mounted || _disposed) {
-      return;
-    }
+    Timer? timer;
 
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(22),
-          ),
-          contentPadding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 72,
-                height: 72,
-                decoration: BoxDecoration(
-                  color: offline
-                      ? const Color(0xFFFFF3CD)
-                      : const Color(0xFFE8F8EE),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  offline
-                      ? Icons.cloud_off_rounded
-                      : Icons.check_circle_rounded,
-                  size: 42,
-                  color: offline
-                      ? const Color(0xFFB88600)
-                      : const Color(0xFF0A9F4B),
-                ),
-              ),
-              const SizedBox(height: 18),
-              Text(
-                title,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: navy,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                message,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Color(0xFF626273), height: 1.4),
-              ),
-              if (offline) ...[
-                const SizedBox(height: 14),
+        timer = Timer(const Duration(seconds: 2), () {
+          if (Navigator.canPop(dialogContext)) {
+            Navigator.pop(dialogContext);
+          }
+        });
+
+        final nameText = widget.studentName != null && widget.studentName!.isNotEmpty
+            ? widget.studentName!
+            : 'Student';
+
+        return Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          elevation: 16,
+          backgroundColor: Colors.white,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
                 Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFF8DF),
-                    borderRadius: BorderRadius.circular(12),
+                  width: 64,
+                  height: 64,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFDCFCE7),
+                    shape: BoxShape.circle,
                   ),
-                  child: const Text(
-                    'This attendance is pending and will be '
-                    'synchronized when internet becomes available.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: navy,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+                  child: const Icon(
+                    Icons.check_circle_rounded,
+                    color: Color(0xFF16A34A),
+                    size: 40,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Text(
+                  'Welcome, $nameText!',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.navy,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Attendance ${_currentSession == AttendanceSessionType.timeIn ? "Time-In" : "Time-Out"} verified successfully.',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: Colors.grey,
+                  ),
+                ),
+                const SizedBox(height: 22),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () {
+                      timer?.cancel();
+                      Navigator.pop(dialogContext);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.navy,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: const Text(
+                      'Continue',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
                 ),
               ],
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: navy,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                  ),
-                  onPressed: () {
-                    Navigator.of(dialogContext).pop();
-                  },
-                  child: const Text('Done'),
-                ),
-              ),
-            ],
+            ),
           ),
         );
       },
     );
 
-    if (!mounted || _disposed) {
-      return;
-    }
-
-    Navigator.of(context).pop(true);
+    timer?.cancel();
   }
 
-  String get _instruction {
-    if (_offlineMode) {
-      switch (_step) {
-        case _AttendanceStep.center:
-          return _offlineCaptureBusy
-              ? 'Capturing your centered face...'
-              : 'Look straight at the camera';
-
-        case _AttendanceStep.turn:
-          return _offlineCaptureBusy
-              ? 'Capturing your head turn...'
-              : (_offlineDirection == 'right'
-                    ? 'Turn your head to your RIGHT →'
-                    : '← Turn your head to your LEFT');
-
-        case _AttendanceStep.verifying:
-          return 'Saving offline attendance...';
-
-        case _AttendanceStep.failed:
-          return 'Verification stopped';
-      }
-    }
-
-    switch (_step) {
-      case _AttendanceStep.center:
-        return 'Look straight at the camera';
-
-      case _AttendanceStep.turn:
-        if (_challengeDirection == null) {
-          return 'Look straight at the camera';
-        }
-
-        return _challengeDirection == 'right'
-            ? 'Turn your head to your RIGHT →'
-            : '← Turn your head to your LEFT';
-
-      case _AttendanceStep.verifying:
-        return 'Verifying attendance...';
-
-      case _AttendanceStep.failed:
-        return 'Verification stopped';
-    }
+  void _fail(String message) {
+    if (!mounted || _disposed) return;
+    setState(() {
+      _running = false;
+      _step = _LivenessStep.failed;
+      _error = message;
+    });
   }
 
-  int get _stepNumber {
-    switch (_step) {
-      case _AttendanceStep.center:
-        return 1;
-
-      case _AttendanceStep.turn:
-        return 2;
-
-      case _AttendanceStep.verifying:
-      case _AttendanceStep.failed:
-        return 0;
-    }
-  }
-
-  Widget _buildCameraPreview(CameraController camera) {
-    return CameraPreview(camera);
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    _disposed = true;
+    _running = false;
+    _camera?.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final camera = _camera;
-
     return Scaffold(
-      backgroundColor: background,
+      backgroundColor: AppColors.background,
       appBar: AppBar(
-        backgroundColor: navy,
+        backgroundColor: AppColors.navy,
         foregroundColor: Colors.white,
         elevation: 0,
-        title: const Text(
-          'Record Attendance',
-          style: TextStyle(fontWeight: FontWeight.w700),
+        title: Text(
+          widget.event.name,
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
         ),
       ),
       body: SafeArea(
         child: Column(
           children: [
-            Container(
-              width: double.infinity,
-              margin: const EdgeInsets.fromLTRB(16, 14, 16, 12),
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFFE8E8F0)),
+            const SizedBox(height: 20),
+            Text(
+              'Face Verification (${_currentSession == AttendanceSessionType.timeIn ? 'Time-In' : 'Time-Out'})',
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: AppColors.navy,
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              widget.event.venue,
+              style: const TextStyle(fontSize: 13, color: Colors.grey),
+            ),
+            const Spacer(),
+            
+            Center(
+              child: Stack(
+                alignment: Alignment.center,
                 children: [
-                  Text(
-                    widget.event.name,
-                    style: const TextStyle(
-                      color: navy,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
+                  AnimatedBuilder(
+                    animation: _pulseController,
+                    builder: (context, child) {
+                      return Container(
+                        width: 270,
+                        height: 270,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: AppColors.gold.withValues(
+                              alpha: 0.3 + (_pulseController.value * 0.4),
+                            ),
+                            width: 3.5,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                  Container(
+                    width: 250,
+                    height: 250,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.black,
+                      border: Border.all(color: AppColors.gold, width: 4),
+                    ),
+                    child: ClipOval(
+                      child: _cameraReady && _camera != null && _camera!.value.isInitialized
+                          ? FittedBox(
+                              fit: BoxFit.cover,
+                              child: SizedBox(
+                                width: 250,
+                                height: 250 * _camera!.value.aspectRatio,
+                                child: CameraPreview(_camera!),
+                              ),
+                            )
+                          : const Center(
+                              child: CircularProgressIndicator(color: AppColors.gold),
+                            ),
                     ),
                   ),
-                  if (widget.event.venue.isNotEmpty) ...[
-                    const SizedBox(height: 5),
-                    Row(
-                      children: [
-                        const Icon(
-                          Icons.location_on_outlined,
-                          size: 16,
-                          color: Color(0xFF747484),
+                  if (_step == _LivenessStep.turn)
+                    Positioned(
+                      left: _direction == 'left' ? 16 : null,
+                      right: _direction == 'right' ? 16 : null,
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppColors.navy.withValues(alpha: 0.85),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: AppColors.gold, width: 2),
                         ),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            widget.event.venue,
-                            style: const TextStyle(
-                              color: Color(0xFF747484),
-                              fontSize: 13,
-                            ),
-                          ),
+                        child: Icon(
+                          _direction == 'left' ? Icons.arrow_back : Icons.arrow_forward,
+                          color: Colors.white,
+                          size: 28,
                         ),
-                      ],
+                      ),
                     ),
-                  ],
-                  if (widget.event.geofenceEnabled) ...[
-                    const SizedBox(height: 10),
-                    const Row(
-                      children: [
-                        Icon(
-                          Icons.my_location_rounded,
-                          size: 16,
-                          color: Color(0xFF53607A),
-                        ),
-                        SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            'Location check: you must be within the event area.',
-                            style: TextStyle(
-                              color: Color(0xFF53607A),
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
                 ],
               ),
             ),
+            const SizedBox(height: 18),
 
-            if (_offlineMode)
-              Container(
-                width: double.infinity,
-                margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                padding: const EdgeInsets.all(11),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFF3CD),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: gold),
-                ),
-                child: const Row(
-                  children: [
-                    Icon(Icons.cloud_off_rounded, color: navy),
-                    SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        'Offline Mode — attendance evidence '
-                        'will be stored on this device.',
-                        style: TextStyle(
-                          color: navy,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-            Expanded(
-              child: Container(
-                width: double.infinity,
-                margin: const EdgeInsets.symmetric(horizontal: 16),
-                clipBehavior: Clip.antiAlias,
-                decoration: BoxDecoration(
-                  color: Colors.black,
-                  borderRadius: BorderRadius.circular(24),
-                ),
-                child:
-                    camera == null || !camera.value.isInitialized
-                    ? Center(
-                        child: _error == null
-                            ? const CircularProgressIndicator(color: gold)
-                            : const Padding(
-                                padding: EdgeInsets.all(24),
-                                child: Icon(
-                                  Icons.videocam_off_rounded,
-                                  color: Colors.white,
-                                  size: 54,
-                                ),
-                              ),
-                      )
-                    : Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          _buildCameraPreview(camera),
-                          Positioned(
-                            left: 18,
-                            top: 18,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 6,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.black54,
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Container(
-                                    width: 8,
-                                    height: 8,
-                                    decoration: const BoxDecoration(
-                                      color: Colors.greenAccent,
-                                      shape: BoxShape.circle,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 6),
-                                  const Text(
-                                    'LIVE',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w800,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                          if (_offlineMode)
-                            Positioned(
-                              right: 18,
-                              top: 18,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 6,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: gold,
-                                  borderRadius: BorderRadius.circular(20),
-                                ),
-                                child: const Text(
-                                  'OFFLINE',
-                                  style: TextStyle(
-                                    color: navy,
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          Positioned(
-                            left: 0,
-                            right: 0,
-                            bottom: 0,
-                            child: Container(
-                              padding: const EdgeInsets.all(18),
-                              decoration: const BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                  colors: [Colors.transparent, Colors.black87],
-                                ),
-                              ),
-                              child: Text(
-                                _offlineMode
-                                    ? 'Offline biometric capture'
-                                    : 'Secure biometric verification',
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-              ),
-            ),
-
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 15,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFF7D6),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: gold),
-                ),
-                child: Column(
-                  children: [
-                    if (_stepNumber > 0) ...[
-                      Text(
-                        'Step $_stepNumber of 2',
-                        style: const TextStyle(
-                          color: Color(0xFF777787),
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                    ],
-                    Text(
-                      _instruction,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: navy,
-                        fontSize: 17,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
-            if (_offlineCaptureBusy || _step == _AttendanceStep.verifying)
-              const Padding(
-                padding: EdgeInsets.only(top: 12),
-                child: CircularProgressIndicator(color: navy),
-              ),
-
-            if (_error != null)
-              Container(
-                width: double.infinity,
-                margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFEBEE),
-                  borderRadius: BorderRadius.circular(12),
-                ),
+            _buildInstructionBadge(),
+            
+            const Spacer(),
+            if (_error != null && _step == _LivenessStep.failed)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12, left: 20, right: 20),
                 child: Text(
                   _error!,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(color: Color(0xFFB71C1C)),
+                  style: const TextStyle(
+                    color: Colors.redAccent,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
                 ),
-              ),
-
-            if (_step == _AttendanceStep.failed)
+              )
+            else if (_hint != null)
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: navy,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
-                    onPressed: _retry,
-                    icon: const Icon(Icons.refresh_rounded),
-                    label: const Text('Try Again'),
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Text(
+                  _hint!,
+                  style: const TextStyle(
+                    color: AppColors.gold,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
                   ),
                 ),
               ),
-
-            const SizedBox(height: 16),
+            _buildProgressBar(),
+            const SizedBox(height: 30),
           ],
         ),
       ),
     );
   }
 
-  @override
-  void dispose() {
-    _disposed = true;
-    _running = false;
-    _offlineMode = false;
+  Widget _buildInstructionBadge() {
+    String text;
+    IconData icon;
+    bool spin = false;
 
-    _offlineGeneration++;
+    switch (_step) {
+      case _LivenessStep.lookCenter:
+        text = 'Look straight at the camera';
+        icon = Icons.remove_red_eye_outlined;
+        break;
+      case _LivenessStep.turn:
+        text = 'Turn your head to your $_direction';
+        icon = _direction == 'left' ? Icons.arrow_back : Icons.arrow_forward;
+        break;
+      case _LivenessStep.verifying:
+        text = 'Verifying attendance...';
+        icon = Icons.refresh;
+        spin = true;
+        break;
+      case _LivenessStep.passed:
+        text = 'Verified successfully!';
+        icon = Icons.check_circle_outline;
+        break;
+      case _LivenessStep.failed:
+        text = 'Verification failed';
+        icon = Icons.error_outline;
+        break;
+    }
 
-    _camera?.dispose();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF8E7),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: AppColors.gold.withValues(alpha: 0.6)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          spin
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: AppColors.navy,
+                  ),
+                )
+              : Icon(icon, color: AppColors.navy, size: 20),
+          const SizedBox(width: 8),
+          Text(
+            text,
+            style: const TextStyle(
+              color: AppColors.navy,
+              fontWeight: FontWeight.bold,
+              fontSize: 13,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
-    super.dispose();
+  Widget _buildProgressBar() {
+    double progress = _step == _LivenessStep.lookCenter ? _holdProgress : _turnProgress;
+    return SizedBox(
+      width: 180,
+      height: 6,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(3),
+        child: LinearProgressIndicator(
+          value: progress,
+          backgroundColor: Colors.grey.shade300,
+          valueColor: const AlwaysStoppedAnimation<Color>(AppColors.navy),
+        ),
+      ),
+    );
   }
 }

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../models/event_item.dart';
+import '../../services/attendance_history_service.dart';
 import '../../services/attendance_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/event_service.dart';
@@ -15,11 +16,7 @@ import '../attendance/attendance_face_verification_screen.dart';
 import '../attendance/attendance_history_screen.dart';
 import '../auth/auth_gate.dart';
 import '../calendar/calendar_screen.dart';
-import '../notifications/notifications_screen.dart';
 import '../profile/profile_screen.dart';
-import '../sanctions/sanctions_screen.dart';
-
-import '../../services/attendance_history_service.dart';
 
 class HomeScreen extends StatefulWidget {
   final Map<String, dynamic>? user;
@@ -40,7 +37,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   static const Color navy = Color(0xFF080878);
   static const Color gold = Color(0xFFFFC800);
-  static const Color background = Color(0xFFF6F6F6);
+  static const Color background = Color(0xFFF8F9FC);
   static const Color muted = Color(0xFF808080);
 
   bool _loading = true;
@@ -63,10 +60,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Map<String, dynamic>? _currentStudent;
 
   final Set<int> _attendedEventIds = <int>{};
-
-  // ===========================================================================
-  // LIFECYCLE
-  // ===========================================================================
 
   @override
   void initState() {
@@ -107,10 +100,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  // ===========================================================================
-  // STUDENT
-  // ===========================================================================
-
   String get _firstName {
     final value = _readStudent(['firstname', 'first_name']);
 
@@ -131,11 +120,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   String get _fullName {
     final first = _readStudent(['firstname', 'first_name']);
-
     final middle = _readStudent(['middlename', 'middle_name']);
-
     final last = _readStudent(['surname', 'lastname', 'last_name']);
-
     final extension = _readStudent(['ext', 'extension']);
 
     final result = [
@@ -218,22 +204,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
-  Widget _profileAvatar({double radius = 25}) {
+  Widget _profileAvatar({double radius = 22}) {
     return CircleAvatar(
       radius: radius,
-      backgroundColor: const Color(0xFFE0E0E0),
+      backgroundColor: const Color(0xFFE2E8F0),
       backgroundImage: _profilePhoto != null
           ? MemoryImage(_profilePhoto!)
           : null,
       child: _profilePhoto == null
-          ? const Icon(Icons.person_rounded, color: Color(0xFF777777), size: 30)
+          ? Icon(Icons.person_rounded, color: const Color(0xFF64748B), size: radius * 1.2)
           : null,
     );
   }
-
-  // ===========================================================================
-  // DASHBOARD
-  // ===========================================================================
 
   Future<void> _loadDashboard({bool showMainLoader = true}) async {
     if (_dashboardBusy) {
@@ -250,12 +232,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     try {
-      // -----------------------------------------------------------------------
-      // 1. LOCAL PENDING COUNT
-      // -----------------------------------------------------------------------
-
-      final pendingBefore = await AttendanceService.instance
-          .pendingOfflineCount();
+      final pendingBefore = await AttendanceService.instance.pendingOfflineCount();
 
       if (mounted) {
         setState(() {
@@ -263,19 +240,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         });
       }
 
-      // -----------------------------------------------------------------------
-      // 2. EVENTS
-      // -----------------------------------------------------------------------
-
       final eventResult = await EventService.instance.getEvents();
 
       if (!mounted) {
         return;
       }
-
-      // -----------------------------------------------------------------------
-      // 3. OFFLINE SYNC
-      // -----------------------------------------------------------------------
 
       if (pendingBefore > 0) {
         setState(() {
@@ -283,8 +252,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         });
 
         try {
-          final syncResult = await AttendanceService.instance
-              .syncPendingAttendances();
+          final syncResult = await AttendanceService.instance.syncPendingAttendances();
 
           if (mounted) {
             setState(() {
@@ -294,8 +262,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         } catch (e) {
           debugPrint('HOME OFFLINE SYNC ERROR: $e');
 
-          final remaining = await AttendanceService.instance
-              .pendingOfflineCount();
+          final remaining = await AttendanceService.instance.pendingOfflineCount();
 
           if (mounted) {
             setState(() {
@@ -311,34 +278,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
       }
 
-      // -----------------------------------------------------------------------
-      // 4. HISTORY
-      // -----------------------------------------------------------------------
-
-      final historyResult = await AttendanceHistoryService.instance
-          .getHistory();
-
-      // -----------------------------------------------------------------------
-      // 5. NOTIFICATIONS
-      // -----------------------------------------------------------------------
-
-      final notificationResult = await NotificationService.instance
-          .getNotifications();
-
-      // -----------------------------------------------------------------------
-      // 6. FINAL PENDING COUNT
-      // -----------------------------------------------------------------------
-
-      final pendingAfter = await AttendanceService.instance
-          .pendingOfflineCount();
+      final historyResult = await AttendanceHistoryService.instance.getHistory();
+      final notificationResult = await NotificationService.instance.getNotifications();
+      final pendingAfter = await AttendanceService.instance.pendingOfflineCount();
 
       if (!mounted) {
         return;
       }
-
-      // -----------------------------------------------------------------------
-      // 7. UPDATE UI
-      // -----------------------------------------------------------------------
 
       setState(() {
         _pendingOfflineCount = pendingAfter;
@@ -399,10 +345,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  // ===========================================================================
-  // EVENTS
-  // ===========================================================================
-
   List<EventItem> get _todayEvents {
     return _events.where((event) => event.isToday).toList();
   }
@@ -410,10 +352,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<EventItem> get _upcomingEvents {
     return _events.where((event) => event.isUpcoming).toList();
   }
-
-  // ===========================================================================
-  // NAVIGATION
-  // ===========================================================================
 
   Future<void> _openHistory() async {
     await Navigator.of(context).push(
@@ -445,10 +383,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  // ===========================================================================
-  // ATTENDANCE
-  // ===========================================================================
-
   Future<void> _openAttendanceScanner() async {
     final today = _todayEvents;
 
@@ -458,7 +392,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('There is no event scheduled for today.')),
+        SnackBar(
+          content: const Row(
+            children: [
+              Icon(Icons.info_outline_rounded, color: Colors.white, size: 20),
+              SizedBox(width: 10),
+              Text('There is no event scheduled for today.'),
+            ],
+          ),
+          backgroundColor: navy,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
       );
 
       return;
@@ -474,7 +419,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         backgroundColor: Colors.white,
         showDragHandle: true,
         shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
         ),
         builder: (BuildContext sheetContext) {
           return SafeArea(
@@ -486,31 +431,43 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 children: [
                   const Text(
                     'Select Event',
-                    style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800),
+                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: navy),
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 4),
                   const Text(
                     'Choose an event to record attendance.',
                     style: TextStyle(color: muted, fontSize: 13),
                   ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 16),
                   for (final event in today)
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const CircleAvatar(
-                        backgroundColor: gold,
-                        foregroundColor: Colors.black,
-                        child: Icon(Icons.event_available_rounded),
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF8FAFC),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: const Color(0xFFE2E8F0)),
                       ),
-                      title: Text(
-                        event.name,
-                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      child: ListTile(
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                        leading: Container(
+                          width: 42,
+                          height: 42,
+                          decoration: BoxDecoration(
+                            color: gold.withValues(alpha: 0.2),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.event_available_rounded, color: navy),
+                        ),
+                        title: Text(
+                          event.name,
+                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: navy),
+                        ),
+                        subtitle: Text(_eventSubtitle(event), style: const TextStyle(fontSize: 12)),
+                        trailing: const Icon(Icons.chevron_right_rounded, color: navy),
+                        onTap: () {
+                          Navigator.pop(sheetContext, event);
+                        },
                       ),
-                      subtitle: Text(_eventSubtitle(event)),
-                      trailing: const Icon(Icons.chevron_right_rounded),
-                      onTap: () {
-                        Navigator.pop(sheetContext, event);
-                      },
                     ),
                 ],
               ),
@@ -526,7 +483,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     final recorded = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
-        builder: (_) => AttendanceFaceVerificationScreen(event: selectedEvent!),
+        builder: (_) => AttendanceFaceVerificationScreen(
+          event: selectedEvent!,
+          studentName: _firstName,
+        ),
       ),
     );
 
@@ -534,10 +494,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       await _loadDashboard(showMainLoader: false);
     }
   }
-
-  // ===========================================================================
-  // BUILD
-  // ===========================================================================
 
   @override
   Widget build(BuildContext context) {
@@ -555,15 +511,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 },
                 child: ListView(
                   physics: const AlwaysScrollableScrollPhysics(),
-                  padding: const EdgeInsets.fromLTRB(18, 26, 18, 115),
+                  padding: const EdgeInsets.fromLTRB(18, 22, 18, 115),
                   children: [
-                    const Text(
-                      "Today's Activity",
-                      style: TextStyle(
-                        color: Colors.black,
-                        fontSize: 28,
-                        fontWeight: FontWeight.w800,
-                      ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          "Today's Activity",
+                          style: TextStyle(
+                            color: navy,
+                            fontSize: 26,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.5,
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: navy.withValues(alpha: 0.08),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            DateFormat('E, MMM d').format(DateTime.now()),
+                            style: const TextStyle(
+                              color: navy,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 18),
                     if (_loading)
@@ -587,7 +564,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         const SizedBox(height: 22),
                         _buildTodaySection(),
                         if (_upcomingEvents.isNotEmpty) ...[
-                          const SizedBox(height: 28),
+                          const SizedBox(height: 26),
                           _buildUpcomingSection(),
                         ],
                       ],
@@ -605,64 +582,97 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  // ===========================================================================
-  // HEADER
-  // ===========================================================================
-
   Widget _buildHeader() {
     return Container(
-      height: 82,
-      padding: const EdgeInsets.symmetric(horizontal: 14),
-      color: navy,
+      height: 84,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: const BoxDecoration(
+        color: navy,
+        boxShadow: [
+          BoxShadow(
+            color: Color(0x1A080878),
+            blurRadius: 10,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
       child: Row(
         children: [
           Container(
-            width: 48,
-            height: 48,
+            width: 44,
+            height: 44,
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.10),
               shape: BoxShape.circle,
-              border: Border.all(
-                color: gold.withValues(alpha: 0.75),
-                width: 1.5,
-              ),
+              color: Colors.white,
+              border: Border.all(color: gold, width: 2),
+            ),
+            alignment: Alignment.center,
+            child: const Icon(
+              Icons.school_rounded,
+              color: navy,
+              size: 24,
             ),
           ),
-          const SizedBox(width: 14),
+          const SizedBox(width: 12),
           Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                Text(
-                  'Welcome, $_firstName',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
+                Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      'Welcome, $_firstName',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    if (_studentNumber.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: const BoxDecoration(
+                              color: gold,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            _studentNumber,
+                            style: const TextStyle(
+                              color: Color(0xFFC0C0E8),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(width: 10),
+                InkWell(
+                  borderRadius: BorderRadius.circular(30),
+                  onTap: _showProfileMenu,
+                  child: Container(
+                    padding: const EdgeInsets.all(2),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: gold, width: 2),
+                    ),
+                    child: _profileAvatar(radius: 20),
                   ),
                 ),
-                if (_studentNumber.isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    _studentNumber,
-                    style: const TextStyle(
-                      color: Color(0xFF9999C8),
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
               ],
-            ),
-          ),
-          InkWell(
-            borderRadius: BorderRadius.circular(30),
-            onTap: _showProfileMenu,
-            child: Padding(
-              padding: const EdgeInsets.all(3),
-              child: _profileAvatar(radius: 22),
             ),
           ),
         ],
@@ -670,20 +680,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  // ===========================================================================
-  // OFFLINE PENDING CARD
-  // ===========================================================================
-
   Widget _buildPendingOfflineCard() {
     final syncing = _syncingOffline;
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(15),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFF6D6),
-        borderRadius: BorderRadius.circular(15),
-        border: Border.all(color: gold),
+        color: const Color(0xFFFFFBEB),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: gold.withValues(alpha: 0.6)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x08000000),
+            blurRadius: 10,
+            offset: Offset(0, 4),
+          ),
+        ],
       ),
       child: Row(
         children: [
@@ -692,8 +705,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             height: 44,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: const Color(0xFFFFE9A3),
-              borderRadius: BorderRadius.circular(12),
+              color: gold.withValues(alpha: 0.25),
+              borderRadius: BorderRadius.circular(14),
             ),
             child: syncing
                 ? const SizedBox(
@@ -707,10 +720,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 : const Icon(
                     Icons.cloud_upload_outlined,
                     color: navy,
-                    size: 26,
+                    size: 24,
                   ),
           ),
-          const SizedBox(width: 13),
+          const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -731,8 +744,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       ? 'Verifying the saved attendance with the server.'
                       : '$_pendingOfflineCount record${_pendingOfflineCount == 1 ? '' : 's'} waiting for verification and sync.',
                   style: const TextStyle(
-                    color: Color(0xFF6C6200),
-                    fontSize: 11,
+                    color: Color(0xFF786200),
+                    fontSize: 11.5,
                     height: 1.35,
                   ),
                 ),
@@ -752,16 +765,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  // ===========================================================================
-  // SUMMARY
-  // ===========================================================================
-
   Widget _buildSummary() {
     return Row(
       children: [
         Expanded(
           child: _summaryCard(
-            icon: Icons.event_available_outlined,
+            icon: Icons.event_available_rounded,
             value: '${_todayEvents.length}',
             label: 'Today',
             onTap: () => _showSummaryDetails('Today'),
@@ -770,7 +779,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         const SizedBox(width: 12),
         Expanded(
           child: _summaryCard(
-            icon: Icons.upcoming_outlined,
+            icon: Icons.upcoming_rounded,
             value: '${_upcomingEvents.length}',
             label: 'Upcoming',
             onTap: () => _showSummaryDetails('Upcoming'),
@@ -787,54 +796,55 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     required VoidCallback onTap,
   }) {
     final Color accent = switch (label) {
-      'Today' => const Color(0xFF6D5CE7),
-      'Upcoming' => const Color(0xFFFF9F1C),
-      _ => const Color(0xFF5D6B82),
+      'Today' => const Color(0xFF6366F1),
+      'Upcoming' => const Color(0xFFF59E0B),
+      _ => const Color(0xFF64748B),
     };
 
-    final soft = accent.withValues(alpha: 0.10);
+    final soft = accent.withValues(alpha: 0.12);
 
     return Material(
       color: Colors.transparent,
-      borderRadius: BorderRadius.circular(17),
+      borderRadius: BorderRadius.circular(20),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(17),
+        borderRadius: BorderRadius.circular(20),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 220),
-          padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 8),
+          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(17),
-            border: Border.all(color: accent.withValues(alpha: 0.20)),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: const Color(0xFFE2E8F0)),
             boxShadow: const [
               BoxShadow(
-                color: Color(0x0B000000),
-                blurRadius: 14,
-                offset: Offset(0, 5),
+                color: Color(0x06000000),
+                blurRadius: 12,
+                offset: Offset(0, 4),
               ),
             ],
           ),
           child: Column(
             children: [
               Container(
-                width: 36,
-                height: 36,
+                width: 42,
+                height: 42,
                 decoration: BoxDecoration(
                   color: soft,
-                  borderRadius: BorderRadius.circular(11),
+                  borderRadius: BorderRadius.circular(14),
                 ),
-                child: Icon(icon, color: accent, size: 21),
+                child: Icon(icon, color: accent, size: 22),
               ),
-              const SizedBox(height: 7),
+              const SizedBox(height: 10),
               AnimatedSwitcher(
                 duration: const Duration(milliseconds: 180),
                 child: Text(
                   value,
                   key: ValueKey('$label-$value'),
                   style: const TextStyle(
-                    fontSize: 19,
+                    fontSize: 22,
                     fontWeight: FontWeight.w800,
+                    color: navy,
                   ),
                 ),
               ),
@@ -845,8 +855,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   color: muted,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w500,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
             ],
@@ -863,19 +873,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       context: context,
       builder: (dialogContext) {
         final Color accent = switch (label) {
-          'Today' => const Color(0xFF6D5CE7),
-          'Upcoming' => const Color(0xFFFF9F1C),
-          _ => const Color(0xFF5D6B82),
+          'Today' => const Color(0xFF6366F1),
+          'Upcoming' => const Color(0xFFF59E0B),
+          _ => const Color(0xFF64748B),
         };
 
         return Dialog(
           backgroundColor: Colors.white,
           insetPadding: const EdgeInsets.symmetric(
-            horizontal: 22,
-            vertical: 30,
+            horizontal: 20,
+            vertical: 24,
           ),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(24),
+            borderRadius: BorderRadius.circular(28),
           ),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxHeight: 560),
@@ -888,8 +898,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   Row(
                     children: [
                       Container(
-                        width: 42,
-                        height: 42,
+                        width: 44,
+                        height: 44,
                         alignment: Alignment.center,
                         decoration: BoxDecoration(
                           color: accent.withValues(alpha: 0.12),
@@ -902,18 +912,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               ? Icons.upcoming_rounded
                               : Icons.how_to_reg_rounded,
                           color: accent,
-                          size: 22,
+                          size: 24,
                         ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
-                        child: Text(
-                          label,
-                          style: const TextStyle(
-                            color: navy,
-                            fontSize: 20,
-                            fontWeight: FontWeight.w800,
-                          ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              label,
+                              style: const TextStyle(
+                                color: navy,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            Text(
+                              '${events.length} event${events.length == 1 ? '' : 's'}',
+                              style: const TextStyle(color: muted, fontSize: 12),
+                            ),
+                          ],
                         ),
                       ),
                       IconButton(
@@ -923,12 +942,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${events.length} event${events.length == 1 ? '' : 's'}',
-                    style: const TextStyle(color: muted, fontSize: 12),
-                  ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 16),
                   Expanded(
                     child: events.isEmpty
                         ? const Center(
@@ -939,26 +953,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           )
                         : ListView.separated(
                             itemCount: events.length > 12 ? 12 : events.length,
-                            separatorBuilder: (_, __) =>
-                                const SizedBox(height: 8),
+                            separatorBuilder: (context, index) => const SizedBox(height: 8),
                             itemBuilder: (_, index) {
                               final event = events[index];
                               final attended = _isEventAttended(event);
 
                               return Container(
                                 padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 11,
+                                  horizontal: 14,
+                                  vertical: 12,
                                 ),
                                 decoration: BoxDecoration(
                                   color: attended
-                                      ? const Color(0xFFF0F9F5)
-                                      : const Color(0xFFF7F7FB),
-                                  borderRadius: BorderRadius.circular(14),
+                                      ? const Color(0xFFF0FDF4)
+                                      : const Color(0xFFF8FAFC),
+                                  borderRadius: BorderRadius.circular(16),
                                   border: Border.all(
                                     color: attended
-                                        ? const Color(0xFFB8E3CF)
-                                        : const Color(0xFFE5E5ED),
+                                        ? const Color(0xFFBBF7D0)
+                                        : const Color(0xFFE2E8F0),
                                   ),
                                 ),
                                 child: Row(
@@ -968,23 +981,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                           ? Icons.check_circle_rounded
                                           : Icons.event_available_rounded,
                                       color: attended
-                                          ? const Color(0xFF159947)
+                                          ? const Color(0xFF16A34A)
                                           : navy,
-                                      size: 23,
+                                      size: 22,
                                     ),
-                                    const SizedBox(width: 10),
+                                    const SizedBox(width: 12),
                                     Expanded(
                                       child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
+                                        crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
                                           Text(
                                             event.name,
                                             maxLines: 2,
                                             overflow: TextOverflow.ellipsis,
                                             style: const TextStyle(
-                                              fontSize: 13,
+                                              fontSize: 14,
                                               fontWeight: FontWeight.w700,
+                                              color: navy,
                                             ),
                                           ),
                                           const SizedBox(height: 3),
@@ -992,19 +1005,26 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                             '${_formatDate(event)} • ${_formatTimeRange(event)}',
                                             style: const TextStyle(
                                               color: muted,
-                                              fontSize: 10.5,
+                                              fontSize: 11,
                                             ),
                                           ),
                                         ],
                                       ),
                                     ),
                                     if (attended)
-                                      const Text(
-                                        'Attended',
-                                        style: TextStyle(
-                                          color: Color(0xFF159947),
-                                          fontSize: 10.5,
-                                          fontWeight: FontWeight.w800,
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFDCFCE7),
+                                          borderRadius: BorderRadius.circular(12),
+                                        ),
+                                        child: const Text(
+                                          'Attended',
+                                          style: TextStyle(
+                                            color: Color(0xFF15803D),
+                                            fontSize: 10.5,
+                                            fontWeight: FontWeight.w800,
+                                          ),
                                         ),
                                       ),
                                   ],
@@ -1027,46 +1047,42 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return eventId != null && _attendedEventIds.contains(eventId);
   }
 
-  // ===========================================================================
-  // HISTORY
-  // ===========================================================================
-
   Widget _buildHistoryCard() {
     final hasRecords = _attendanceCount > 0;
 
     return Material(
       color: Colors.transparent,
-      borderRadius: BorderRadius.circular(18),
+      borderRadius: BorderRadius.circular(20),
       child: InkWell(
         onTap: _openHistory,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(20),
         child: Ink(
-          padding: const EdgeInsets.all(17),
+          padding: const EdgeInsets.all(18),
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: const Color(0xFFE0E1E8)),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: const Color(0xFFE2E8F0)),
             boxShadow: const [
               BoxShadow(
-                color: Color(0x0A000000),
-                blurRadius: 16,
-                offset: Offset(0, 5),
+                color: Color(0x06000000),
+                blurRadius: 12,
+                offset: Offset(0, 4),
               ),
             ],
           ),
           child: Row(
             children: [
               Container(
-                width: 46,
-                height: 46,
+                width: 48,
+                height: 48,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFF0F1FA),
-                  borderRadius: BorderRadius.circular(13),
+                  color: navy.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(14),
                 ),
-                child: const Icon(Icons.history_rounded, color: navy, size: 24),
+                child: const Icon(Icons.history_rounded, color: navy, size: 26),
               ),
-              const SizedBox(width: 13),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1079,7 +1095,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         fontWeight: FontWeight.w800,
                       ),
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 3),
                     Text(
                       hasRecords
                           ? '$_attendanceCount recorded • Latest: $_latestAttendanceStatus'
@@ -1088,34 +1104,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: muted,
-                        fontSize: 11.5,
-                        height: 1.35,
-                      ),
-                    ),
-                    const SizedBox(height: 7),
-                    const Text(
-                      'View all attendance records',
-                      style: TextStyle(
-                        color: Color(0xFF5D6472),
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w700,
+                        fontSize: 12,
+                        height: 1.3,
                       ),
                     ),
                   ],
                 ),
               ),
               Container(
-                width: 34,
-                height: 34,
+                width: 32,
+                height: 32,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFF7F7FB),
+                  color: const Color(0xFFF1F5F9),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: const Icon(
-                  Icons.arrow_forward_rounded,
+                  Icons.arrow_forward_ios_rounded,
                   color: navy,
-                  size: 18,
+                  size: 14,
                 ),
               ),
             ],
@@ -1125,33 +1132,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  // ===========================================================================
-  // TODAY
-  // ===========================================================================
-
   Widget _buildTodaySection() {
     if (_todayEvents.isEmpty) {
       return Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(25),
+        padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(17),
-          border: Border.all(color: const Color(0xFFD4D4D4)),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFFE2E8F0)),
         ),
         child: const Column(
           children: [
-            Icon(Icons.event_busy_outlined, color: navy, size: 42),
-            SizedBox(height: 10),
+            Icon(Icons.event_busy_outlined, color: navy, size: 44),
+            SizedBox(height: 12),
             Text(
               'No activity today',
-              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: navy),
             ),
-            SizedBox(height: 5),
+            SizedBox(height: 4),
             Text(
               'There are no events scheduled for today.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: muted, fontSize: 13),
+              style: TextStyle(color: muted, fontSize: 12.5),
             ),
           ],
         ),
@@ -1163,7 +1166,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       children: [
         const Text(
           "Today's Events",
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+          style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: navy),
         ),
         const SizedBox(height: 12),
         for (final event in _todayEvents) ...[
@@ -1173,10 +1176,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ],
     );
   }
-
-  // ===========================================================================
-  // UPCOMING
-  // ===========================================================================
 
   Widget _buildUpcomingSection() {
     final upcoming = _upcomingEvents.take(3).toList();
@@ -1189,19 +1188,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             const Expanded(
               child: Text(
                 'Upcoming Events',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: navy),
               ),
             ),
             TextButton(
               onPressed: _openCalendar,
-              child: const Text(
-                'View Calendar',
-                style: TextStyle(color: navy, fontWeight: FontWeight.w700),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Row(
+                children: [
+                  Text(
+                    'View Calendar',
+                    style: TextStyle(color: navy, fontWeight: FontWeight.w700, fontSize: 13),
+                  ),
+                  SizedBox(width: 2),
+                  Icon(Icons.chevron_right_rounded, color: navy, size: 18),
+                ],
               ),
             ),
           ],
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 10),
         for (final event in upcoming) ...[
           _buildEventCard(event),
           const SizedBox(height: 12),
@@ -1210,32 +1220,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  // ===========================================================================
-  // EVENT CARD
-  // ===========================================================================
-
   Widget _buildEventCard(EventItem event, {bool today = false}) {
     final attended = _isEventAttended(event);
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 220),
       width: double.infinity,
-      padding: const EdgeInsets.all(17),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: attended ? const Color(0xFFF0F9F5) : Colors.white,
-        borderRadius: BorderRadius.circular(17),
+        color: attended ? const Color(0xFFF0FDF4) : Colors.white,
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: attended ? const Color(0xFF9FD8BA) : const Color(0xFFE1E1E8),
+          color: attended ? const Color(0xFFBBF7D0) : const Color(0xFFE2E8F0),
         ),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x04000000),
+            blurRadius: 10,
+            offset: Offset(0, 3),
+          ),
+        ],
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            width: 5,
-            height: 70,
+            width: 4,
+            height: 72,
             decoration: BoxDecoration(
               color: attended
-                  ? const Color(0xFF159947)
+                  ? const Color(0xFF16A34A)
                   : today
                   ? gold
                   : navy,
@@ -1247,50 +1261,89 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  event.name,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                  ),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        event.name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: navy,
+                        ),
+                      ),
+                    ),
+                    if (attended)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFDCFCE7),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Text(
+                          '✓ Attended',
+                          style: TextStyle(
+                            color: Color(0xFF15803D),
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      )
+                    else if (today)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: gold.withValues(alpha: 0.25),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Text(
+                          'Today',
+                          style: TextStyle(
+                            color: Color(0xFF946200),
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
-                const SizedBox(height: 5),
-                Text(
-                  _formatDate(event),
-                  style: const TextStyle(color: muted, fontSize: 12),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    const Icon(Icons.calendar_today_rounded, size: 13, color: muted),
+                    const SizedBox(width: 6),
+                    Text(
+                      _formatDate(event),
+                      style: const TextStyle(color: muted, fontSize: 12),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 3),
-                Text(
-                  _formatTimeRange(event),
-                  style: const TextStyle(color: muted, fontSize: 11),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    const Icon(Icons.access_time_rounded, size: 13, color: muted),
+                    const SizedBox(width: 6),
+                    Text(
+                      _formatTimeRange(event),
+                      style: const TextStyle(color: muted, fontSize: 12),
+                    ),
+                  ],
                 ),
                 if (event.venue.isNotEmpty) ...[
-                  const SizedBox(height: 3),
-                  Text(
-                    event.venue,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: muted, fontSize: 11),
-                  ),
-                ],
-                if (attended) ...[
-                  const SizedBox(height: 6),
-                  const Row(
+                  const SizedBox(height: 4),
+                  Row(
                     children: [
-                      Icon(
-                        Icons.check_circle_rounded,
-                        color: Color(0xFF159947),
-                        size: 14,
-                      ),
-                      SizedBox(width: 5),
-                      Text(
-                        'Attendance recorded for this event',
-                        style: TextStyle(
-                          color: Color(0xFF159947),
-                          fontSize: 10.5,
-                          fontWeight: FontWeight.w700,
+                      const Icon(Icons.location_on_outlined, size: 13, color: muted),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          event.venue,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: muted, fontSize: 12),
                         ),
                       ),
                     ],
@@ -1299,62 +1352,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ],
             ),
           ),
-          if (attended)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-              decoration: BoxDecoration(
-                color: const Color(0xFFDDF4E8),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: const Text(
-                '✓ Attended',
-                style: TextStyle(
-                  color: Color(0xFF159947),
-                  fontSize: 10,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            )
-          else if (today)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFFE9A3),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: const Text(
-                'Today',
-                style: TextStyle(
-                  color: Color(0xFFFF8A00),
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
         ],
       ),
     );
   }
 
-  // ===========================================================================
-  // ERROR
-  // ===========================================================================
-
   Widget _buildError() {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(25),
+      padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(17),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFFECDD3)),
       ),
       child: Column(
         children: [
-          const Icon(Icons.error_outline_rounded, color: Colors.red, size: 42),
-          const SizedBox(height: 10),
+          const Icon(Icons.error_outline_rounded, color: Color(0xFFE11D48), size: 44),
+          const SizedBox(height: 12),
           const Text(
             'Unable to load dashboard',
-            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: navy),
           ),
           const SizedBox(height: 6),
           Text(
@@ -1363,24 +1381,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             style: const TextStyle(color: muted, fontSize: 13),
           ),
           const SizedBox(height: 16),
-          FilledButton(
+          FilledButton.icon(
             onPressed: () {
               _loadDashboard();
             },
+            icon: const Icon(Icons.refresh_rounded, size: 18),
+            label: const Text('Try Again'),
             style: FilledButton.styleFrom(
               backgroundColor: navy,
               foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
-            child: const Text('Try Again'),
           ),
         ],
       ),
     );
   }
-
-  // ===========================================================================
-  // PROFILE MENU
-  // ===========================================================================
 
   Future<void> _showProfileMenu() async {
     await showModalBottomSheet<void>(
@@ -1390,8 +1407,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       builder: (BuildContext sheetContext) {
         return SafeArea(
           child: Container(
-            margin: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-            padding: const EdgeInsets.fromLTRB(18, 10, 18, 18),
+            margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(28),
@@ -1407,14 +1424,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Container(
-                  width: 42,
+                  width: 40,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: const Color(0xFFD7D7DE),
+                    color: const Color(0xFFCBD5E1),
                     borderRadius: BorderRadius.circular(20),
                   ),
                 ),
-                const SizedBox(height: 18),
+                const SizedBox(height: 20),
                 Row(
                   children: [
                     _profileAvatar(radius: 30),
@@ -1430,11 +1447,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             style: const TextStyle(
                               fontSize: 17,
                               fontWeight: FontWeight.w800,
-                              color: Colors.black,
+                              color: navy,
                             ),
                           ),
                           if (_studentNumber.isNotEmpty) ...[
-                            const SizedBox(height: 3),
+                            const SizedBox(height: 2),
                             Text(
                               _studentNumber,
                               style: const TextStyle(
@@ -1447,23 +1464,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       ),
                     ),
                     Container(
-                      width: 38,
-                      height: 38,
+                      width: 40,
+                      height: 40,
                       decoration: const BoxDecoration(
-                        color: Color(0xFFFFF4C8),
+                        color: Color(0xFFFEF9C3),
                         shape: BoxShape.circle,
                       ),
                       child: const Icon(
-                        Icons.verified_user_outlined,
+                        Icons.verified_user_rounded,
                         color: navy,
-                        size: 21,
+                        size: 22,
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 18),
-                const Divider(height: 1),
-                const SizedBox(height: 10),
+                const SizedBox(height: 20),
+                const Divider(height: 1, color: Color(0xFFE2E8F0)),
+                const SizedBox(height: 12),
                 _profileMenuTile(
                   Icons.person_outline_rounded,
                   'Personal Information',
@@ -1484,22 +1501,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     _openHistory();
                   },
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 8),
                 Material(
-                  color: const Color(0xFFFFF1F0),
-                  borderRadius: BorderRadius.circular(15),
+                  color: const Color(0xFFFEF2F2),
+                  borderRadius: BorderRadius.circular(16),
                   child: ListTile(
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(15),
+                      borderRadius: BorderRadius.circular(16),
                     ),
-                    leading: const Icon(
-                      Icons.logout_rounded,
-                      color: Colors.red,
+                    leading: Container(
+                      width: 38,
+                      height: 38,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFFEE2E2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.logout_rounded,
+                        color: Color(0xFFDC2626),
+                        size: 20,
+                      ),
                     ),
                     title: const Text(
                       'Log Out',
                       style: TextStyle(
-                        color: Colors.red,
+                        color: Color(0xFFDC2626),
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -1528,58 +1554,61 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     String subtitle,
     VoidCallback onTap,
   ) {
-    return Material(
-      color: Colors.transparent,
-      borderRadius: BorderRadius.circular(15),
-      child: ListTile(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-        leading: Container(
-          width: 40,
-          height: 40,
-          decoration: const BoxDecoration(
-            color: Color(0xFFF0F0FA),
-            shape: BoxShape.circle,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(16),
+        child: ListTile(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          leading: Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: navy.withValues(alpha: 0.08),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: navy, size: 20),
           ),
-          child: Icon(icon, color: navy, size: 21),
+          title: Text(
+            title,
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: navy),
+          ),
+          subtitle: Text(
+            subtitle,
+            style: const TextStyle(fontSize: 11, color: muted),
+          ),
+          trailing: const Icon(Icons.chevron_right_rounded, color: muted),
+          onTap: onTap,
         ),
-        title: Text(
-          title,
-          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
-        ),
-        subtitle: Text(
-          subtitle,
-          style: const TextStyle(fontSize: 11, color: muted),
-        ),
-        trailing: const Icon(Icons.chevron_right_rounded, color: muted),
-        onTap: onTap,
       ),
     );
   }
-
-  // ===========================================================================
-  // LOGOUT
-  // ===========================================================================
 
   Future<void> _confirmLogout() async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (BuildContext dialogContext) {
         return AlertDialog(
-          title: const Text('Log Out'),
-          content: const Text('Are you sure you want to log out?'),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Text('Log Out', style: TextStyle(fontWeight: FontWeight.w800, color: navy)),
+          content: const Text('Are you sure you want to log out from this account?'),
           actions: [
             TextButton(
               onPressed: () {
                 Navigator.pop(dialogContext, false);
               },
-              child: const Text('Cancel'),
+              child: const Text('Cancel', style: TextStyle(color: muted)),
             ),
             FilledButton(
               onPressed: () {
                 Navigator.pop(dialogContext, true);
               },
-              style: FilledButton.styleFrom(backgroundColor: navy),
-              child: const Text('Yes'),
+              style: FilledButton.styleFrom(
+                backgroundColor: navy,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: const Text('Log Out'),
             ),
           ],
         );
@@ -1602,10 +1631,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  // ===========================================================================
-  // BOTTOM NAVIGATION
-  // ===========================================================================
-
   Widget _buildBottomNavigation() {
     return MainBottomNavigation(
       currentIndex: 0,
@@ -1617,16 +1642,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget _buildScannerButton() {
+  Widget? _buildScannerButton() {
     return MainBottomNavigation.scannerButton(
       context,
+      currentIndex: 0,
       onPressed: _openAttendanceScanner,
     );
   }
-
-  // ===========================================================================
-  // FORMATTERS
-  // ===========================================================================
 
   String _eventSubtitle(EventItem event) {
     final parts = <String>[_formatTimeRange(event)];
@@ -1654,7 +1676,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   String _formatTimeRange(EventItem event) {
     final start = _formatTime(event.startTime);
-
     final end = _formatTime(event.endTime);
 
     if (start.isNotEmpty && end.isNotEmpty) {

@@ -27,12 +27,6 @@ class _AuthGateState extends State<AuthGate> {
     restoreSession();
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | RESTORE LOGIN SESSION
-  |--------------------------------------------------------------------------
-  */
-
   Future<void> restoreSession() async {
     final hasSession = await AuthService.instance.hasSavedSession();
 
@@ -74,12 +68,6 @@ class _AuthGateState extends State<AuthGate> {
 
   @override
   Widget build(BuildContext context) {
-    /*
-    |--------------------------------------------------------------------------
-    | LOADING
-    |--------------------------------------------------------------------------
-    */
-
     if (loading) {
       return const Scaffold(
         backgroundColor: AppColors.navy,
@@ -117,21 +105,9 @@ class _AuthGateState extends State<AuthGate> {
       );
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | AUTHENTICATED
-    |--------------------------------------------------------------------------
-    */
-
     if (authenticated) {
-      return HomeScreen(user: user, student: student);
+      return const HomeScreen();
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | NOT AUTHENTICATED
-    |--------------------------------------------------------------------------
-    */
 
     return const AuthScreen();
   }
