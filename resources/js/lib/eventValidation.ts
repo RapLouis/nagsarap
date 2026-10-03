@@ -47,7 +47,6 @@ export const isEventWindowOpen = (schedules: ScheduleItem[] | null | undefined):
     const now = new Date();
     const todayStr = now.toISOString().split('T')[0]; // YYYY-MM-DD
 
-    // Find the schedule/item matching today's date
     const todaySchedule = schedules.find((sched) => sched.date === todayStr);
 
     if (!todaySchedule || !todaySchedule.slots || todaySchedule.slots.length === 0) {
@@ -58,14 +57,12 @@ export const isEventWindowOpen = (schedules: ScheduleItem[] | null | undefined):
     const currentMinutes = String(now.getMinutes()).padStart(2, '0');
     const currentTime = `${currentHours}:${currentMinutes}`;
 
-    // Loop through all slots for today to check if current time is within any window
     return todaySchedule.slots.some((slot) => {
         const timeInStart = slot.time_in_start;
         const timeInEnd = slot.time_in_end;
         const timeOutStart = slot.time_out_start;
         const timeOutEnd = slot.time_out_end;
 
-        // 1. Evaluate Time-In Window
         let timeInOpen = false;
         if (timeInStart) {
             if (timeInEnd) {
@@ -75,7 +72,6 @@ export const isEventWindowOpen = (schedules: ScheduleItem[] | null | undefined):
             }
         }
 
-        // 2. Evaluate Time-Out Window
         let timeOutOpen = false;
         if (timeOutStart) {
             if (timeOutEnd) {
@@ -89,9 +85,6 @@ export const isEventWindowOpen = (schedules: ScheduleItem[] | null | undefined):
     });
 };
 
-/**
- * Helper to generate an array of sequential date strings between start and end date.
- */
 export const getEventDays = (startDate: string, endDate: string | null): string[] => {
     if (!startDate) return [];
     if (!endDate || endDate <= startDate) return [startDate];
@@ -107,9 +100,6 @@ export const getEventDays = (startDate: string, endDate: string | null): string[
     return days;
 };
 
-/**
- * Format string date into a readable format.
- */
 export const formatDate = (dateStr: string): string => {
     return new Date(dateStr + 'T00:00:00').toLocaleDateString(undefined, {
         month: 'short',
@@ -118,9 +108,6 @@ export const formatDate = (dateStr: string): string => {
     });
 };
 
-/**
- * Get relative day label (Today, Tomorrow, etc.).
- */
 export const relativeDateLabel = (dateStr: string): string => {
     const eventDate = new Date(dateStr + 'T00:00:00');
     const today = new Date();

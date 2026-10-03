@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Head, Link, router } from '@inertiajs/react';
+import { Head, router } from '@inertiajs/react';
 import type { FaceLandmarker } from '@mediapipe/tasks-vision';
 import {
     Camera,
@@ -9,7 +9,6 @@ import {
     ShieldCheck,
     RefreshCw,
     X,
-    ChevronRight,
     ArrowLeft,
     ArrowRight,
     Loader2,
@@ -17,6 +16,7 @@ import {
     Eye,
     MapPin,
 } from 'lucide-react';
+import { isEventWindowOpen, type ScheduleItem } from '../lib/eventValidation';
 
 type Event = {
     event_id: number;
@@ -31,6 +31,7 @@ type Event = {
     latitude?: number | null;
     longitude?: number | null;
     radius_meters?: number;
+    schedules?: ScheduleItem[] | null;
 };
 
 type AttendanceLog = {
@@ -265,6 +266,8 @@ export default function CheckIn({ student, activeEvents }: CheckInProps) {
                         <ul className="divide-y divide-gray-100 dark:divide-slate-800/60">
                             {activeEvents.map((evt) => {
                                 const isCheckedIn = checkedInEventIds.has(evt.event_id);
+                                const windowIsOpen = isEventWindowOpen(evt.schedules);
+
                                 return (
                                     <li key={evt.event_id}>
                                         <div className="w-full flex items-center gap-4 px-6 py-5 text-left">
@@ -272,20 +275,31 @@ export default function CheckIn({ student, activeEvents }: CheckInProps) {
                                                 <Clock className="h-5 w-5" aria-hidden="true" />
                                             </div>
 
-                                            <div className="min-w-0 flex-1">
+                                            <div className="min-w-0 flex-1 space-y-0.5">
                                                 <p className="text-sm font-bold text-gray-900 dark:text-white truncate">{evt.title}</p>
-                                                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 truncate">
-                                                    {evt.start_time && (
-                                                        <span>{formatEventTime(evt.start_time, evt.end_time)}</span>
-                                                    )}
-                                                    {evt.location ? ` · ${evt.location}` : ' · Location TBA'}
+                                                {evt.start_time && (
+                                                    <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                                                        {formatEventTime(evt.start_time, evt.end_time)}
+                                                    </p>
+                                                )}
+                                                <p className="text-xs text-gray-400 dark:text-gray-500 truncate">
+                                                    {evt.location ? evt.location : 'Location TBA'}
                                                 </p>
+                                                {!isCheckedIn && !windowIsOpen && (
+                                                    <p className="mt-1 text-[11px] font-medium text-amber-600 dark:text-amber-400">
+                                                        Check-in window is currently closed
+                                                    </p>
+                                                )}
                                             </div>
 
                                             {isCheckedIn ? (
                                                 <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 dark:bg-emerald-950/30 px-3.5 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/40 shrink-0">
                                                     <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
                                                     Checked in
+                                                </span>
+                                            ) : !windowIsOpen ? (
+                                                <span className="inline-flex items-center gap-1.5 rounded-full bg-gray-100 dark:bg-slate-800 px-3.5 py-1.5 text-xs font-medium text-gray-400 dark:text-gray-500 border border-gray-200 dark:border-slate-700 shrink-0 cursor-not-allowed">
+                                                    Window closed
                                                 </span>
                                             ) : (
                                                 <button
@@ -349,16 +363,20 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
     const [hint, setHint] = useState<string | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
-    // Geolocation states
     const [locating, setLocating] = useState(true);
     const [userCoords, setUserCoords] = useState<{ latitude: number; longitude: number } | null>(null);
 
     const stopCameraStream = () => {
+        if (requestRef.current !== null) {
+            cancelAnimationFrame(requestRef.current);
+            requestRef.current = null;
+        }
         if (videoRef.current?.srcObject) {
             const stream = videoRef.current.srcObject as MediaStream;
             stream.getTracks().forEach((track) => track.stop());
             videoRef.current.srcObject = null;
         }
+        setStreamStarted(false);
     };
     
     const [direction] = useState<Direction>(() => {
@@ -383,7 +401,6 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
         goToStep('LOOK_CENTER');
     };
 
-    // 1. Check Location First Before Initializing Camera
     const verifyLocationAndStart = () => {
         setLocating(true);
         setModalError(null);
@@ -402,7 +419,6 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
 
                 setUserCoords({ latitude: lat, longitude: lng });
 
-                // Client-side quick geofence calculation if event data is present
                 if (event.geofence_enabled && event.latitude && event.longitude && event.radius_meters) {
                     const distance = getDistanceFromLatLonInMeters(lat, lng, event.latitude, event.longitude);
                     if (distance > event.radius_meters) {
@@ -416,7 +432,7 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
                 setLocating(false);
                 initializeCameraAndModel();
             },
-            (error) => {
+            () => {
                 if (!mountedRef.current) return;
                 setLocating(false);
                 setModalError('Location access is required. Please enable GPS permissions.');
@@ -425,9 +441,8 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
         );
     };
 
-    // Haversine formula for distance check on client side
     const getDistanceFromLatLonInMeters = (lat1: number, lon1: number, lat2: number, lon2: number) => {
-        const R = 6371000; // Radius of the earth in meters
+        const R = 6371000;
         const dLat = deg2rad(lat2 - lat1);
         const dLon = deg2rad(lon2 - lon1);
         const a =
@@ -461,6 +476,8 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
             }
 
             videoRef.current.srcObject = stream;
+            await videoRef.current.play().catch(() => {});
+            setStreamStarted(true);
         } catch (error) {
             if (mountedRef.current) {
                 setCameraError(describeCameraError(error));
@@ -482,11 +499,10 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
 
     useEffect(() => {
         mountedRef.current = true;
-        verifyLocationAndStart(); // Trigger location check first upon modal open
+        verifyLocationAndStart();
 
         return () => {
             mountedRef.current = false;
-            if (requestRef.current !== null) cancelAnimationFrame(requestRef.current);
             stopCameraStream();
             landmarkerRef.current = null;
         };
@@ -598,7 +614,10 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
 
         return () => {
             stopped = true;
-            if (requestRef.current !== null) cancelAnimationFrame(requestRef.current);
+            if (requestRef.current !== null) {
+                cancelAnimationFrame(requestRef.current);
+                requestRef.current = null;
+            }
         };
     }, [streamStarted, modelReady, modalError, successMessage, direction, locating]);
 
@@ -640,7 +659,7 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
                     router.reload({ only: ['student', 'activeEvents'] });
                     setTimeout(() => onClose(), 1800);
                 },
-                onError: (errors: any) => {
+                onError: (errors: Record<string, string>) => {
                     setIsSubmitting(false);
                     setModalError(errors.attendance || errors.live_camera_frame || 'Verification failed.');
                 },
@@ -668,16 +687,54 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
     })();
     const ActiveIcon = instruction.icon;
 
+    const formatTimeStr = (timeStr?: string | null) => {
+        if (!timeStr) return '';
+        const [h, m] = timeStr.split(':').map(Number);
+        const d = new Date();
+        d.setHours(h ?? 0, m ?? 0, 0);
+        return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+    };
+
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={(e) => { if (e.target === e.currentTarget && !isSubmitting) onClose(); }}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={(e) => { if (e.target === e.currentTarget && !isSubmitting) { stopCameraStream(); onClose(); } }}>
             <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#090d16] text-gray-900 dark:text-white shadow-2xl overflow-hidden border border-gray-100 dark:border-slate-800 relative">
                 
                 <div className="relative px-6 pt-6 pb-4 border-b border-gray-100 dark:border-slate-800">
-                    <button onClick={onClose} disabled={isSubmitting} className="absolute right-4 top-4 rounded-full p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-slate-800">
+                    <button onClick={() => { stopCameraStream(); onClose(); }} disabled={isSubmitting} className="absolute right-4 top-4 rounded-full p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-slate-800">
                         <X className="h-5 w-5" />
                     </button>
                     <h2 className="text-lg font-bold pr-8">{event.title}</h2>
-                    <p className="text-xs text-gray-500">Active Liveness & Geofence Check-in</p>
+                    <p className="text-xs text-gray-500 mt-0.5">Active Liveness & Geofence Check-in</p>
+
+                    <div className="mt-3 pt-3 border-t border-gray-100 dark:border-slate-800/80 space-y-1.5 text-xs text-gray-600 dark:text-gray-300">
+                        {event.location && (
+                            <div className="flex items-center gap-1.5">
+                                <MapPin className="h-3.5 w-3.5 text-[#C9973E] shrink-0" />
+                                <span className="truncate">{event.location}</span>
+                            </div>
+                        )}
+                        {event.schedules && event.schedules.length > 0 && (
+                            <div className="space-y-1">
+                                {event.schedules.map((sched, idx) => (
+                                    <div key={idx} className="bg-gray-50 dark:bg-slate-900/60 rounded p-2 border border-gray-100 dark:border-slate-800">
+                                        <p className="font-semibold text-gray-700 dark:text-gray-200">{sched.date}</p>
+                                        <div className="mt-1 grid grid-cols-2 gap-1 text-[11px] text-gray-500 dark:text-gray-400">
+                                            {sched.slots?.map((slot, sIdx) => (
+                                                <div key={sIdx} className="col-span-2 flex flex-wrap gap-x-3 gap-y-0.5">
+                                                    {slot.time_in_start && (
+                                                        <span>In: <strong className="text-gray-700 dark:text-gray-300">{formatTimeStr(slot.time_in_start)} {slot.time_in_end ? `- ${formatTimeStr(slot.time_in_end)}` : ''}</strong></span>
+                                                    )}
+                                                    {slot.time_out_start && (
+                                                        <span>Out: <strong className="text-gray-700 dark:text-gray-300">{formatTimeStr(slot.time_out_start)} {slot.time_out_end ? `- ${formatTimeStr(slot.time_out_end)}` : ''}</strong></span>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
                 </div>
 
                 <div className="flex flex-col items-center px-6 py-6">
@@ -697,7 +754,6 @@ function CheckInModal({ event, onClose, onSuccess }: CheckInModalProps) {
                                     autoPlay 
                                     playsInline 
                                     muted 
-                                    onCanPlay={() => setStreamStarted(true)}
                                     className={`h-full w-full object-cover scale-x-[-1] transition-opacity duration-300 ${(!streamStarted || !modelReady || locating) ? 'opacity-0' : 'opacity-100'}`} 
                                 />
 

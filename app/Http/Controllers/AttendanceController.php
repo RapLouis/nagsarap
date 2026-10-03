@@ -45,8 +45,9 @@ class AttendanceController extends Controller
             ]);
         }
 
-        // 1.5. Strict Time Slot Window Validation using Event Days relation
-        $now = Carbon::now();
+        // 1.5. Strict Time Slot Window Validation with application timezone alignment
+        $appTimezone = config('app.timezone', 'UTC');
+        $now = Carbon::now($appTimezone);
         $today = $now->toDateString();
         
         $eventDay = $event->days()->whereDate('event_date', $today)->first();
@@ -61,8 +62,8 @@ class AttendanceController extends Controller
         foreach ($eventDay->slots as $slot) {
             // Check Time-In Window (supports start and optional cutoff/end time)
             if (!empty($slot['time_in_start'])) {
-                $start = Carbon::parse($today . ' ' . $slot['time_in_start']);
-                $cutoff = !empty($slot['time_in_end']) ? Carbon::parse($today . ' ' . $slot['time_in_end']) : null;
+                $start = Carbon::parse($today . ' ' . $slot['time_in_start'], $appTimezone);
+                $cutoff = !empty($slot['time_in_end']) ? Carbon::parse($today . ' ' . $slot['time_in_end'], $appTimezone) : null;
 
                 if ($cutoff) {
                     if ($now->between($start, $cutoff)) {

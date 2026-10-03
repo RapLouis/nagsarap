@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Head, Link, router } from '@inertiajs/react';
 import type { FaceLandmarker } from '@mediapipe/tasks-vision';
 import {
@@ -78,7 +78,6 @@ type LivenessStep = 'LOOK_CENTER' | 'TURN' | 'VERIFYING' | 'PASSED';
 
 const GOLD = '#C9973E';
 
-// Liveness tuning
 const PROCESS_EVERY_N_FRAMES = 3;
 const FRONTAL_YAW_MAX = 0.12;
 const FRONTAL_HOLD_FRAMES = 8;
@@ -110,10 +109,14 @@ export default function Dashboard({
 }: DashboardProps) {
     const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
 
-    const checkedInEventIds = new Set(
-        student.attendances
-            .filter((log) => log.status?.toLowerCase() === 'present' || log.status?.toLowerCase() === 'verified')
-            .map((log) => log.event?.event_id)
+    const checkedInEventIds = useMemo(
+        () =>
+            new Set(
+                student.attendances
+                    .filter((log) => log.status?.toLowerCase() === 'present' || log.status?.toLowerCase() === 'verified')
+                    .map((log) => log.event?.event_id)
+            ),
+        [student.attendances]
     );
 
     const eventsAttended = student.attendances.length;
@@ -122,9 +125,15 @@ export default function Dashboard({
             ? Math.round((eventsAttended / totalExpectedEvents) * 100)
             : null;
 
-    const recentAttendances = [...student.attendances]
-        .sort((a, b) => new Date(b.logged_at).getTime() - new Date(a.logged_at).getTime())
-        .slice(0, 3);
+    const recentAttendances = useMemo(
+        () =>
+            [...student.attendances]
+                .sort((a, b) => new Date(b.logged_at).getTime() - new Date(a.logged_at).getTime())
+                .slice(0, 3),
+        [student.attendances]
+    );
+
+    const uncheckedActiveCount = activeEvents.filter((evt) => !checkedInEventIds.has(evt.event_id)).length;
 
     return (
         <>
@@ -169,8 +178,8 @@ export default function Dashboard({
                         label="Events today"
                         value={String(activeEvents.length)}
                         caption={
-                            activeEvents.length - checkedInEventIds.size > 0
-                                ? `${activeEvents.length - checkedInEventIds.size} still to check in`
+                            activeEvents.length > 0 && uncheckedActiveCount > 0
+                                ? `${uncheckedActiveCount} still to check in`
                                 : 'All checked in'
                         }
                     />
@@ -202,13 +211,15 @@ export default function Dashboard({
                                                 <Clock className="h-4 w-4" aria-hidden="true" />
                                             </div>
 
-                                            <div className="min-w-0 flex-1">
+                                            <div className="min-w-0 flex-1 space-y-0.5">
                                                 <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">{evt.title}</p>
-                                                <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400 truncate">
-                                                    {evt.start_time && (
-                                                        <span>{formatEventTime(evt.start_time, evt.end_time)}</span>
-                                                    )}
-                                                    {evt.location ? ` · ${evt.location}` : ' · Location TBA'}
+                                                {evt.start_time && (
+                                                    <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                                                        {formatEventTime(evt.start_time, evt.end_time)}
+                                                    </p>
+                                                )}
+                                                <p className="text-xs text-gray-400 dark:text-gray-500 truncate">
+                                                    {evt.location ? evt.location : 'Location TBA'}
                                                 </p>
                                                 {!isCheckedIn && !windowIsOpen && (
                                                     <p className="mt-1 text-[11px] font-medium text-amber-600 dark:text-amber-400">
@@ -264,12 +275,15 @@ export default function Dashboard({
                                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-50 dark:bg-slate-800/80 text-[#1B1F5C] dark:text-amber-400 text-xs font-semibold">
                                         <Calendar className="h-4 w-4" aria-hidden="true" />
                                     </div>
-                                    <div className="min-w-0 flex-1">
+                                    <div className="min-w-0 flex-1 space-y-0.5">
                                         <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">{evt.title}</p>
-                                        <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400 truncate">
-                                            {evt.event_date}
-                                            {evt.start_time ? ` (${formatEventTime(evt.start_time, evt.end_time)})` : ''}
-                                            {evt.location ? ` · ${evt.location}` : ' · Location TBA'}
+                                        {evt.start_time && (
+                                            <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                                                {formatEventTime(evt.start_time, evt.end_time)}
+                                            </p>
+                                        )}
+                                        <p className="text-xs text-gray-400 dark:text-gray-500 truncate">
+                                            {evt.event_date} {evt.location ? `· ${evt.location}` : '· Location TBA'}
                                         </p>
                                     </div>
                                 </li>
@@ -294,24 +308,27 @@ export default function Dashboard({
 
                     {recentAttendances.length > 0 ? (
                         <ul className="divide-y divide-gray-100 dark:divide-slate-800/60">
-                            {recentAttendances.map((log) => (
-                                <li key={log.attendance_id} className="flex items-center justify-between px-6 py-3.5">
-                                    <div className="min-w-0 flex-1">
-                                        <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
-                                            {log.event?.title || 'Event'}
-                                        </p>
-                                        <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400 truncate">
-                                            {new Date(log.logged_at).toLocaleDateString()} {new Date(log.logged_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - {log.event?.location || 'N/A'}
-                                        </p>
-                                    </div>
-                                    <div className="flex items-center gap-2 shrink-0">
-                                        <ConfidenceBadge score={log.confidence_score} />
-                                        <span className="inline-flex items-center rounded-full bg-emerald-50 dark:bg-emerald-950/30 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/40">
-                                            {log.status?.toLowerCase() || 'present'}
-                                        </span>
-                                    </div>
-                                </li>
-                            ))}
+                            {recentAttendances.map((log) => {
+                                const logDate = new Date(log.logged_at);
+                                return (
+                                    <li key={log.attendance_id} className="flex items-center justify-between px-6 py-3.5">
+                                        <div className="min-w-0 flex-1">
+                                            <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+                                                {log.event?.title || 'Event'}
+                                            </p>
+                                            <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400 truncate">
+                                                {logDate.toLocaleDateString()} {logDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {log.event?.location || 'N/A'}
+                                            </p>
+                                        </div>
+                                        <div className="flex items-center gap-2 shrink-0">
+                                            <ConfidenceBadge score={log.confidence_score} />
+                                            <span className="inline-flex items-center rounded-full bg-emerald-50 dark:bg-emerald-950/30 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/40">
+                                                {log.status?.toLowerCase() || 'present'}
+                                            </span>
+                                        </div>
+                                    </li>
+                                );
+                            })}
                         </ul>
                     ) : (
                         <div className="flex flex-col items-center justify-center py-12 text-center text-gray-400 dark:text-gray-500">
@@ -689,7 +706,10 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
                 onSuccess: () => {
                     setIsSubmitting(false);
                     goToStep('PASSED');
-                    setTimeout(() => onClose(), 1200);
+                    setTimeout(() => {
+                        stopCameraStream();
+                        onClose();
+                    }, 1200);
                 },
                 onError: (errors: Record<string, string>) => {
                     setIsSubmitting(false);
@@ -735,12 +755,15 @@ function CheckInModal({ event, onClose }: { event: Event; onClose: () => void })
             aria-labelledby="checkin-title"
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
             onClick={(e) => {
-                if (e.target === e.currentTarget) onClose();
+                if (e.target === e.currentTarget) {
+                    stopCameraStream();
+                    onClose();
+                }
             }}
         >
             <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#090d16] text-gray-900 dark:text-white shadow-2xl overflow-hidden border border-gray-100 dark:border-slate-800">
                 <div className="relative px-6 pt-6 pb-4 border-b border-gray-100 dark:border-slate-800">
-                    <button onClick={onClose} className="absolute right-4 top-4 rounded-full p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-slate-800">
+                    <button onClick={() => { stopCameraStream(); onClose(); }} className="absolute right-4 top-4 rounded-full p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-slate-800">
                         <X className="h-5 w-5" />
                     </button>
                     <h2 id="checkin-title" className="text-lg font-bold pr-8">{event.title}</h2>

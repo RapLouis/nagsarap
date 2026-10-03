@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
+use Carbon\Carbon;
 
 Route::inertia('/', 'welcome')->name('home');
 
@@ -48,8 +49,16 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 : null;
         }
 
-        // Active events for student attendance (Filtered by today via ongoing scope)
-        $activeEvents = Event::ongoing()->with('days')->get();
+        // Active events for student attendance (Filtered by today via ongoing scope and transformed schedules)
+        $activeEvents = Event::ongoing()->with('days')->get()->transform(function ($event) {
+            $event->schedules = $event->days->map(function ($day) {
+                return [
+                    'date'  => Carbon::parse($day->event_date)->format('Y-m-d'),
+                    'slots' => $day->slots ?? [],
+                ];
+            });
+            return $event;
+        });
 
         return Inertia::render('dashboard', [
             'student' => $student,
@@ -91,35 +100,31 @@ Route::middleware(['auth', 'verified'])->group(function () {
             // STUDENT MANAGEMENT
             // -----------------------------------------------------------------
 
-            // Student list
             Route::get(
                 '/students',
                 [StudentManagementController::class, 'index']
             )->name('students.index');
 
-            // Update student details
             Route::patch(
                 '/students/{student}',
                 [StudentManagementController::class, 'update']
             )->name('students.update');
 
-            // Verify student (manual override)
             Route::patch(
                 '/students/{student}/verify',
                 [StudentManagementController::class, 'verify']
             )->name('students.verify');
 
-            // Reject student (send back to pending face verification)
             Route::patch(
                 '/students/{student}/reject',
                 [StudentManagementController::class, 'reject']
             )->name('students.reject');
 
-            // Delete student
             Route::delete(
                 '/students/{student}',
                 [StudentManagementController::class, 'destroy']
             )->name('students.destroy');
+
             // -----------------------------------------------------------------
             // STUDENT CLEARANCE
             // -----------------------------------------------------------------
@@ -135,37 +140,31 @@ Route::middleware(['auth', 'verified'])->group(function () {
             // EVENT MANAGEMENT
             // -----------------------------------------------------------------
 
-            // Event list
             Route::get(
                 '/events',
                 [EventController::class, 'index']
             )->name('events.index');
 
-            // Create event
             Route::post(
                 '/events',
                 [EventController::class, 'store']
             )->name('events.store');
 
-            // Update event
             Route::put(
                 '/events/{event}',
                 [EventController::class, 'update']
             )->name('events.update');
 
-            // Toggle event active/inactive
             Route::patch(
                 '/events/{event}/toggle',
                 [EventController::class, 'toggleActive']
             )->name('events.toggle');
 
-            // Delete event
             Route::delete(
                 '/events/{event}',
                 [EventController::class, 'destroy']
             )->name('events.destroy');
 
-            // Update event status
             Route::patch(
                 '/events/{event}/status', 
                 [EventController::class, 'updateStatus']
@@ -175,13 +174,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
             // ADMIN ANALYTICS & REPORTS
             // -----------------------------------------------------------------
 
-            // Global System Analytics page
             Route::get(
                 '/analytics',
                 [AnalyticsController::class, 'index']
             )->name('analytics.index');
 
-            // Per-Event Drill-down analytics view
             Route::get(
                 '/analytics/events/{event}',
                 [AnalyticsController::class, 'showEvent']
@@ -248,7 +245,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
 });
 
 require __DIR__.'/settings.php';
-// Mobile app bridge: opens the same server-side biometric verification flow when needed.
+
 Route::get('/mobile/register/verify-face/{user}', function (\Illuminate\Http\Request $request, \App\Models\User $user) {
     abort_unless($user->role === 'student' && $user->student, 403);
     \Illuminate\Support\Facades\Auth::login($user);

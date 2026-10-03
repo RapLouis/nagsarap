@@ -84,19 +84,51 @@ class Event extends Model
 
     public function scopeOngoing(Builder $query): Builder
     {
-        $today=now()->toDateString();
-        return $query->where('approval_status','approved')->where('is_active',true)->whereHas('days',fn($q)=>$q->whereDate('event_date',$today));
+        $today = now()->toDateString();
+        return $query->where('approval_status', 'approved')
+            ->where('is_active', true)
+            ->where(function ($q) use ($today) {
+                // Ongoing if today matches event_date / event_end_date range or any associated day date
+                $q->where(function ($sub) use ($today) {
+                    $sub->whereDate('event_date', '<=', $today)
+                        ->whereDate('event_end_date', '>=', $today);
+                })->orWhereHas('days', function ($sub) use ($today) {
+                    $sub->whereDate('event_date', $today);
+                });
+            });
     }
+
     public function scopeUpcoming(Builder $query): Builder
     {
-        $today=now()->toDateString();
-        return $query->where('approval_status','approved')->whereHas('days',fn($q)=>$q->whereDate('event_date','>',$today));
+        $today = now()->toDateString();
+        return $query->where('approval_status', 'approved')
+            ->where(function ($q) use ($today) {
+                $q->whereDate('event_date', '>', $today)
+                  ->orWhereHas('days', function ($sub) use ($today) {
+                      $sub->whereDate('event_date', '>', $today);
+                  });
+            });
     }
+
     public function scopeCompleted(Builder $query): Builder
     {
-        $today=now()->toDateString();
-        return $query->where('approval_status','approved')->whereHas('days',fn($q)=>$q->whereDate('event_date','<',$today));
+        $today = now()->toDateString();
+        return $query->where('approval_status', 'approved')
+            ->where(function ($q) use ($today) {
+                // Completed only if event_end_date (or event_date) is strictly in the past
+                // AND it has no days in today or the future.
+                $q->where(function ($sub) use ($today) {
+                    $sub->whereDate('event_end_date', '<', $today)
+                        ->orWhere(function ($inner) use ($today) {
+                            $inner->whereNull('event_end_date')
+                                  ->whereDate('event_date', '<', $today);
+                        });
+                })->whereDoesntHave('days', function ($sub) use ($today) {
+                    $sub->whereDate('event_date', '>=', $today);
+                });
+            });
     }
+
     public function scopePending(Builder $query): Builder { return $query->where('approval_status','pending'); }
     public function scopeDeclined(Builder $query): Builder { return $query->where('approval_status','declined'); }
 }

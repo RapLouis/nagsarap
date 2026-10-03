@@ -6,6 +6,7 @@ use App\Models\Event;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Inertia\Inertia;
+use Carbon\Carbon;
 
 class StudentCheckInController extends Controller
 {
@@ -40,8 +41,16 @@ class StudentCheckInController extends Controller
                 : null;
         }
 
-        // Fetch ongoing/active events for today
-        $activeEvents = Event::ongoing()->with('days')->get();
+        // Fetch ongoing/active events for today and transform schedules for the frontend
+        $activeEvents = Event::ongoing()->with('days')->get()->transform(function ($event) {
+            $event->schedules = $event->days->map(function ($day) {
+                return [
+                    'date'  => Carbon::parse($day->event_date)->format('Y-m-d'),
+                    'slots' => $day->slots ?? [],
+                ];
+            });
+            return $event;
+        });
 
         return Inertia::render('CheckIn', [
             'student' => $student,

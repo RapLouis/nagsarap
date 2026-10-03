@@ -4,7 +4,8 @@ import AdminLayout from '@/layouts/admin-layout';
 import DeleteModal from '@/components/delete-modal';
 import LocationPicker from '@/components/location-picker';
 import FormSwitch from '@/components/ui/form-switch';
-import {
+import { formatAMPM } from '@/lib/timeUtils';
+import { 
     Calendar,
     MapPin,
     Plus,
@@ -53,10 +54,6 @@ type EventItem = {
     event_date: string;
     event_end_date: string | null;
     schedules: ScheduleItem[] | null;
-    time_in_start: string;
-    time_in_end: string | null;
-    time_out_start: string | null;
-    time_out_end: string | null;
     approval_status: 'approved' | 'pending' | 'declined';
     is_active: boolean;
 };
@@ -90,7 +87,7 @@ export default function Events({
     const [isFiltering, setIsFiltering] = useState(false);
     const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const isFirstRun = useRef(true);
-    const isEditingLoad = useRef(false); // Prevents useEffect from wiping slots on edit load
+    const isEditingLoad = useRef(false);
 
     // Wizard Flow States
     const [currentStep, setCurrentStep] = useState<number>(1);
@@ -136,11 +133,9 @@ export default function Events({
 
     const hasFormErrors = Object.keys(errors).length > 0;
 
-    // Synchronize schedules automatically when dates, multi-day toggle, or modes change
     useEffect(() => {
         if (!data.event_date) return;
 
-        // Skip resetting schedules if we just loaded an existing event into the edit modal
         if (isEditingLoad.current) {
             isEditingLoad.current = false;
             return;
@@ -221,7 +216,6 @@ export default function Events({
         return () => {
             if (debounceRef.current) clearTimeout(debounceRef.current);
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [search]);
 
     const geocodeVenueName = async () => {
@@ -318,7 +312,7 @@ export default function Events({
     };
 
     const openEditModal = (eventItem: EventItem) => {
-        isEditingLoad.current = true; // Mark as editing load to safeguard multi-slots
+        isEditingLoad.current = true;
         setEditingEvent(eventItem);
         clearErrors();
         setCurrentStep(1);
@@ -328,10 +322,8 @@ export default function Events({
         const hasMultiDay = Boolean(eventItem.event_end_date && eventItem.event_end_date !== eventItem.event_date);
         setIsMultiDay(hasMultiDay);
 
-        const savedLat =
-            eventItem.latitude !== null && eventItem.latitude !== undefined ? Number(eventItem.latitude) : 18.1972;
-        const savedLng =
-            eventItem.longitude !== null && eventItem.longitude !== undefined ? Number(eventItem.longitude) : 120.5928;
+        const savedLat = eventItem.latitude !== null && eventItem.latitude !== undefined ? Number(eventItem.latitude) : 18.1972;
+        const savedLng = eventItem.longitude !== null && eventItem.longitude !== undefined ? Number(eventItem.longitude) : 120.5928;
 
         const hasExistingSchedules = eventItem.schedules && eventItem.schedules.length > 0;
 
@@ -349,10 +341,10 @@ export default function Events({
                   date: day,
                   slots: [
                       {
-                          time_in_start: eventItem.time_in_start || '08:00',
-                          time_in_end: eventItem.time_in_end || '',
-                          time_out_start: eventItem.time_out_start || '17:00',
-                          time_out_end: eventItem.time_out_end || '',
+                          time_in_start: '08:00',
+                          time_in_end: '',
+                          time_out_start: '17:00',
+                          time_out_end: '',
                       },
                   ],
               }));
@@ -373,8 +365,7 @@ export default function Events({
             latitude: savedLat,
             longitude: savedLng,
             radius_meters: Number(eventItem.radius_meters) || 100,
-            geofence_polygon:
-                eventItem.geofence_polygon && eventItem.geofence_polygon.length >= 3 ? eventItem.geofence_polygon : null,
+            geofence_polygon: eventItem.geofence_polygon && eventItem.geofence_polygon.length >= 3 ? eventItem.geofence_polygon : null,
             event_date: eventItem.event_date,
             event_end_date: eventItem.event_end_date || '',
             schedules: mappedSchedules,
@@ -442,7 +433,6 @@ export default function Events({
             <Head title="Events Management" />
 
             <div className="p-6 space-y-6">
-                {/* SUCCESS BANNER */}
                 {successMessage && (
                     <div className="flex items-center justify-between rounded-2xl bg-emerald-50 border border-emerald-200 p-4 text-emerald-800 shadow-xs transition-all">
                         <div className="flex items-center gap-2 text-sm font-semibold">
@@ -459,7 +449,6 @@ export default function Events({
                     </div>
                 )}
 
-                {/* HEADER */}
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                     <div>
                         <h2 className="text-2xl font-bold text-gray-800">Events Management</h2>
@@ -475,7 +464,6 @@ export default function Events({
                     </button>
                 </div>
 
-                {/* TAB NAVIGATION */}
                 <div className="border-b border-gray-200 bg-white px-4 rounded-2xl shadow-xs">
                     <nav className="-mb-px flex space-x-6 overflow-x-auto">
                         {TABS.map((tab) => {
@@ -503,7 +491,6 @@ export default function Events({
                     </nav>
                 </div>
 
-                {/* SEARCH TOOLBAR */}
                 <div className="flex items-center justify-between bg-white p-4 rounded-2xl border border-gray-100 shadow-xs">
                     <div className="relative w-full sm:w-80">
                         <input
@@ -531,7 +518,6 @@ export default function Events({
                     </div>
                 </div>
 
-                {/* EVENTS — DESKTOP TABLE */}
                 <div className="hidden sm:block overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-xs">
                     <table className="w-full text-left text-sm text-gray-600">
                         <thead className="bg-gray-50 text-xs font-semibold uppercase text-gray-500">
@@ -597,16 +583,16 @@ export default function Events({
                                                 </Link>
                                             </td>
 
-                                            {/* TIME-IN WINDOW */}
+                                            {/* TIME-IN WINDOW (AM/PM Formatted) */}
                                             <td className="px-6 py-4 text-gray-600">
                                                 <Link href={`/admin/analytics/events/${item.event_id}`} className="block space-y-1.5">
                                                     {item?.schedules?.[0]?.slots && item.schedules[0].slots.length > 0 ? (
                                                         item.schedules[0].slots.map((slot, index) => (
                                                             <div key={index} className="flex items-center gap-2 font-medium text-emerald-700 text-xs">
                                                                 <LogIn className="h-3.5 w-3.5 shrink-0" />
-                                                                <span>{slot?.time_in_start}</span>
+                                                                <span>{formatAMPM(slot?.time_in_start)}</span>
                                                                 {slot?.time_in_end && (
-                                                                    <span className="text-gray-400">- {slot.time_in_end}</span>
+                                                                    <span className="text-gray-400">- {formatAMPM(slot.time_in_end)}</span>
                                                                 )}
                                                             </div>
                                                         ))
@@ -616,7 +602,7 @@ export default function Events({
                                                 </Link>
                                             </td>
 
-                                            {/* TIME-OUT WINDOW */}
+                                            {/* TIME-OUT WINDOW (AM/PM Formatted) */}
                                             <td className="px-6 py-4 text-gray-600">
                                                 <Link href={`/admin/analytics/events/${item.event_id}`} className="block space-y-1.5">
                                                     {item?.schedules?.[0]?.slots?.some(slot => slot?.time_out_start) ? (
@@ -624,9 +610,9 @@ export default function Events({
                                                             slot?.time_out_start ? (
                                                                 <div key={index} className="flex items-center gap-2 font-medium text-amber-700 text-xs">
                                                                     <LogOut className="h-3.5 w-3.5 shrink-0" />
-                                                                    <span>{slot.time_out_start}</span>
+                                                                    <span>{formatAMPM(slot.time_out_start)}</span>
                                                                     {slot?.time_out_end && (
-                                                                        <span className="text-gray-400">- {slot.time_out_end}</span>
+                                                                        <span className="text-gray-400">- {formatAMPM(slot.time_out_end)}</span>
                                                                     )}
                                                                 </div>
                                                             ) : null
@@ -703,7 +689,6 @@ export default function Events({
                     </table>
                 </div>
 
-                {/* PAGINATION */}
                 {events.links.length > 3 && (
                     <nav className="flex flex-wrap items-center justify-center gap-1.5" aria-label="Pagination">
                         {events.links.map((link, idx) => (
@@ -726,11 +711,10 @@ export default function Events({
                 )}
             </div>
 
-            {/* 3-STEP WIZARD FORM MODAL */}
+            {/* WIZARD FORM MODAL */}
             {isFormOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-xs">
                     <div className="flex w-full max-w-3xl max-h-[92vh] flex-col rounded-3xl bg-white shadow-2xl transition-all">
-                        {/* Modal Header */}
                         <div className="flex items-center justify-between border-b border-gray-100 p-6 pb-4">
                             <div className="flex items-center gap-3">
                                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#1B1F5C]/10 text-[#1B1F5C]">
@@ -771,8 +755,6 @@ export default function Events({
                         )}
 
                         <form id="event-form" onSubmit={handleFormSubmit} className="flex-1 overflow-y-auto px-6 py-4 space-y-5 text-sm">
-                            
-                            {/* ================= STEP 1: EVENT DETAILS & SCHEDULES ================= */}
                             {currentStep === 1 && (
                                 <div className="space-y-4 animate-fadeIn">
                                     <div>
@@ -804,7 +786,6 @@ export default function Events({
                                         />
                                     </div>
 
-                                    {/* Multi-Day Range Toggle */}
                                     <div className="rounded-2xl border border-gray-200 bg-gray-50/50 p-4 space-y-3">
                                         <FormSwitch
                                             checked={isMultiDay}
@@ -849,7 +830,6 @@ export default function Events({
                                         </div>
                                     </div>
 
-                                    {/* MULTI-DAY SCHEDULE MODE SELECTOR (Uniform vs Custom) */}
                                     {isMultiDay && (
                                         <div className="rounded-2xl border border-blue-100 bg-blue-50/40 p-4 space-y-3">
                                             <label className="block font-bold text-blue-900 uppercase tracking-wider text-xs">
@@ -882,7 +862,6 @@ export default function Events({
                                         </div>
                                     )}
 
-                                    {/* UNIFORM SCHEDULE CONFIG (If Multi-Day + Uniform) */}
                                     {isMultiDay && scheduleMode === 'uniform' && (
                                         <div className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4 space-y-3">
                                             <div className="flex items-center gap-2 font-bold text-emerald-800 text-xs">
@@ -890,7 +869,6 @@ export default function Events({
                                                 <span>Uniform Hours (Applied to All Days)</span>
                                             </div>
 
-                                            {/* Time-In Row */}
                                             <div className="grid grid-cols-2 gap-3 items-end pt-2 border-t border-emerald-200/50">
                                                 <div>
                                                     <label className="block font-bold text-gray-600 text-xs">Time-In Start *</label>
@@ -913,7 +891,6 @@ export default function Events({
                                                 </div>
                                             </div>
 
-                                            {/* Time-Out Row */}
                                             <div className="grid grid-cols-2 gap-3 items-end pt-2 border-t border-emerald-200/50">
                                                 <div>
                                                     <label className="block font-bold text-gray-600 text-xs">Time-Out Start</label>
@@ -937,7 +914,6 @@ export default function Events({
                                         </div>
                                     )}
 
-                                    {/* CUSTOM DAILY SCHEDULES OR SINGLE-DAY CONFIG */}
                                     {(!isMultiDay || scheduleMode === 'custom') &&
                                         data.schedules.map((schedule, dayIndex) => {
                                             const dayNumber = dayIndex + 1;
@@ -995,7 +971,6 @@ export default function Events({
                                                                 Slot {slotIndex + 1}
                                                             </span>
 
-                                                            {/* Time-In Inputs */}
                                                             <div className="grid grid-cols-2 gap-3 items-end">
                                                                 <div>
                                                                     <label className="block font-bold text-gray-600 text-xs">Time-In Start *</label>
@@ -1028,7 +1003,6 @@ export default function Events({
                                                                 </div>
                                                             </div>
 
-                                                            {/* Time-Out Inputs */}
                                                             <div className="grid grid-cols-2 gap-3 items-end pt-2 border-t border-gray-100">
                                                                 <div>
                                                                     <label className="block font-bold text-gray-600 text-xs">Time-Out Start</label>
@@ -1067,7 +1041,6 @@ export default function Events({
                                 </div>
                             )}
 
-                            {/* ================= STEP 2: VENUE & GEOFENCING ================= */}
                             {currentStep === 2 && (
                                 <div className="space-y-4 animate-fadeIn">
                                     <div>
@@ -1114,7 +1087,6 @@ export default function Events({
                                         )}
                                     </div>
 
-                                    {/* GEOFENCE CONFIGURATION */}
                                     <div className="rounded-2xl border border-blue-100 bg-blue-50/30 p-4 space-y-3">
                                         <div className="flex items-center justify-between">
                                             <div className="flex items-center gap-2 font-bold text-blue-900 text-xs">
@@ -1191,7 +1163,6 @@ export default function Events({
                                 </div>
                             )}
 
-                            {/* ================= STEP 3: REVIEW & CONFIRMATION ================= */}
                             {currentStep === 3 && (
                                 <div className="space-y-4 animate-fadeIn">
                                     <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4 space-y-3">
@@ -1236,7 +1207,6 @@ export default function Events({
                             )}
                         </form>
 
-                        {/* WIZARD FOOTER NAVIGATION */}
                         <div className="flex items-center justify-between border-t border-gray-100 p-6 pt-4">
                             <div>
                                 {currentStep > 1 && (
