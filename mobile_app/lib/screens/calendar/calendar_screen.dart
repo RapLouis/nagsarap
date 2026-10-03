@@ -80,7 +80,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = 'Unable to load calendar data.';
+        _error = 'Unable to load Smart Attendance System calendar data.';
       });
     }
   }
@@ -216,114 +216,173 @@ class _CalendarScreenState extends State<CalendarScreen> {
         final bool isPartial = count == 1;
         final bool hasGeofence = event.geofenceEnabled;
 
+        final Color statusColor = isFullyAttended
+            ? attendedColor
+            : (isPartial ? partialColor : missedColor);
+
+        final String statusLabel = isFullyAttended
+            ? 'Fully Attended (Time-In & Time-Out Complete)'
+            : (isPartial ? 'In Progress (Time-In Recorded)' : 'Pending Attendance');
+
         return Dialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          elevation: 12,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                height: 6,
+                width: double.infinity,
+                color: statusColor,
+              ),
+              Padding(
+                padding: const EdgeInsets.all(22),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      child: Text(
-                        event.name,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: navy,
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            event.name,
+                            style: const TextStyle(
+                              fontSize: 19,
+                              fontWeight: FontWeight.w800,
+                              color: navy,
+                              height: 1.2,
+                            ),
+                          ),
                         ),
+                        InkWell(
+                          onTap: () => Navigator.of(ctx).pop(),
+                          borderRadius: BorderRadius.circular(20),
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade100,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.close_rounded,
+                              color: Colors.grey,
+                              size: 20,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: statusColor.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: statusColor.withValues(alpha: 0.25)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            isFullyAttended
+                                ? Icons.check_circle_rounded
+                                : (isPartial ? Icons.timelapse_rounded : Icons.error_outline_rounded),
+                            size: 14,
+                            color: statusColor,
+                          ),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                              statusLabel,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                                color: statusColor,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    IconButton(
-                      onPressed: () => Navigator.of(ctx).pop(),
-                      icon: const Icon(Icons.close_rounded, color: Colors.grey),
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
+                    const SizedBox(height: 18),
+                    const Divider(height: 1, color: Color(0xFFE2E8F0)),
+                    const SizedBox(height: 18),
+
+                    _buildModalDetailRow(
+                      icon: Icons.access_time_filled_rounded,
+                      iconColor: gold,
+                      title: 'Schedule Window',
+                      subtitle: _formatTimeRange(event),
+                    ),
+                    const SizedBox(height: 14),
+
+                    _buildModalDetailRow(
+                      icon: Icons.location_on_rounded,
+                      iconColor: navy,
+                      title: 'Venue Location',
+                      subtitle: event.venue.isEmpty ? 'Main Campus' : event.venue,
+                    ),
+                    const SizedBox(height: 14),
+
+                    _buildModalDetailRow(
+                      icon: Icons.radar_rounded,
+                      iconColor: hasGeofence ? attendedColor : Colors.grey,
+                      title: 'Geofence Requirement',
+                      subtitle: hasGeofence
+                          ? 'Active (${event.geofenceRadius.round()}m radius enforced)'
+                          : 'Disabled (Any location allowed)',
+                    ),
+
+                    if (event.description.isNotEmpty) ...[
+                      const SizedBox(height: 18),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF8FAFC),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFE2E8F0)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Description',
+                              style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.grey),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              event.description,
+                              style: const TextStyle(fontSize: 13, color: Colors.black87, height: 1.4),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+
+                    const SizedBox(height: 22),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: navy,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        child: const Text('Close', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                      ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 10),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: isFullyAttended
-                        ? const Color(0xFFD1FAE5)
-                        : (isPartial ? const Color(0xFFFEF3C7) : Colors.red.shade50),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    isFullyAttended
-                        ? 'Fully Attended (Time-In & Time-Out Complete)'
-                        : (isPartial ? 'Partial Attendance (Time-In Recorded)' : 'Pending Attendance'),
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      color: isFullyAttended
-                          ? const Color(0xFF065F46)
-                          : (isPartial ? const Color(0xFF92400E) : Colors.red.shade800),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                const Divider(height: 1),
-                const SizedBox(height: 16),
-
-                _buildModalDetailRow(
-                  icon: Icons.access_time_filled_rounded,
-                  iconColor: gold,
-                  title: 'Schedule Window',
-                  subtitle: _formatTimeRange(event),
-                ),
-                const SizedBox(height: 12),
-
-                _buildModalDetailRow(
-                  icon: Icons.location_on_rounded,
-                  iconColor: navy,
-                  title: 'Venue Location',
-                  subtitle: event.venue.isEmpty ? 'Main Campus' : event.venue,
-                ),
-                const SizedBox(height: 12),
-
-                _buildModalDetailRow(
-                  icon: Icons.radar_rounded,
-                  iconColor: hasGeofence ? attendedColor : Colors.grey,
-                  title: 'Geofence Requirement',
-                  subtitle: hasGeofence
-                      ? 'Active (${event.geofenceRadius.round()}m radius enforced)'
-                      : 'Disabled (Any location allowed)',
-                ),
-
-                if (event.description.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Description',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    event.description,
-                    style: const TextStyle(fontSize: 13, color: Colors.black87, height: 1.4),
-                  ),
-                ],
-
-                const SizedBox(height: 20),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () => Navigator.of(ctx).pop(),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: navy,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                    child: const Text('Close', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
         );
       },
@@ -370,7 +429,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
         backgroundColor: navy,
         foregroundColor: Colors.white,
         elevation: 0,
-        title: const Text('Calendar', style: TextStyle(fontWeight: FontWeight.w700)),
+        title: const Text('Calendar', style: TextStyle(fontWeight: FontWeight.w700, color: Colors.white)),
         actions: [
           TextButton(
             onPressed: _goToToday,
@@ -429,10 +488,10 @@ class _CalendarScreenState extends State<CalendarScreen> {
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 14),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFE0E1E8)),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
         boxShadow: const [
-          BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2)),
+          BoxShadow(color: Colors.black12, blurRadius: 8, offset: Offset(0, 3)),
         ],
       ),
       child: Column(
@@ -476,7 +535,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 final day = cell - leadingDays + 1;
 
                 if (day < 1 || day > lastDay.day) {
-                  return const Expanded(child: SizedBox(height: 50));
+                  return const Expanded(child: SizedBox(height: 48));
                 }
 
                 final date = DateTime(_displayedMonth.year, _displayedMonth.month, day);
@@ -497,67 +556,66 @@ class _CalendarScreenState extends State<CalendarScreen> {
     final partialAttendance = _hasPartiallyAttendedEventOn(date);
     final missed = _hasMissedEventOn(date);
 
+    double progress = 0.0;
+    Color ringColor = Colors.transparent;
+
+    if (allAttended) {
+      progress = 1.0;
+      ringColor = attendedColor;
+    } else if (partialAttendance) {
+      progress = 0.55;
+      ringColor = partialColor;
+    } else if (missed) {
+      progress = 1.0;
+      ringColor = missedColor;
+    } else if (hasEvent) {
+      progress = 0.25;
+      ringColor = eventColor;
+    }
+
     return InkWell(
       onTap: () => _selectDate(date),
       borderRadius: BorderRadius.circular(28),
       child: SizedBox(
-        height: 50,
+        height: 48,
         child: Center(
           child: Stack(
             alignment: Alignment.center,
             children: [
-              if (partialAttendance)
+              if (hasEvent || allAttended || partialAttendance || missed)
                 CustomPaint(
                   size: const Size(38, 38),
-                  painter: _HalfArcPainter(
-                    leftColor: attendedColor,
-                    rightColor: partialColor,
+                  painter: _CircularProgressRingPainter(
+                    progress: progress,
+                    color: ringColor,
+                    strokeWidth: 3.5,
                   ),
-                )
-              else if (allAttended)
-                Container(
-                  width: 38,
-                  height: 38,
-                  decoration: const BoxDecoration(shape: BoxShape.circle, color: attendedColor),
-                )
-              else if (missed)
-                Container(
-                  width: 38,
-                  height: 38,
-                  decoration: const BoxDecoration(shape: BoxShape.circle, color: missedColor),
-                )
-              else if (hasEvent)
-                Container(
-                  width: 38,
-                  height: 38,
-                  decoration: const BoxDecoration(shape: BoxShape.circle, color: eventColor),
                 ),
 
               Container(
-                width: 38,
-                height: 38,
+                width: 32,
+                height: 32,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
+                  color: selected
+                      ? navy
+                      : (today ? navy.withValues(alpha: 0.1) : Colors.transparent),
                   border: Border.all(
                     color: selected
-                        ? navy
-                        : today
-                            ? todayBorderColor
-                            : Colors.transparent,
-                    width: selected ? 3 : (today ? 2 : 0),
+                        ? gold
+                        : (today ? todayBorderColor : Colors.transparent),
+                    width: selected ? 2 : (today ? 1.5 : 0),
                   ),
                 ),
                 child: Text(
                   '${date.day}',
                   style: TextStyle(
-                    color: (allAttended || partialAttendance || missed || hasEvent)
+                    color: selected
                         ? Colors.white
                         : (today ? navy : Colors.black87),
                     fontSize: 12,
-                    fontWeight: (selected || today || allAttended || partialAttendance || missed || hasEvent)
-                        ? FontWeight.w800
-                        : FontWeight.w500,
+                    fontWeight: (selected || today) ? FontWeight.w800 : FontWeight.w600,
                   ),
                 ),
               ),
@@ -570,22 +628,33 @@ class _CalendarScreenState extends State<CalendarScreen> {
 
   Widget _buildCompactLegend() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE0E1E8)),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+        boxShadow: const [
+          BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2)),
+        ],
       ),
       child: const Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
-          _CompactLegendDot(color: attendedColor, label: 'All Attended'),
-          _CompactLegendDot(
-            color: partialColor,
-            label: 'Incomplete/Partial',
-            isSplit: true,
+          _RingLegendItem(
+            color: attendedColor,
+            label: 'Fully Attended',
+            progress: 1.0,
           ),
-          _CompactLegendDot(color: missedColor, label: 'Missed'),
+          _RingLegendItem(
+            color: partialColor,
+            label: 'In Progress',
+            progress: 0.55,
+          ),
+          _RingLegendItem(
+            color: missedColor,
+            label: 'Missed',
+            progress: 1.0,
+          ),
         ],
       ),
     );
@@ -604,7 +673,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
 
     final statusText = fullyAttended
         ? 'Fully Attended'
-        : (partiallyAttended ? 'Time-In Recorded' : (ended ? 'Not attended' : (today ? 'Scheduled today' : 'Upcoming Event')));
+        : (partiallyAttended ? 'Time-In Recorded' : (ended ? 'Not Attended' : (today ? 'Scheduled Today' : 'Upcoming Event')));
 
     return Material(
       color: Colors.transparent,
@@ -619,9 +688,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
             color: Colors.white,
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
-              color: fullyAttended
-                  ? attendedColor.withValues(alpha: 0.35)
-                  : const Color(0xFFE1E1E8),
+              color: statusColor.withValues(alpha: 0.3),
             ),
             boxShadow: const [
               BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2)),
@@ -657,10 +724,11 @@ class _CalendarScreenState extends State<CalendarScreen> {
                           ),
                         ),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                           decoration: BoxDecoration(
                             color: statusColor.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(10),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: statusColor.withValues(alpha: 0.2)),
                           ),
                           child: Text(
                             statusText,
@@ -713,7 +781,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFE0E1E8)),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
       ),
       child: const Column(
         children: [
@@ -791,29 +859,49 @@ class _CalendarScreenState extends State<CalendarScreen> {
   }
 }
 
-class _HalfArcPainter extends CustomPainter {
-  final Color leftColor;
-  final Color rightColor;
+class _CircularProgressRingPainter extends CustomPainter {
+  final double progress;
+  final Color color;
+  final double strokeWidth;
 
-  _HalfArcPainter({required this.leftColor, required this.rightColor});
+  _CircularProgressRingPainter({
+    required this.progress,
+    required this.color,
+    this.strokeWidth = 3.0,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
-    final rect = Rect.fromLTWH(0, 0, size.width, size.height);
-    final paintLeft = Paint()
-      ..color = leftColor
-      ..style = PaintingStyle.fill;
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = (size.width - strokeWidth) / 2;
 
-    final paintRight = Paint()
-      ..color = rightColor
-      ..style = PaintingStyle.fill;
+    final trackPaint = Paint()
+      ..color = color.withValues(alpha: 0.15)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth;
 
-    canvas.drawArc(rect, math.pi / 2, math.pi, true, paintLeft);
-    canvas.drawArc(rect, -math.pi / 2, math.pi, true, paintRight);
+    canvas.drawCircle(center, radius, trackPaint);
+
+    final progressPaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.round;
+
+    final sweepAngle = 2 * math.pi * progress;
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius),
+      -math.pi / 2,
+      sweepAngle,
+      false,
+      progressPaint,
+    );
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _CircularProgressRingPainter oldDelegate) {
+    return oldDelegate.progress != progress || oldDelegate.color != color;
+  }
 }
 
 class _DayLabel extends StatelessWidget {
@@ -838,15 +926,15 @@ class _DayLabel extends StatelessWidget {
   }
 }
 
-class _CompactLegendDot extends StatelessWidget {
+class _RingLegendItem extends StatelessWidget {
   final Color color;
   final String label;
-  final bool isSplit;
+  final double progress;
 
-  const _CompactLegendDot({
+  const _RingLegendItem({
     required this.color,
     required this.label,
-    this.isSplit = false,
+    required this.progress,
   });
 
   @override
@@ -854,24 +942,18 @@ class _CompactLegendDot extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (isSplit)
-          CustomPaint(
-            size: const Size(12, 12),
-            painter: _HalfArcPainter(
-              leftColor: const Color(0xFF10B981),
-              rightColor: color,
-            ),
-          )
-        else
-          Container(
-            width: 11,
-            height: 11,
-            decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+        CustomPaint(
+          size: const Size(14, 14),
+          painter: _CircularProgressRingPainter(
+            progress: progress,
+            color: color,
+            strokeWidth: 2.5,
           ),
+        ),
         const SizedBox(width: 6),
         Text(
           label,
-          style: const TextStyle(color: Color(0xFF555566), fontSize: 11, fontWeight: FontWeight.bold),
+          style: const TextStyle(color: Color(0xFF475569), fontSize: 11, fontWeight: FontWeight.bold),
         ),
       ],
     );

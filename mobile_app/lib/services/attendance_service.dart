@@ -173,10 +173,14 @@ class AttendanceService {
     required XFile turnedFrame,
     required String challengeNonce,
     required String sessionId,
+    String type = 'time_in',
   }) async {
     try {
       final formData = FormData.fromMap({
         'event_id': eventId,
+        'type': type,
+        'check_in_type': type,
+        'session_type': type,
         'challenge_nonce': challengeNonce,
         'session_id': sessionId,
         'latitude': latitude,
@@ -241,6 +245,7 @@ class AttendanceService {
     required XFile centerFrame,
     required XFile turnedFrame,
     required String livenessDirection,
+    String type = 'time_in',
   }) async {
     try {
       final exists = await _offlineStorage.hasPendingForEvent(eventId);
@@ -273,6 +278,7 @@ class AttendanceService {
           'attendance_time': record.attendanceTime,
           'liveness_direction': record.livenessDirection,
           'sync_status': 'pending',
+          'type': type,
         },
       );
     } catch (e) {

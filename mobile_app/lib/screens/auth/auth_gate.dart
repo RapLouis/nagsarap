@@ -86,7 +86,7 @@ class _AuthGateState extends State<AuthGate> {
                 ),
                 SizedBox(height: 22),
                 Text(
-                  'CCIS Attendance',
+                  'Smart Attendance System',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 18,

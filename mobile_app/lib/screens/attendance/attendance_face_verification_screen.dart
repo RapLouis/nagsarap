@@ -90,11 +90,10 @@ class _AttendanceFaceVerificationScreenState
       duration: const Duration(milliseconds: 1200),
     )..repeat(reverse: true);
 
-    _prepareAndStartParallel();
+    _prepareAndStartSequential();
   }
 
-  /// High-speed parallel initialization for Camera, Geolocation, and Challenge API
-  Future<void> _prepareAndStartParallel() async {
+  Future<void> _prepareAndStartSequential() async {
     try {
       if (widget.event.id == null) {
         throw Exception('Invalid event ID.');
@@ -104,13 +103,21 @@ class _AttendanceFaceVerificationScreenState
         throw Exception('Attendance is already complete for this event.');
       }
 
-      // Execute Camera, Location, and Liveness Challenge in parallel
+      final cameraPerm = await Permission.camera.request();
+      if (!cameraPerm.isGranted) {
+        throw Exception('Camera permission is required.');
+      }
+
+      final cameraFuture = _initCameraFast();
+      final locationFuture = _getFastPosition();
+      final challengeFuture = AttendanceService.instance.requestLivenessChallenge(
+        eventId: widget.event.id!,
+      );
+
       final results = await Future.wait([
-        _initCameraFast(),
-        _getFastPosition(),
-        AttendanceService.instance.requestLivenessChallenge(
-          eventId: widget.event.id!,
-        ),
+        cameraFuture,
+        locationFuture,
+        challengeFuture,
       ]);
 
       if (_disposed) return;
@@ -139,11 +146,6 @@ class _AttendanceFaceVerificationScreenState
   }
 
   Future<void> _initCameraFast() async {
-    final cameraPerm = await Permission.camera.request();
-    if (!cameraPerm.isGranted) {
-      throw Exception('Camera permission is required.');
-    }
-
     final cameras = await availableCameras();
     if (cameras.isEmpty) {
       throw Exception('No camera available.');
@@ -177,29 +179,36 @@ class _AttendanceFaceVerificationScreenState
   }
 
   Future<Position?> _getFastPosition() async {
-    bool enabled = await Geolocator.isLocationServiceEnabled();
-    if (!enabled) return null;
+    try {
+      bool enabled = await Geolocator.isLocationServiceEnabled();
+      if (!enabled) return null;
 
-    LocationPermission perm = await Geolocator.checkPermission();
-    if (perm == LocationPermission.denied) {
-      perm = await Geolocator.requestPermission();
-    }
-    if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
-      return null;
-    }
+      LocationPermission perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+        return null;
+      }
 
-    // Attempt instant last-known position first to skip GPS lag
-    final lastKnown = await Geolocator.getLastKnownPosition();
-    if (lastKnown != null) {
-      return lastKnown;
-    }
+      final lastKnown = await Geolocator.getLastKnownPosition();
+      if (lastKnown != null) {
+        return lastKnown;
+      }
 
-    return await Geolocator.getCurrentPosition(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.medium,
-        timeLimit: Duration(seconds: 4),
-      ),
-    );
+      return await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.medium,
+          timeLimit: Duration(seconds: 4),
+        ),
+      );
+    } catch (_) {
+      try {
+        return await Geolocator.getLastKnownPosition();
+      } catch (_) {
+        return null;
+      }
+    }
   }
 
   void _checkGeofence(Position pos) {
@@ -337,7 +346,7 @@ class _AttendanceFaceVerificationScreenState
       case _LivenessStep.turn:
         final startTime = _challengeStartTime ?? DateTime.now();
         if (DateTime.now().difference(startTime) > challengeTimeout) {
-          _prepareAndStartParallel();
+          _prepareAndStartSequential();
           setState(() {
             _hint = "Time ran out. Let's try again.";
           });
@@ -383,7 +392,19 @@ class _AttendanceFaceVerificationScreenState
 
   Future<void> _submitAttendance() async {
     final eventId = widget.event.id;
-    final pos = _position ?? Position(longitude: 0, latitude: 0, timestamp: DateTime.now(), accuracy: 0, altitude: 0, altitudeAccuracy: 0, heading: 0, headingAccuracy: 0, speed: 0, speedAccuracy: 0);
+    final pos = _position ??
+        Position(
+          longitude: 0,
+          latitude: 0,
+          timestamp: DateTime.now(),
+          accuracy: 0,
+          altitude: 0,
+          altitudeAccuracy: 0,
+          heading: 0,
+          headingAccuracy: 0,
+          speed: 0,
+          speedAccuracy: 0,
+        );
     if (eventId == null || _centerFrame == null || _turnedFrame == null) {
       return;
     }
@@ -394,6 +415,8 @@ class _AttendanceFaceVerificationScreenState
       _hint = null;
     });
 
+    final typeStr = _currentSession == AttendanceSessionType.timeIn ? 'time_in' : 'time_out';
+
     final result = await AttendanceService.instance.mobileCheckIn(
       eventId: eventId,
       latitude: pos.latitude,
@@ -403,6 +426,7 @@ class _AttendanceFaceVerificationScreenState
       turnedFrame: _turnedFrame!,
       challengeNonce: _challengeNonce ?? '',
       sessionId: _challengeSessionId ?? '',
+      type: typeStr,
     );
 
     if (!mounted || _disposed) return;
@@ -421,14 +445,12 @@ class _AttendanceFaceVerificationScreenState
       }
     });
 
-    // Show Welcome Popup Modal
     await _showWelcomeModal();
 
     if (!mounted) return;
     Navigator.of(context).pop(true);
   }
 
-  /// Displays the Pop-Up Welcome Modal on completion
   Future<void> _showWelcomeModal() async {
     if (!mounted) return;
 
@@ -447,6 +469,8 @@ class _AttendanceFaceVerificationScreenState
         final nameText = widget.studentName != null && widget.studentName!.isNotEmpty
             ? widget.studentName!
             : 'Student';
+
+        final sessionText = _currentSession == AttendanceSessionType.timeIn ? 'Time-In' : 'Time-Out';
 
         return Dialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
@@ -482,7 +506,7 @@ class _AttendanceFaceVerificationScreenState
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Attendance ${_currentSession == AttendanceSessionType.timeIn ? "Time-In" : "Time-Out"} verified successfully.',
+                  '$sessionText verified successfully.',
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     fontSize: 13,

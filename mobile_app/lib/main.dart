@@ -1,25 +1,23 @@
 import 'package:flutter/material.dart';
-
-import 'core/app_theme.dart';
-import 'screens/attendance_splash_screen.dart';
-import 'screens/auth/auth_gate.dart';
+import 'screens/splash/app_splash_screen.dart';
 
 void main() {
-  WidgetsFlutterBinding.ensureInitialized();
-
-  runApp(const CcisAttendanceApp());
+  runApp(const MyApp());
 }
 
-class CcisAttendanceApp extends StatelessWidget {
-  const CcisAttendanceApp({super.key});
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'CCIS Attendance System',
+      title: 'Smart Attendance System',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.lightTheme,
-      home: const AttendanceSplashScreen(nextScreen: AuthGate()),
+      theme: ThemeData(
+        useMaterial3: true,
+        fontFamily: 'Roboto',
+      ),
+      home: const AppSplashScreen(),
     );
   }
 }
