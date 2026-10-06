@@ -14,11 +14,14 @@ import {
     ArrowUpRight,
     ChevronLeft,
     Sparkles,
+    CheckCircle2,
+    Lock,
+    RotateCcw,
 } from 'lucide-react';
 import CheckInModal from '@/components/CheckInModal';
 import { type ScheduleItem, type TimeSlot } from '@/lib/eventValidation';
 import { findSlotRecord, formatTime, windowState, type SlotType } from '@/lib/slots';
-import { SlotStatusBadge, SlotWindowRow, slotBadge } from '@/components/slot-rows';
+import { SlotStatusBadge, slotBadge } from '@/components/slot-rows';
 
 type Event = {
     event_id: number;
@@ -36,7 +39,6 @@ type Event = {
     end_time?: string | null;
 };
 
-// Lightweight event used by the calendar grid and date inspector (built from event_days).
 type CalendarEvent = {
     event_id: number;
     title: string;
@@ -44,7 +46,6 @@ type CalendarEvent = {
     schedules: ScheduleItem[];
 };
 
-// One entry per event in the "Coming Up" widget.
 type UpcomingEvent = {
     event_id: number;
     title: string;
@@ -79,10 +80,9 @@ type DashboardProps = {
     calendarEvents?: CalendarEvent[];
     upcomingEvents?: UpcomingEvent[];
     totalExpectedEvents?: number;
-    today?: string; // YYYY-MM-DD, from the server (falls back to the browser's date)
+    today?: string;
 };
 
-// Browser-local YYYY-MM-DD, used only if the server doesn't send `today`.
 const localToday = () => {
     const n = new Date();
     const mm = String(n.getMonth() + 1).padStart(2, '0');
@@ -90,7 +90,6 @@ const localToday = () => {
     return `${n.getFullYear()}-${mm}-${dd}`;
 };
 
-// Parse a YYYY-MM-DD string as a local date (avoids UTC off-by-one shifts).
 const parseDateStr = (dateStr: string) => {
     const [y, m, d] = dateStr.split('-').map(Number);
     return new Date(y, m - 1, d);
@@ -128,7 +127,6 @@ export default function Dashboard({
         type: 'in' | 'out';
     } | null>(null);
 
-    // Calendar navigation state (starts on the server's "today")
     const [currentDate, setCurrentDate] = useState(() => {
         const t = parseDateStr(today);
         return new Date(t.getFullYear(), t.getMonth(), 1);
@@ -152,7 +150,6 @@ export default function Dashboard({
         [student.attendances]
     );
 
-    // Index calendar data by date: { '2026-10-12': [{ event, schedule }, ...] }
     const eventsByDate = useMemo(() => {
         const map: Record<string, { event: CalendarEvent; schedule: ScheduleItem }[]> = {};
         for (const evt of calendarEvents) {
@@ -166,24 +163,33 @@ export default function Dashboard({
     const hasEventOnDate = (dateStr: string) => (eventsByDate[dateStr]?.length ?? 0) > 0;
     const selectedDateEntries = eventsByDate[selectedDateStr] ?? [];
 
-    // Jump the calendar to a date (used by the Coming Up cards)
+    const filteredUpcomingEvents = useMemo(() => {
+        const inspectedEventIds = new Set(selectedDateEntries.map(entry => entry.event.event_id));
+
+        return upcomingEvents.filter(evt => {
+            if (inspectedEventIds.has(evt.event_id)) return false;
+            if (evt.next_date <= selectedDateStr) return false;
+            return true;
+        });
+    }, [upcomingEvents, selectedDateEntries, selectedDateStr]);
+
     const jumpToDate = (dateStr: string) => {
         const d = parseDateStr(dateStr);
         setCurrentDate(new Date(d.getFullYear(), d.getMonth(), 1));
         setSelectedDateStr(dateStr);
     };
 
-    // Calendar calculation logic
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth();
     const monthName = currentDate.toLocaleString('default', { month: 'long' });
 
     const firstDayIndex = new Date(year, month, 1).getDay();
-    const startingDay = (firstDayIndex + 6) % 7; // Monday start
+    const startingDay = (firstDayIndex + 6) % 7;
     const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
 
     const handlePrevMonth = () => setCurrentDate(new Date(year, month - 1, 1));
     const handleNextMonth = () => setCurrentDate(new Date(year, month + 1, 1));
+    const handleJumpToToday = () => jumpToDate(today);
 
     return (
         <>
@@ -257,10 +263,10 @@ export default function Dashboard({
                     />
                 </div>
 
-                {/* MAIN DESKTOP GRID LAYOUT (2 Columns) */}
+                {/* MAIN DESKTOP GRID LAYOUT */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
 
-                    {/* LEFT COLUMN: TODAY'S ACTIVE EVENTS & SLOTS (Takes up 2 columns) */}
+                    {/* LEFT COLUMN: TODAY'S ACTIVE EVENTS & SLOTS */}
                     <div className="lg:col-span-2 space-y-6">
                         <div className="flex items-center justify-between">
                             <h2 className="text-lg font-bold text-gray-900">Today's Events & Check-In Slots</h2>
@@ -282,76 +288,127 @@ export default function Dashboard({
                         ) : (
                             <div className="space-y-4">
                                 {activeEvents.map((evt) => (
-                                    <div key={evt.event_id} className="bg-white p-6 rounded-3xl shadow-xs border border-gray-100 space-y-4 hover:shadow-md transition">
+                                    <div key={evt.event_id} className="bg-white p-6 lg:p-7 rounded-3xl shadow-xs border border-gray-100 space-y-5 hover:shadow-md transition">
                                         <div className="flex items-start justify-between gap-4">
                                             <div className="flex items-center gap-3.5">
                                                 <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 text-[#0b1354]">
                                                     <Clock className="h-6 w-6" />
                                                 </div>
                                                 <div>
-                                                    <h3 className="font-bold text-gray-900 text-base">{evt.title}</h3>
+                                                    <h3 className="font-bold text-gray-900 text-base lg:text-lg">{evt.title}</h3>
                                                     <p className="text-xs text-gray-400 flex items-center gap-1 mt-0.5">
                                                         <MapPin className="h-3.5 w-3.5 text-amber-500" />
                                                         {evt.location || 'Location TBA'}
                                                     </p>
                                                 </div>
                                             </div>
-                                            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700 border border-emerald-200/50">
+                                            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3.5 py-1 text-xs font-bold text-emerald-700 border border-emerald-200/50 shrink-0">
                                                 <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
                                                 Live Window
                                             </span>
                                         </div>
 
                                         {evt.schedules && evt.schedules.length > 0 && (
-                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-gray-100">
+                                            <div className="space-y-4 pt-2 border-t border-gray-100">
                                                 {evt.schedules.map((sched, sIdx) => (
-                                                    <div key={sIdx} className="bg-gray-50/70 p-4 rounded-2xl space-y-3 border border-gray-100">
-                                                        <p className="text-xs font-bold text-gray-700">{sched.date}</p>
+                                                    <div key={sIdx} className="space-y-3">
+                                                        <div className="flex items-center justify-between">
+                                                            <span className="text-xs font-bold text-gray-500 bg-gray-100 px-3 py-1 rounded-lg">
+                                                                Date: {sched.date}
+                                                            </span>
+                                                        </div>
+
                                                         {sched.slots?.map((slot, slotIdx) => {
                                                             const inState = windowState(slot, 'in', sched.date);
                                                             const outState = windowState(slot, 'out', sched.date);
                                                             const inDone = hasCheckedInSlot(evt.event_id, slotIdx, sched.date, 'in');
                                                             const outDone = hasCheckedInSlot(evt.event_id, slotIdx, sched.date, 'out');
-                                                            const badge = slotBadge({
-                                                                hasIn: Boolean(slot.time_in_start),
-                                                                hasOut: Boolean(slot.time_out_start),
-                                                                inState,
-                                                                outState,
-                                                                inDone,
-                                                                outDone,
-                                                            });
 
                                                             return (
-                                                                <div key={slotIdx} className="space-y-2 pt-2 first:pt-0 border-t first:border-t-0 border-gray-200/50">
+                                                                <div key={slotIdx} className="bg-gray-50/80 p-5 rounded-2xl border border-gray-200/60 space-y-4">
                                                                     <div className="flex items-center justify-between">
-                                                                        <span className="font-bold text-gray-400 uppercase text-[10px]">Slot {slotIdx + 1}</span>
-                                                                        <SlotStatusBadge status={badge} />
+                                                                        <span className="font-extrabold text-[#0b1354] uppercase tracking-wider text-xs">
+                                                                            Slot {slotIdx + 1} Operations
+                                                                        </span>
+                                                                        <SlotStatusBadge status={slotBadge({ hasIn: Boolean(slot.time_in_start), hasOut: Boolean(slot.time_out_start), inState, outState, inDone, outDone })} />
                                                                     </div>
 
-                                                                    {slot.time_in_start && (
-                                                                        <SlotWindowRow
-                                                                            label="In"
-                                                                            time={formatTime(slot.time_in_start)}
-                                                                            state={inState}
-                                                                            done={inDone}
-                                                                            doneLabel="Checked in"
-                                                                            actionLabel="Check-In"
-                                                                            onAction={() => setSelectedSlotEvent({ event: evt, slot, slotIndex: slotIdx, dateStr: sched.date, type: 'in' })}
-                                                                        />
-                                                                    )}
+                                                                    {/* UX-Optimized Action Card Grid (Check-In & Check-Out) */}
+                                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                                        
+                                                                        {/* TIME-IN BOX */}
+                                                                        {slot.time_in_start && (
+                                                                            <div className={`p-4 rounded-xl border flex flex-col justify-between transition ${
+                                                                                inDone 
+                                                                                    ? 'bg-emerald-50/60 border-emerald-200 text-emerald-900' 
+                                                                                    : inState === 'open' 
+                                                                                    ? 'bg-white border-indigo-200 shadow-xs' 
+                                                                                    : 'bg-gray-100/70 border-gray-200 text-gray-500'
+                                                                            }`}>
+                                                                                <div className="flex items-center justify-between mb-2">
+                                                                                    <span className="text-xs font-bold uppercase tracking-wider">Time-In</span>
+                                                                                    <span className="text-xs font-mono font-semibold">{formatTime(slot.time_in_start)}</span>
+                                                                                </div>
 
-                                                                    {slot.time_out_start && (
-                                                                        <SlotWindowRow
-                                                                            label="Out"
-                                                                            time={formatTime(slot.time_out_start)}
-                                                                            state={outState}
-                                                                            done={outDone}
-                                                                            doneLabel="Checked out"
-                                                                            actionLabel="Check-Out"
-                                                                            blockedReason={slot.time_in_start && !inDone ? 'Check in first' : null}
-                                                                            onAction={() => setSelectedSlotEvent({ event: evt, slot, slotIndex: slotIdx, dateStr: sched.date, type: 'out' })}
-                                                                        />
-                                                                    )}
+                                                                                {inDone ? (
+                                                                                    <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 py-2">
+                                                                                        <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                                                                                        <span>Successfully Checked In</span>
+                                                                                    </div>
+                                                                                ) : inState === 'open' ? (
+                                                                                    <button
+                                                                                        type="button"
+                                                                                        onClick={() => setSelectedSlotEvent({ event: evt, slot, slotIndex: slotIdx, dateStr: sched.date, type: 'in' })}
+                                                                                        className="w-full mt-2 py-2.5 px-4 rounded-xl bg-[#0b1354] text-white text-xs font-bold hover:bg-[#151848] shadow-sm transition active:scale-[0.98]"
+                                                                                    >
+                                                                                        Check-In Now &rarr;
+                                                                                    </button>
+                                                                                ) : (
+                                                                                    <div className="flex items-center gap-1.5 text-xs font-medium text-gray-400 py-2">
+                                                                                        <Lock className="h-3.5 w-3.5" />
+                                                                                        <span>{inState === 'upcoming' ? 'Window Not Open Yet' : 'Window Closed'}</span>
+                                                                                    </div>
+                                                                                )}
+                                                                            </div>
+                                                                        )}
+
+                                                                        {/* TIME-OUT BOX */}
+                                                                        {slot.time_out_start && (
+                                                                            <div className={`p-4 rounded-xl border flex flex-col justify-between transition ${
+                                                                                outDone 
+                                                                                    ? 'bg-emerald-50/60 border-emerald-200 text-emerald-900' 
+                                                                                    : outState === 'open' 
+                                                                                    ? 'bg-white border-indigo-200 shadow-xs' 
+                                                                                    : 'bg-gray-100/70 border-gray-200 text-gray-500'
+                                                                            }`}>
+                                                                                <div className="flex items-center justify-between mb-2">
+                                                                                    <span className="text-xs font-bold uppercase tracking-wider">Time-Out</span>
+                                                                                    <span className="text-xs font-mono font-semibold">{formatTime(slot.time_out_start)}</span>
+                                                                                </div>
+
+                                                                                {outDone ? (
+                                                                                    <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 py-2">
+                                                                                        <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                                                                                        <span>Successfully Checked Out</span>
+                                                                                    </div>
+                                                                                ) : outState === 'open' ? (
+                                                                                    <button
+                                                                                        type="button"
+                                                                                        onClick={() => setSelectedSlotEvent({ event: evt, slot, slotIndex: slotIdx, dateStr: sched.date, type: 'out' })}
+                                                                                        className="w-full mt-2 py-2.5 px-4 rounded-xl bg-[#0b1354] text-white text-xs font-bold hover:bg-[#151848] shadow-sm transition active:scale-[0.98]"
+                                                                                    >
+                                                                                        Check-Out Now &rarr;
+                                                                                    </button>
+                                                                                ) : (
+                                                                                    <div className="flex items-center gap-1.5 text-xs font-medium text-gray-400 py-2">
+                                                                                        <Lock className="h-3.5 w-3.5" />
+                                                                                        <span>{outState === 'upcoming' ? 'Window Not Open Yet' : 'Window Closed'}</span>
+                                                                                    </div>
+                                                                                )}
+                                                                            </div>
+                                                                        )}
+
+                                                                    </div>
                                                                 </div>
                                                             );
                                                         })}
@@ -365,50 +422,46 @@ export default function Dashboard({
                         )}
                     </div>
 
-                    {/* RIGHT COLUMN: SIDEBAR (Interactive Calendar & Event Inspector) */}
+                    {/* RIGHT COLUMN: SIDEBAR */}
                     <div className="space-y-6">
 
-                        {/* INTERACTIVE MONTHLY CALENDAR WIDGET */}
+                        {/* INTERACTIVE CALENDAR */}
                         <div className="bg-white p-6 rounded-3xl shadow-xs border border-gray-100 space-y-4">
                             <div className="flex items-center justify-between">
-                                <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">
-                                    <CalendarIcon className="h-5 w-5 text-[#0b1354]" /> Calendar
-                                </h3>
+                                <div className="flex items-center gap-2">
+                                    <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">
+                                        <CalendarIcon className="h-5 w-5 text-[#0b1354]" /> Calendar
+                                    </h3>
+                                    {selectedDateStr !== today && (
+                                        <button
+                                            onClick={handleJumpToToday}
+                                            className="text-[10px] font-bold text-[#0b1354] bg-indigo-50 px-2 py-0.5 rounded-lg hover:bg-indigo-100 transition flex items-center gap-1"
+                                            title="Jump to Today"
+                                        >
+                                            <RotateCcw className="h-2.5 w-2.5" /> Today
+                                        </button>
+                                    )}
+                                </div>
                                 <div className="flex items-center gap-1">
-                                    <button
-                                        onClick={handlePrevMonth}
-                                        className="p-1.5 rounded-xl hover:bg-gray-100 text-gray-600 transition"
-                                        title="Previous Month"
-                                    >
+                                    <button onClick={handlePrevMonth} className="p-1.5 rounded-xl hover:bg-gray-100 text-gray-600 transition" title="Previous Month">
                                         <ChevronLeft className="h-4 w-4" />
                                     </button>
                                     <span className="text-xs font-bold text-gray-800 min-w-[90px] text-center">
                                         {monthName} {year}
                                     </span>
-                                    <button
-                                        onClick={handleNextMonth}
-                                        className="p-1.5 rounded-xl hover:bg-gray-100 text-gray-600 transition"
-                                        title="Next Month"
-                                    >
+                                    <button onClick={handleNextMonth} className="p-1.5 rounded-xl hover:bg-gray-100 text-gray-600 transition" title="Next Month">
                                         <ChevronRight className="h-4 w-4" />
                                     </button>
                                 </div>
                             </div>
 
-                            {/* Calendar Grid */}
                             <div className="grid grid-cols-7 gap-1 text-center">
                                 {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => (
-                                    <span key={d} className="text-[11px] font-bold uppercase text-gray-400 py-1">
-                                        {d}
-                                    </span>
+                                    <span key={d} className="text-[11px] font-bold uppercase text-gray-400 py-1">{d}</span>
                                 ))}
-
-                                {/* Blank cells for offset */}
                                 {Array.from({ length: startingDay }).map((_, index) => (
                                     <div key={`empty-${index}`} />
                                 ))}
-
-                                {/* Day cells */}
                                 {Array.from({ length: totalDaysInMonth }).map((_, index) => {
                                     const dayNum = index + 1;
                                     const formattedDay = dayNum < 10 ? `0${dayNum}` : `${dayNum}`;
@@ -424,86 +477,93 @@ export default function Dashboard({
                                             key={dayNum}
                                             onClick={() => setSelectedDateStr(dateString)}
                                             className={`relative h-9 w-9 mx-auto rounded-xl flex flex-col items-center justify-center text-xs font-bold transition ${
-                                                isSelected
-                                                    ? 'bg-[#0b1354] text-white shadow-sm'
-                                                    : isToday
-                                                    ? 'bg-amber-400 text-gray-900 font-black'
-                                                    : 'text-gray-700 hover:bg-gray-100'
+                                                isSelected ? 'bg-[#0b1354] text-white shadow-sm' : isToday ? 'bg-amber-400 text-gray-900 font-black' : 'text-gray-700 hover:bg-gray-100'
                                             }`}
                                         >
                                             <span>{dayNum}</span>
-                                            {hasEvent && !isSelected && (
-                                                <span className="absolute bottom-1 h-1 w-1 rounded-full bg-amber-500" />
-                                            )}
-                                            {hasEvent && isSelected && (
-                                                <span className="absolute bottom-1 h-1 w-1 rounded-full bg-amber-300" />
-                                            )}
+                                            {hasEvent && <span className={`absolute bottom-1 h-1 w-1 rounded-full ${isSelected ? 'bg-amber-300' : 'bg-amber-500'}`} />}
                                         </button>
                                     );
                                 })}
                             </div>
 
-                            {/* SELECTED DATE EVENT INSPECTOR */}
+                            {/* DYNAMIC DATE-BASED INSPECTOR */}
                             <div className="pt-3 border-t border-gray-100 space-y-2">
                                 <div className="flex items-center justify-between text-xs gap-2">
-                                    <span className="text-gray-400 truncate">{formatLongDate(selectedDateStr)}</span>
-                                    <span className="font-bold text-[#0b1354] shrink-0">{selectedDateEntries.length} found</span>
+                                    <span className="text-gray-500 font-semibold truncate">{formatLongDate(selectedDateStr)}</span>
+                                    <span className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${selectedDateEntries.length > 0 ? 'bg-indigo-50 text-[#0b1354]' : 'bg-gray-100 text-gray-500'}`}>
+                                        {selectedDateEntries.length} found
+                                    </span>
                                 </div>
 
                                 {selectedDateEntries.length > 0 ? (
                                     <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                                        {selectedDateEntries.map(({ event, schedule }) => (
-                                            <div key={event.event_id} className="p-2.5 rounded-xl bg-indigo-50/50 border border-indigo-100/60 text-xs space-y-2">
-                                                <div>
-                                                    <p className="font-bold text-[#0b1354] truncate">{event.title}</p>
-                                                    <p className="text-[11px] text-gray-500 mt-0.5 flex items-center gap-1">
-                                                        <MapPin className="h-3 w-3 text-amber-500" /> {event.location || 'Location TBA'}
-                                                    </p>
-                                                </div>
+                                        {selectedDateEntries.map(({ event, schedule }) => {
+                                            const isPast = schedule.date < today;
+                                            const isTodayDate = schedule.date === today;
 
-                                                {schedule.slots?.map((slot, slotIdx) => {
-                                                    const inState = windowState(slot, 'in', schedule.date);
-                                                    const outState = windowState(slot, 'out', schedule.date);
-                                                    const inDone = hasCheckedInSlot(event.event_id, slotIdx, schedule.date, 'in');
-                                                    const outDone = hasCheckedInSlot(event.event_id, slotIdx, schedule.date, 'out');
-                                                    const badge = slotBadge({
-                                                        hasIn: Boolean(slot.time_in_start),
-                                                        hasOut: Boolean(slot.time_out_start),
-                                                        inState,
-                                                        outState,
-                                                        inDone,
-                                                        outDone,
-                                                    });
+                                            const badgeConfig = isPast 
+                                                ? { text: 'Completed', bg: 'bg-gray-100 text-gray-600 border-gray-200' }
+                                                : isTodayDate 
+                                                ? { text: 'Ongoing Today', bg: 'bg-emerald-100 text-emerald-800 border-emerald-200 animate-pulse' }
+                                                : { text: 'Upcoming', bg: 'bg-amber-100 text-amber-800 border-amber-200' };
 
-                                                    return (
-                                                        <div key={slotIdx} className="rounded-lg bg-white/80 border border-indigo-100/60 p-2 space-y-1">
-                                                            <div className="flex items-center justify-between">
-                                                                <span className="font-bold text-gray-400 uppercase text-[10px]">Slot {slotIdx + 1}</span>
-                                                                <SlotStatusBadge status={badge} />
-                                                            </div>
-                                                            {slot.time_in_start && (
-                                                                <p className="text-[11px] text-gray-600 flex items-center gap-1">
-                                                                    <Clock className="h-3 w-3 text-gray-400" /> Check-in opens {formatTime(slot.time_in_start)}
-                                                                </p>
-                                                            )}
-                                                            {slot.time_out_start && (
-                                                                <p className="text-[11px] text-gray-600 flex items-center gap-1">
-                                                                    <Clock className="h-3 w-3 text-gray-400" /> Check-out opens {formatTime(slot.time_out_start)}
-                                                                </p>
-                                                            )}
+                                            return (
+                                                <div key={event.event_id} className={`p-3 rounded-2xl bg-indigo-50/50 border border-indigo-100 text-xs space-y-2 ${isPast ? 'opacity-80' : ''}`}>
+                                                    <div className="flex items-start justify-between gap-2">
+                                                        <div>
+                                                            <p className="font-bold text-[#0b1354]">{event.title}</p>
+                                                            <p className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
+                                                                <MapPin className="h-3 w-3 text-amber-500" /> {event.location || 'Location TBA'}
+                                                            </p>
                                                         </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        ))}
+                                                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border shrink-0 ${badgeConfig.bg}`}>
+                                                            {badgeConfig.text}
+                                                        </span>
+                                                    </div>
+
+                                                    {schedule.slots?.length > 0 && (
+                                                        <div className="pt-2 border-t border-indigo-100/60 space-y-1">
+                                                            {schedule.slots.map((slot, sIdx) => {
+                                                                const inLogged = hasCheckedInSlot(event.event_id, sIdx, schedule.date, 'in');
+                                                                const outLogged = hasCheckedInSlot(event.event_id, sIdx, schedule.date, 'out');
+                                                                return (
+                                                                    <div key={sIdx} className="flex items-center justify-between text-[11px] text-gray-600 bg-white/90 px-2.5 py-1.5 rounded-xl border border-indigo-100/50">
+                                                                        <div className="flex items-center gap-2">
+                                                                            <span className="font-bold text-gray-500 uppercase text-[9px]">Slot {sIdx + 1}</span>
+                                                                            {(inLogged || outLogged) && (
+                                                                                <span className="text-[9px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.2 rounded">
+                                                                                    {inLogged && outLogged ? 'Logged (In/Out)' : inLogged ? 'Checked In' : 'Checked Out'}
+                                                                                </span>
+                                                                            )}
+                                                                        </div>
+                                                                        <span>{slot.time_in_start ? formatTime(slot.time_in_start) : '—'} &rarr; {slot.time_out_start ? formatTime(slot.time_out_start) : '—'}</span>
+                                                                    </div>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
                                     </div>
                                 ) : (
-                                    <p className="text-[11px] text-gray-400 italic text-center py-2">No events scheduled for this date.</p>
+                                    <div className="py-4 text-center space-y-1">
+                                        <p className="text-xs text-gray-400 italic">No events scheduled for this date.</p>
+                                        {selectedDateStr !== today && (
+                                            <button
+                                                onClick={handleJumpToToday}
+                                                className="text-[11px] font-bold text-[#0b1354] hover:underline block mx-auto pt-1"
+                                            >
+                                                &larr; Jump back to Today
+                                            </button>
+                                        )}
+                                    </div>
                                 )}
                             </div>
                         </div>
 
-                        {/* COMING UP EVENTS (Dynamic from Admin) */}
+                        {/* COMING UP (Dynamically Filtered) */}
                         <div className="bg-white p-6 rounded-3xl shadow-xs border border-gray-100 space-y-4">
                             <div className="flex items-center justify-between">
                                 <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">
@@ -514,9 +574,9 @@ export default function Dashboard({
                                 </Link>
                             </div>
 
-                            {upcomingEvents.length > 0 ? (
+                            {filteredUpcomingEvents.length > 0 ? (
                                 <div className="space-y-3">
-                                    {upcomingEvents.slice(0, 3).map((evt) => (
+                                    {filteredUpcomingEvents.slice(0, 3).map((evt) => (
                                         <button
                                             key={evt.event_id}
                                             type="button"
@@ -530,7 +590,6 @@ export default function Dashboard({
                                                 <p className="text-xs font-bold text-gray-900 truncate">{evt.title}</p>
                                                 <p className="text-[11px] text-gray-400 mt-0.5 truncate">
                                                     {formatDateRange(evt.start_date, evt.end_date)}
-                                                    {evt.day_count > 1 ? ` \u2022 ${evt.day_count} days` : ''}
                                                     {evt.location ? ` \u2022 ${evt.location}` : ''}
                                                 </p>
                                             </div>
@@ -538,11 +597,11 @@ export default function Dashboard({
                                     ))}
                                 </div>
                             ) : (
-                                <p className="text-xs text-gray-400 text-center py-6">No upcoming events scheduled.</p>
+                                <p className="text-xs text-gray-400 text-center py-6">No further upcoming events scheduled.</p>
                             )}
                         </div>
 
-                        {/* ATTENDANCE HISTORY QUICK CARD */}
+                        {/* ATTENDANCE HISTORY */}
                         <div className="bg-white p-6 rounded-3xl shadow-xs border border-gray-100 space-y-4">
                             <div className="flex items-center justify-between">
                                 <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">
@@ -583,13 +642,13 @@ export default function Dashboard({
 
             {/* SHARED LIVENESS CHECK-IN MODAL */}
             {selectedSlotEvent && (
-                <CheckInModal 
-                    event={selectedSlotEvent.event as any} 
+                <CheckInModal
+                    event={selectedSlotEvent.event as any}
                     slot={selectedSlotEvent.slot}
                     slotIndex={selectedSlotEvent.slotIndex}
                     dateStr={selectedSlotEvent.dateStr}
                     type={selectedSlotEvent.type}
-                    onClose={() => setSelectedSlotEvent(null)} 
+                    onClose={() => setSelectedSlotEvent(null)}
                 />
             )}
         </>

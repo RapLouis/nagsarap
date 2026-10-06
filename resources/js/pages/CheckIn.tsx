@@ -81,7 +81,7 @@ export default function CheckIn({ student, activeEvents }: CheckInProps) {
                             Attendance Check-In Hub
                         </h1>
                         <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                            Select an ongoing event slot below to verify your identity and record your attendance[cite: 5].
+                            Select an ongoing event slot below to verify your identity and record your attendance.
                         </p>
                     </div>
                     <div className="flex items-center gap-1.5 rounded-full bg-emerald-50 dark:bg-emerald-950/30 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/40">
@@ -100,8 +100,8 @@ export default function CheckIn({ student, activeEvents }: CheckInProps) {
                     {activeEvents.length === 0 ? (
                         <div className="flex flex-col items-center justify-center py-16 text-center">
                             <Calendar className="h-12 w-12 mb-3 stroke-1 text-gray-400 dark:text-gray-600" aria-hidden="true" />
-                            <p className="text-sm font-medium text-gray-600 dark:text-gray-300">No active events right now[cite: 5]</p>
-                            <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Check back when your scheduled event window opens[cite: 5].</p>
+                            <p className="text-sm font-medium text-gray-600 dark:text-gray-300">No active events right now</p>
+                            <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Check back when your scheduled event window opens.</p>
                         </div>
                     ) : (
                         <ul className="divide-y divide-gray-100 dark:divide-slate-800/60">

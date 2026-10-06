@@ -506,6 +506,7 @@ export default function CheckInModal({ event, slot, slotIndex, dateStr, type, on
                                 style={{ width: `${Math.round(turnProgress * 100)}%` }}
                             />
                         </div>
+                        
                     )}
 
                     {accuracyWarning && !blockingError && (

@@ -27,6 +27,8 @@ import {
     ArrowRight,
     ArrowLeft,
     FileText,
+    Copy,
+    Building2,
 } from 'lucide-react';
 import { 
     TimeSlot, 
@@ -58,6 +60,13 @@ type EventItem = {
     is_active: boolean;
 };
 
+type VenueItem = {
+    location: string;
+    latitude: number | null;
+    longitude: number | null;
+    radius_meters: number;
+};
+
 type PageLink = { url: string | null; label: string; active: boolean };
 
 type Props = {
@@ -66,6 +75,7 @@ type Props = {
         links: PageLink[];
     };
     counts?: Record<TabKey, number>;
+    venues?: VenueItem[];
     filters: { search?: string; tab?: TabKey };
 };
 
@@ -80,6 +90,7 @@ const TABS: { key: TabKey; label: string; activeColor: string }[] = [
 export default function Events({
     events,
     counts = { ongoing: 0, upcoming: 0, completed: 0, pending: 0, declined: 0 },
+    venues = [],
     filters,
 }: Props) {
     const [search, setSearch] = useState(filters.search || '');
@@ -218,14 +229,15 @@ export default function Events({
         };
     }, [search]);
 
-    const geocodeVenueName = async () => {
-        if (!data.location || data.location.trim() === '') return;
+    const geocodeVenueName = async (queryLocation?: string) => {
+        const targetLocation = queryLocation || data.location;
+        if (!targetLocation || targetLocation.trim() === '') return;
 
         setIsSearchingLocation(true);
         setGeocodeConfirmation(null);
         try {
             const response = await fetch(
-                `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(data.location)}`,
+                `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(targetLocation)}`,
             );
             const results = await response.json();
 
@@ -249,6 +261,7 @@ export default function Events({
 
                 setData((prev) => ({
                     ...prev,
+                    location: targetLocation,
                     latitude: newLat,
                     longitude: newLng,
                     geofence_polygon: newHexagon,
@@ -264,6 +277,17 @@ export default function Events({
         } finally {
             setIsSearchingLocation(false);
         }
+    };
+
+    const handleApplyVenuePreset = (venue: VenueItem) => {
+        setData((prev) => ({
+            ...prev,
+            location: venue.location,
+            latitude: venue.latitude !== null ? Number(venue.latitude) : prev.latitude,
+            longitude: venue.longitude !== null ? Number(venue.longitude) : prev.longitude,
+            radius_meters: venue.radius_meters ? Number(venue.radius_meters) : prev.radius_meters,
+        }));
+        setGeocodeConfirmation(venue.location);
     };
 
     const handleTabChange = (tabKey: TabKey) => {
@@ -311,24 +335,32 @@ export default function Events({
         setIsFormOpen(true);
     };
 
-    const openEditModal = (eventItem: EventItem) => {
+    const openEditModal = (eventItem: EventItem, isClone = false) => {
         isEditingLoad.current = true;
-        setEditingEvent(eventItem);
+        
+        // Deep clone the event item so local edits never bleed into the table before saving
+        const clonedEvent = structuredClone(eventItem);
+
+        if (isClone) {
+            setEditingEvent(null);
+        } else {
+            setEditingEvent(clonedEvent);
+        }
         clearErrors();
         setCurrentStep(1);
         setGeocodeConfirmation(null);
         setTimeValidationError(null);
 
-        const hasMultiDay = Boolean(eventItem.event_end_date && eventItem.event_end_date !== eventItem.event_date);
+        const hasMultiDay = Boolean(clonedEvent.event_end_date && clonedEvent.event_end_date !== clonedEvent.event_date);
         setIsMultiDay(hasMultiDay);
 
-        const savedLat = eventItem.latitude !== null && eventItem.latitude !== undefined ? Number(eventItem.latitude) : 18.1972;
-        const savedLng = eventItem.longitude !== null && eventItem.longitude !== undefined ? Number(eventItem.longitude) : 120.5928;
+        const savedLat = clonedEvent.latitude !== null && clonedEvent.latitude !== undefined ? Number(clonedEvent.latitude) : 18.1972;
+        const savedLng = clonedEvent.longitude !== null && clonedEvent.longitude !== undefined ? Number(clonedEvent.longitude) : 120.5928;
 
-        const hasExistingSchedules = eventItem.schedules && eventItem.schedules.length > 0;
+        const hasExistingSchedules = clonedEvent.schedules && clonedEvent.schedules.length > 0;
 
         const mappedSchedules = hasExistingSchedules
-            ? eventItem.schedules!.map((sch) => ({
+            ? clonedEvent.schedules!.map((sch) => ({
                 date: sch.date,
                 slots: sch.slots && sch.slots.length > 0 ? sch.slots : [{
                     time_in_start: '08:00',
@@ -337,7 +369,7 @@ export default function Events({
                     time_out_end: '',
                 }],
             }))
-            : getEventDays(eventItem.event_date, eventItem.event_end_date).map((day) => ({
+            : getEventDays(clonedEvent.event_date, clonedEvent.event_end_date).map((day) => ({
                 date: day,
                 slots: [
                     {
@@ -357,20 +389,20 @@ export default function Events({
         }
 
         setData({
-            title: eventItem.title,
-            description: eventItem.description || '',
-            location: eventItem.location || '',
-            is_geofenced: Boolean(eventItem.is_geofenced),
-            geofence_type: eventItem.geofence_type || 'radius',
+            title: isClone ? `${clonedEvent.title} (Copy)` : clonedEvent.title,
+            description: clonedEvent.description || '',
+            location: clonedEvent.location || '',
+            is_geofenced: Boolean(clonedEvent.is_geofenced),
+            geofence_type: clonedEvent.geofence_type || 'radius',
             latitude: savedLat,
             longitude: savedLng,
-            radius_meters: Number(eventItem.radius_meters) || 100,
-            geofence_polygon: eventItem.geofence_polygon && eventItem.geofence_polygon.length >= 3 ? eventItem.geofence_polygon : null,
-            event_date: eventItem.event_date,
-            event_end_date: eventItem.event_end_date || '',
-            schedules: mappedSchedules,
-            approval_status: eventItem.approval_status || 'approved',
-            is_active: Boolean(eventItem.is_active),
+            radius_meters: Number(clonedEvent.radius_meters) || 100,
+            geofence_polygon: clonedEvent.geofence_polygon && clonedEvent.geofence_polygon.length >= 3 ? clonedEvent.geofence_polygon : null,
+            event_date: isClone ? '' : clonedEvent.event_date,
+            event_end_date: isClone ? '' : (clonedEvent.event_end_date || ''),
+            schedules: isClone ? [] : mappedSchedules,
+            approval_status: clonedEvent.approval_status || 'approved',
+            is_active: Boolean(clonedEvent.is_active),
         });
 
         setIsFormOpen(true);
@@ -522,12 +554,12 @@ export default function Events({
                     <table className="w-full text-left text-sm text-gray-600">
                         <thead className="bg-gray-50 text-xs font-semibold uppercase text-gray-500">
                             <tr>
-                                <th className="px-6 py-4">Event Details</th>
-                                <th className="px-6 py-4">Geofence Type</th>
-                                <th className="px-6 py-4">Time-In Window</th>
-                                <th className="px-6 py-4">Time-Out Window</th>
-                                <th className="px-6 py-4">Status</th>
-                                <th className="px-6 py-4 text-right">Actions</th>
+                                <th className="px-6 py-4">Event Details[cite: 10]</th>
+                                <th className="px-6 py-4">Geofence Type[cite: 10]</th>
+                                <th className="px-6 py-4">Time-In Window[cite: 10]</th>
+                                <th className="px-6 py-4">Time-Out Window[cite: 10]</th>
+                                <th className="px-6 py-4">Status[cite: 10]</th>
+                                <th className="px-6 py-4 text-right">Actions[cite: 10]</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 text-sm">
@@ -656,6 +688,13 @@ export default function Events({
                                                             </button>
                                                         </>
                                                     )}
+                                                    <button
+                                                        onClick={() => openEditModal(item, true)}
+                                                        className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-blue-700 transition"
+                                                        title="Duplicate Event"
+                                                    >
+                                                        <Copy className="h-5 w-5" />
+                                                    </button>
                                                     <button
                                                         onClick={() => openEditModal(item)}
                                                         className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition"
@@ -1042,9 +1081,28 @@ export default function Events({
                             {currentStep === 2 && (
                                 <div className="space-y-4 animate-fadeIn">
                                     <div>
-                                        <label htmlFor="event-location" className="block font-bold uppercase tracking-wider text-gray-500 text-xs">
-                                            Venue Name
-                                        </label>
+                                        <div className="flex items-center justify-between">
+                                            <label htmlFor="event-location" className="block font-bold uppercase tracking-wider text-gray-500 text-xs">
+                                                Venue Name
+                                            </label>
+                                            {venues.length > 0 && (
+                                                <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                                                    <Building2 className="h-3.5 w-3.5 text-gray-400" />
+                                                    <span className="text-[10px] font-bold text-gray-400 uppercase">Saved Venues:</span>
+                                                    {venues.map((venue, idx) => (
+                                                        <button
+                                                            key={idx}
+                                                            type="button"
+                                                            onClick={() => handleApplyVenuePreset(venue)}
+                                                            className="text-[11px] font-bold text-[#1B1F5C] bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded-lg transition"
+                                                        >
+                                                            {venue.location}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+
                                         <div className="mt-1.5 flex items-center gap-2">
                                             <input
                                                 id="event-location"
@@ -1065,7 +1123,7 @@ export default function Events({
                                             />
                                             <button
                                                 type="button"
-                                                onClick={geocodeVenueName}
+                                                onClick={() => geocodeVenueName()}
                                                 disabled={isSearchingLocation}
                                                 className="rounded-xl bg-blue-50 border border-blue-200 p-2.5 text-blue-700 hover:bg-blue-100 font-bold transition shrink-0"
                                                 title="Locate Venue on Map"
