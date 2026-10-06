@@ -1,58 +1,64 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Head, Link, router } from '@inertiajs/react';
-import type { FaceLandmarker } from '@mediapipe/tasks-vision';
+import React, { useState, useMemo } from 'react';
+import { Head, Link } from '@inertiajs/react';
 import {
-    CheckCircle2,
-    Calendar,
+    Calendar as CalendarIcon,
     Clock,
     ShieldCheck,
-    RefreshCw,
-    X,
     ChevronRight,
     TrendingUp,
     ListChecks,
     CalendarClock,
-    Eye,
-    ArrowLeft,
-    ArrowRight,
-    Loader2,
-    AlertTriangle,
+    MapPin,
+    History,
+    CalendarX,
+    ArrowUpRight,
+    ChevronLeft,
+    Sparkles,
 } from 'lucide-react';
-import {
-    type Direction,
-    type Landmark,
-    VIDEO_CONSTRAINTS,
-    DIRECTION_SIGN,
-    calculateYaw,
-    getPlacementIssue,
-    captureFrame,
-    randomDirection,
-    describeCameraError,
-    describeGeolocationError,
-    getSharedLandmarker,
-    distanceInMeters,
-} from '../lib/liveness';
-import { isEventWindowOpen, type ScheduleItem } from '../lib/eventValidation';
+import CheckInModal from '@/components/CheckInModal';
+import { type ScheduleItem, type TimeSlot } from '@/lib/eventValidation';
+import { findSlotRecord, formatTime, windowState, type SlotType } from '@/lib/slots';
+import { SlotStatusBadge, SlotWindowRow, slotBadge } from '@/components/slot-rows';
 
 type Event = {
     event_id: number;
     title: string;
     description?: string | null;
-    event_date: string;
-    start_time: string;
-    end_time?: string | null;
     location?: string | null;
     is_active?: boolean;
-    geofence_enabled?: boolean;
+    is_geofenced?: boolean;
     latitude?: number | null;
     longitude?: number | null;
     radius_meters?: number | null;
     schedules?: ScheduleItem[] | null;
+    event_date?: string;
+    start_time?: string;
+    end_time?: string | null;
+};
+
+// Lightweight event used by the calendar grid and date inspector (built from event_days).
+type CalendarEvent = {
+    event_id: number;
+    title: string;
+    location?: string | null;
+    schedules: ScheduleItem[];
+};
+
+// One entry per event in the "Coming Up" widget.
+type UpcomingEvent = {
+    event_id: number;
+    title: string;
+    location?: string | null;
+    next_date: string;
+    start_date: string;
+    end_date: string;
+    day_count: number;
 };
 
 type AttendanceLog = {
     attendance_id: number;
     logged_at: string;
+    attendance_time: string;
     status: string;
     confidence_score: number;
     event: Event;
@@ -70,54 +76,67 @@ type Student = {
 type DashboardProps = {
     student: Student;
     activeEvents: Event[];
-    upcomingEvents?: Event[];
+    calendarEvents?: CalendarEvent[];
+    upcomingEvents?: UpcomingEvent[];
     totalExpectedEvents?: number;
+    today?: string; // YYYY-MM-DD, from the server (falls back to the browser's date)
 };
 
-type LivenessStep = 'LOOK_CENTER' | 'TURN' | 'VERIFYING' | 'PASSED';
+// Browser-local YYYY-MM-DD, used only if the server doesn't send `today`.
+const localToday = () => {
+    const n = new Date();
+    const mm = String(n.getMonth() + 1).padStart(2, '0');
+    const dd = String(n.getDate()).padStart(2, '0');
+    return `${n.getFullYear()}-${mm}-${dd}`;
+};
 
-const GOLD = '#C9973E';
+// Parse a YYYY-MM-DD string as a local date (avoids UTC off-by-one shifts).
+const parseDateStr = (dateStr: string) => {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    return new Date(y, m - 1, d);
+};
 
-const PROCESS_EVERY_N_FRAMES = 3;
-const FRONTAL_YAW_MAX = 0.12;
-const FRONTAL_HOLD_FRAMES = 8;
-const TURN_YAW_MIN = 0.25;
-const TURN_HOLD_FRAMES = 3;
-const WRONG_WAY_YAW = 0.15;
-const CHALLENGE_TIMEOUT_MS = 20_000;
-const LOW_ACCURACY_WARNING_METERS = 100;
+const formatShortDate = (dateStr: string) =>
+    parseDateStr(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
-function formatEventTime(startTime?: string | null, endTime?: string | null): string {
-    if (!startTime) return '';
-    const parseTime = (timeStr: string) => {
-        const [hours, minutes] = timeStr.split(':').map(Number);
-        const date = new Date();
-        date.setHours(hours, minutes, 0);
-        return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
-    };
+const formatLongDate = (dateStr: string) =>
+    parseDateStr(dateStr).toLocaleDateString('en-US', {
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+    });
 
-    const formattedStart = parseTime(startTime);
-    if (!endTime) return formattedStart;
-    return `${formattedStart} - ${parseTime(endTime)}`;
-}
+const formatDateRange = (start: string, end: string) =>
+    start === end ? formatShortDate(start) : `${formatShortDate(start)} \u2013 ${formatShortDate(end)}`;
 
 export default function Dashboard({
     student,
     activeEvents,
+    calendarEvents = [],
     upcomingEvents = [],
     totalExpectedEvents,
+    today: todayProp,
 }: DashboardProps) {
-    const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
+    const today = todayProp || localToday();
 
-    const checkedInEventIds = useMemo(
-        () =>
-            new Set(
-                student.attendances
-                    .filter((log) => log.status?.toLowerCase() === 'present' || log.status?.toLowerCase() === 'verified')
-                    .map((log) => log.event?.event_id)
-            ),
-        [student.attendances]
-    );
+    const [selectedSlotEvent, setSelectedSlotEvent] = useState<{
+        event: Event;
+        slot: TimeSlot;
+        slotIndex: number;
+        dateStr: string;
+        type: 'in' | 'out';
+    } | null>(null);
+
+    // Calendar navigation state (starts on the server's "today")
+    const [currentDate, setCurrentDate] = useState(() => {
+        const t = parseDateStr(today);
+        return new Date(t.getFullYear(), t.getMonth(), 1);
+    });
+    const [selectedDateStr, setSelectedDateStr] = useState<string>(today);
+
+    const hasCheckedInSlot = (eventId: number, slotIndex: number, dateStr: string, type: SlotType) =>
+        Boolean(findSlotRecord(student.attendances, eventId, dateStr, slotIndex, type));
 
     const eventsAttended = student.attendances.length;
     const attendanceRate =
@@ -129,217 +148,449 @@ export default function Dashboard({
         () =>
             [...student.attendances]
                 .sort((a, b) => new Date(b.logged_at).getTime() - new Date(a.logged_at).getTime())
-                .slice(0, 3),
+                .slice(0, 4),
         [student.attendances]
     );
 
-    const uncheckedActiveCount = activeEvents.filter((evt) => !checkedInEventIds.has(evt.event_id)).length;
+    // Index calendar data by date: { '2026-10-12': [{ event, schedule }, ...] }
+    const eventsByDate = useMemo(() => {
+        const map: Record<string, { event: CalendarEvent; schedule: ScheduleItem }[]> = {};
+        for (const evt of calendarEvents) {
+            for (const sched of evt.schedules ?? []) {
+                (map[sched.date] ??= []).push({ event: evt, schedule: sched });
+            }
+        }
+        return map;
+    }, [calendarEvents]);
+
+    const hasEventOnDate = (dateStr: string) => (eventsByDate[dateStr]?.length ?? 0) > 0;
+    const selectedDateEntries = eventsByDate[selectedDateStr] ?? [];
+
+    // Jump the calendar to a date (used by the Coming Up cards)
+    const jumpToDate = (dateStr: string) => {
+        const d = parseDateStr(dateStr);
+        setCurrentDate(new Date(d.getFullYear(), d.getMonth(), 1));
+        setSelectedDateStr(dateStr);
+    };
+
+    // Calendar calculation logic
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth();
+    const monthName = currentDate.toLocaleString('default', { month: 'long' });
+
+    const firstDayIndex = new Date(year, month, 1).getDay();
+    const startingDay = (firstDayIndex + 6) % 7; // Monday start
+    const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
+
+    const handlePrevMonth = () => setCurrentDate(new Date(year, month - 1, 1));
+    const handleNextMonth = () => setCurrentDate(new Date(year, month + 1, 1));
 
     return (
         <>
             <Head title="Student Dashboard" />
 
-            <div className="w-full min-h-screen bg-gray-50 dark:bg-[#030712] text-gray-900 dark:text-white p-6 space-y-6 transition-colors duration-200">
+            <div className="min-h-screen bg-gray-50/50 p-6 lg:p-8 space-y-8 text-gray-900">
 
-                {/* WELCOME HEADER */}
-                <div className="flex w-full items-center justify-between rounded-xl bg-white dark:bg-[#090d16] p-6 shadow-sm border border-gray-100 dark:border-slate-800/60">
-                    <div>
-                        <h1 className="text-xl font-bold text-gray-900 dark:text-white">
-                            Welcome back, {student.firstname} {student.surname}
-                        </h1>
-                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Student ID {student.student_number}</p>
-                    </div>
-                    <div className="flex items-center gap-1.5 rounded-full bg-emerald-50 dark:bg-emerald-950/30 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/40">
-                        <ShieldCheck className="h-4 w-4" />
-                        <span>Biometrics verified</span>
+                {/* HERO WELCOME BANNER */}
+                <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-[#0b1354] to-[#1B1F5C] p-6 lg:p-8 text-white shadow-md">
+                    <div className="relative z-10 flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+                        <div className="flex items-center gap-5">
+                            <div className="h-16 w-16 overflow-hidden rounded-2xl border-2 border-amber-400 bg-indigo-950 shadow-inner shrink-0">
+                                {student.face_photo_url ? (
+                                    <img src={student.face_photo_url} alt="Profile" className="h-full w-full object-cover" />
+                                ) : (
+                                    <div className="flex h-full w-full items-center justify-center font-bold text-amber-400 text-xl">
+                                        {student.firstname[0]}
+                                    </div>
+                                )}
+                            </div>
+                            <div>
+                                <div className="flex items-center gap-2">
+                                    <span className="rounded-full bg-emerald-500/20 border border-emerald-400/30 px-3 py-0.5 text-xs font-semibold text-emerald-300 flex items-center gap-1">
+                                        <ShieldCheck className="h-3.5 w-3.5" /> Biometrics verified
+                                    </span>
+                                </div>
+                                <h1 className="text-2xl lg:text-3xl font-black tracking-tight mt-1">
+                                    Welcome back, {student.firstname} {student.surname}
+                                </h1>
+                                <p className="text-xs lg:text-sm text-indigo-200 mt-0.5 font-mono">
+                                    Student ID: {student.student_number}
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-3 bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/10 shrink-0">
+                            <div>
+                                <span className="text-[11px] uppercase tracking-wider text-indigo-300 font-semibold block">Attendance Rate</span>
+                                <span className="text-2xl font-black text-amber-400">
+                                    {attendanceRate !== null ? `${attendanceRate}%` : '—'}
+                                </span>
+                            </div>
+                            <div className="h-8 w-px bg-white/20 mx-2" />
+                            <div>
+                                <span className="text-[11px] uppercase tracking-wider text-indigo-300 font-semibold block">Sessions</span>
+                                <span className="text-2xl font-black text-white">{eventsAttended}</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
                 {/* STAT CARDS ROW */}
-                <div className="grid w-full grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
                     <StatCard
-                        icon={<TrendingUp className="h-5 w-5 text-[#1B1F5C] dark:text-amber-400" aria-hidden="true" />}
-                        label="Attendance rate"
+                        icon={<TrendingUp className="h-5 w-5 text-[#0b1354]" />}
+                        label="Attendance Rate"
                         value={attendanceRate !== null ? `${attendanceRate}%` : '—'}
-                        caption={
-                            totalExpectedEvents
-                                ? `${eventsAttended} of ${totalExpectedEvents} events`
-                                : 'Not enough data yet'
-                        }
+                        caption={totalExpectedEvents ? `${eventsAttended} of ${totalExpectedEvents} sessions completed` : 'Term progress'}
                     />
                     <StatCard
-                        icon={<ListChecks className="h-5 w-5 text-[#1B1F5C] dark:text-amber-400" aria-hidden="true" />}
-                        label="Events attended"
+                        icon={<ListChecks className="h-5 w-5 text-[#0b1354]" />}
+                        label="Sessions Attended"
                         value={String(eventsAttended)}
-                        caption="This term"
+                        caption="Total recorded logs"
                     />
                     <StatCard
-                        icon={<CalendarClock className="h-5 w-5 text-[#1B1F5C] dark:text-amber-400" aria-hidden="true" />}
-                        label="Events today"
+                        icon={<CalendarClock className="h-5 w-5 text-[#0b1354]" />}
+                        label="Events Today"
                         value={String(activeEvents.length)}
-                        caption={
-                            activeEvents.length > 0 && uncheckedActiveCount > 0
-                                ? `${uncheckedActiveCount} still to check in`
-                                : 'All checked in'
-                        }
+                        caption="Scheduled for today"
                     />
                 </div>
 
-                {/* TODAY'S EVENTS LIST */}
-                <div className="w-full rounded-xl bg-white dark:bg-[#090d16] shadow-sm border border-gray-100 dark:border-slate-800/60 overflow-hidden">
-                    <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-slate-800/60">
-                        <h2 className="text-base font-bold text-gray-900 dark:text-white">Today's events</h2>
-                        <span className="text-xs text-gray-400 dark:text-gray-500">{activeEvents.length} scheduled</span>
-                    </div>
+                {/* MAIN DESKTOP GRID LAYOUT (2 Columns) */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
 
-                    {activeEvents.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center py-12 text-center">
-                            <Calendar className="h-10 w-10 mb-2 stroke-1 text-gray-400 dark:text-gray-600" aria-hidden="true" />
-                            <p className="text-sm font-medium text-gray-600 dark:text-gray-300">No events today</p>
-                            <p className="text-xs text-gray-400 dark:text-gray-500">Check back when an event opens for check-in.</p>
+                    {/* LEFT COLUMN: TODAY'S ACTIVE EVENTS & SLOTS (Takes up 2 columns) */}
+                    <div className="lg:col-span-2 space-y-6">
+                        <div className="flex items-center justify-between">
+                            <h2 className="text-lg font-bold text-gray-900">Today's Events & Check-In Slots</h2>
+                            <span className="text-xs font-semibold text-gray-400 bg-gray-200/60 px-2.5 py-1 rounded-full">
+                                {activeEvents.length} active
+                            </span>
                         </div>
-                    ) : (
-                        <ul className="divide-y divide-gray-100 dark:divide-slate-800/60">
-                            {activeEvents.map((evt) => {
-                                const isCheckedIn = checkedInEventIds.has(evt.event_id);
-                                const windowIsOpen = isEventWindowOpen(evt.schedules);
 
-                                return (
-                                    <li key={evt.event_id}>
-                                        <div className="w-full flex items-center gap-4 px-6 py-4 text-left">
-                                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-50 dark:bg-slate-800/80 text-[#1B1F5C] dark:text-amber-400 text-xs font-semibold">
-                                                <Clock className="h-4 w-4" aria-hidden="true" />
-                                            </div>
-
-                                            <div className="min-w-0 flex-1 space-y-0.5">
-                                                <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">{evt.title}</p>
-                                                {evt.start_time && (
-                                                    <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                                                        {formatEventTime(evt.start_time, evt.end_time)}
+                        {activeEvents.length === 0 ? (
+                            <div className="bg-white p-12 rounded-3xl shadow-xs border border-gray-100 text-center space-y-3">
+                                <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-[#0b1354]">
+                                    <CalendarX className="h-7 w-7 stroke-[1.5]" />
+                                </div>
+                                <div>
+                                    <h3 className="font-bold text-gray-900 text-base">No activity today</h3>
+                                    <p className="text-xs text-gray-400 mt-1">There are no events scheduled or open for check-in today.</p>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                                {activeEvents.map((evt) => (
+                                    <div key={evt.event_id} className="bg-white p-6 rounded-3xl shadow-xs border border-gray-100 space-y-4 hover:shadow-md transition">
+                                        <div className="flex items-start justify-between gap-4">
+                                            <div className="flex items-center gap-3.5">
+                                                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 text-[#0b1354]">
+                                                    <Clock className="h-6 w-6" />
+                                                </div>
+                                                <div>
+                                                    <h3 className="font-bold text-gray-900 text-base">{evt.title}</h3>
+                                                    <p className="text-xs text-gray-400 flex items-center gap-1 mt-0.5">
+                                                        <MapPin className="h-3.5 w-3.5 text-amber-500" />
+                                                        {evt.location || 'Location TBA'}
                                                     </p>
-                                                )}
-                                                <p className="text-xs text-gray-400 dark:text-gray-500 truncate">
-                                                    {evt.location ? evt.location : 'Location TBA'}
-                                                </p>
-                                                {!isCheckedIn && !windowIsOpen && (
-                                                    <p className="mt-1 text-[11px] font-medium text-amber-600 dark:text-amber-400">
-                                                        Check-in window is currently closed
-                                                    </p>
-                                                )}
+                                                </div>
                                             </div>
-
-                                            {isCheckedIn ? (
-                                                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 dark:bg-emerald-950/30 px-3 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/40 shrink-0">
-                                                    <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
-                                                    Checked in
-                                                </span>
-                                            ) : !windowIsOpen ? (
-                                                <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 dark:bg-slate-800 px-3 py-1 text-xs font-medium text-gray-400 dark:text-gray-500 shrink-0 cursor-not-allowed">
-                                                    Window closed
-                                                </span>
-                                            ) : (
-                                                <button
-                                                    onClick={() => setSelectedEvent(evt)}
-                                                    className="inline-flex items-center gap-1 rounded-full px-4 py-1.5 text-xs font-semibold text-white shrink-0 transition-colors"
-                                                    style={{ backgroundColor: GOLD }}
-                                                >
-                                                    Check in
-                                                    <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-                                                </button>
-                                            )}
-                                        </div>
-                                    </li>
-                                );
-                            })}
-                        </ul>
-                    )}
-                </div>
-
-                {/* COMING UP */}
-                {upcomingEvents.length > 0 && (
-                    <div className="w-full rounded-xl bg-white dark:bg-[#090d16] shadow-sm border border-gray-100 dark:border-slate-800/60 overflow-hidden">
-                        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-slate-800/60">
-                            <h2 className="text-base font-bold text-gray-900 dark:text-white">Coming up</h2>
-                            <Link
-                                href="/events"
-                                className="inline-flex items-center gap-1 text-xs font-semibold"
-                                style={{ color: GOLD }}
-                            >
-                                View all
-                                <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-                            </Link>
-                        </div>
-                        <ul className="divide-y divide-gray-100 dark:divide-slate-800/60">
-                            {upcomingEvents.slice(0, 3).map((evt) => (
-                                <li key={evt.event_id} className="flex items-center gap-4 px-6 py-3.5">
-                                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-50 dark:bg-slate-800/80 text-[#1B1F5C] dark:text-amber-400 text-xs font-semibold">
-                                        <Calendar className="h-4 w-4" aria-hidden="true" />
-                                    </div>
-                                    <div className="min-w-0 flex-1 space-y-0.5">
-                                        <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">{evt.title}</p>
-                                        {evt.start_time && (
-                                            <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                                                {formatEventTime(evt.start_time, evt.end_time)}
-                                            </p>
-                                        )}
-                                        <p className="text-xs text-gray-400 dark:text-gray-500 truncate">
-                                            {evt.event_date} {evt.location ? `· ${evt.location}` : '· Location TBA'}
-                                        </p>
-                                    </div>
-                                </li>
-                            ))}
-                        </ul>
-                    </div>
-                )}
-
-                {/* RECENT ATTENDANCE */}
-                <div className="w-full rounded-xl bg-white dark:bg-[#090d16] shadow-sm border border-gray-100 dark:border-slate-800/60 overflow-hidden">
-                    <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-slate-800/60">
-                        <h2 className="text-base font-bold text-gray-900 dark:text-white">Recent attendance</h2>
-                        <Link
-                            href="/attendance/history"
-                            className="inline-flex items-center gap-1 text-xs font-semibold"
-                            style={{ color: GOLD }}
-                        >
-                            View all
-                            <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-                        </Link>
-                    </div>
-
-                    {recentAttendances.length > 0 ? (
-                        <ul className="divide-y divide-gray-100 dark:divide-slate-800/60">
-                            {recentAttendances.map((log) => {
-                                const logDate = new Date(log.logged_at);
-                                return (
-                                    <li key={log.attendance_id} className="flex items-center justify-between px-6 py-3.5">
-                                        <div className="min-w-0 flex-1">
-                                            <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
-                                                {log.event?.title || 'Event'}
-                                            </p>
-                                            <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400 truncate">
-                                                {logDate.toLocaleDateString()} {logDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {log.event?.location || 'N/A'}
-                                            </p>
-                                        </div>
-                                        <div className="flex items-center gap-2 shrink-0">
-                                            <ConfidenceBadge score={log.confidence_score} />
-                                            <span className="inline-flex items-center rounded-full bg-emerald-50 dark:bg-emerald-950/30 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/40">
-                                                {log.status?.toLowerCase() || 'present'}
+                                            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700 border border-emerald-200/50">
+                                                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                                                Live Window
                                             </span>
                                         </div>
-                                    </li>
-                                );
-                            })}
-                        </ul>
-                    ) : (
-                        <div className="flex flex-col items-center justify-center py-12 text-center text-gray-400 dark:text-gray-500">
-                            <p className="text-xs">No attendance records yet.</p>
+
+                                        {evt.schedules && evt.schedules.length > 0 && (
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-gray-100">
+                                                {evt.schedules.map((sched, sIdx) => (
+                                                    <div key={sIdx} className="bg-gray-50/70 p-4 rounded-2xl space-y-3 border border-gray-100">
+                                                        <p className="text-xs font-bold text-gray-700">{sched.date}</p>
+                                                        {sched.slots?.map((slot, slotIdx) => {
+                                                            const inState = windowState(slot, 'in', sched.date);
+                                                            const outState = windowState(slot, 'out', sched.date);
+                                                            const inDone = hasCheckedInSlot(evt.event_id, slotIdx, sched.date, 'in');
+                                                            const outDone = hasCheckedInSlot(evt.event_id, slotIdx, sched.date, 'out');
+                                                            const badge = slotBadge({
+                                                                hasIn: Boolean(slot.time_in_start),
+                                                                hasOut: Boolean(slot.time_out_start),
+                                                                inState,
+                                                                outState,
+                                                                inDone,
+                                                                outDone,
+                                                            });
+
+                                                            return (
+                                                                <div key={slotIdx} className="space-y-2 pt-2 first:pt-0 border-t first:border-t-0 border-gray-200/50">
+                                                                    <div className="flex items-center justify-between">
+                                                                        <span className="font-bold text-gray-400 uppercase text-[10px]">Slot {slotIdx + 1}</span>
+                                                                        <SlotStatusBadge status={badge} />
+                                                                    </div>
+
+                                                                    {slot.time_in_start && (
+                                                                        <SlotWindowRow
+                                                                            label="In"
+                                                                            time={formatTime(slot.time_in_start)}
+                                                                            state={inState}
+                                                                            done={inDone}
+                                                                            doneLabel="Checked in"
+                                                                            actionLabel="Check-In"
+                                                                            onAction={() => setSelectedSlotEvent({ event: evt, slot, slotIndex: slotIdx, dateStr: sched.date, type: 'in' })}
+                                                                        />
+                                                                    )}
+
+                                                                    {slot.time_out_start && (
+                                                                        <SlotWindowRow
+                                                                            label="Out"
+                                                                            time={formatTime(slot.time_out_start)}
+                                                                            state={outState}
+                                                                            done={outDone}
+                                                                            doneLabel="Checked out"
+                                                                            actionLabel="Check-Out"
+                                                                            blockedReason={slot.time_in_start && !inDone ? 'Check in first' : null}
+                                                                            onAction={() => setSelectedSlotEvent({ event: evt, slot, slotIndex: slotIdx, dateStr: sched.date, type: 'out' })}
+                                                                        />
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* RIGHT COLUMN: SIDEBAR (Interactive Calendar & Event Inspector) */}
+                    <div className="space-y-6">
+
+                        {/* INTERACTIVE MONTHLY CALENDAR WIDGET */}
+                        <div className="bg-white p-6 rounded-3xl shadow-xs border border-gray-100 space-y-4">
+                            <div className="flex items-center justify-between">
+                                <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">
+                                    <CalendarIcon className="h-5 w-5 text-[#0b1354]" /> Calendar
+                                </h3>
+                                <div className="flex items-center gap-1">
+                                    <button
+                                        onClick={handlePrevMonth}
+                                        className="p-1.5 rounded-xl hover:bg-gray-100 text-gray-600 transition"
+                                        title="Previous Month"
+                                    >
+                                        <ChevronLeft className="h-4 w-4" />
+                                    </button>
+                                    <span className="text-xs font-bold text-gray-800 min-w-[90px] text-center">
+                                        {monthName} {year}
+                                    </span>
+                                    <button
+                                        onClick={handleNextMonth}
+                                        className="p-1.5 rounded-xl hover:bg-gray-100 text-gray-600 transition"
+                                        title="Next Month"
+                                    >
+                                        <ChevronRight className="h-4 w-4" />
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Calendar Grid */}
+                            <div className="grid grid-cols-7 gap-1 text-center">
+                                {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => (
+                                    <span key={d} className="text-[11px] font-bold uppercase text-gray-400 py-1">
+                                        {d}
+                                    </span>
+                                ))}
+
+                                {/* Blank cells for offset */}
+                                {Array.from({ length: startingDay }).map((_, index) => (
+                                    <div key={`empty-${index}`} />
+                                ))}
+
+                                {/* Day cells */}
+                                {Array.from({ length: totalDaysInMonth }).map((_, index) => {
+                                    const dayNum = index + 1;
+                                    const formattedDay = dayNum < 10 ? `0${dayNum}` : `${dayNum}`;
+                                    const formattedMonth = month + 1 < 10 ? `0${month + 1}` : `${month + 1}`;
+                                    const dateString = `${year}-${formattedMonth}-${formattedDay}`;
+
+                                    const isSelected = selectedDateStr === dateString;
+                                    const isToday = dateString === today;
+                                    const hasEvent = hasEventOnDate(dateString);
+
+                                    return (
+                                        <button
+                                            key={dayNum}
+                                            onClick={() => setSelectedDateStr(dateString)}
+                                            className={`relative h-9 w-9 mx-auto rounded-xl flex flex-col items-center justify-center text-xs font-bold transition ${
+                                                isSelected
+                                                    ? 'bg-[#0b1354] text-white shadow-sm'
+                                                    : isToday
+                                                    ? 'bg-amber-400 text-gray-900 font-black'
+                                                    : 'text-gray-700 hover:bg-gray-100'
+                                            }`}
+                                        >
+                                            <span>{dayNum}</span>
+                                            {hasEvent && !isSelected && (
+                                                <span className="absolute bottom-1 h-1 w-1 rounded-full bg-amber-500" />
+                                            )}
+                                            {hasEvent && isSelected && (
+                                                <span className="absolute bottom-1 h-1 w-1 rounded-full bg-amber-300" />
+                                            )}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            {/* SELECTED DATE EVENT INSPECTOR */}
+                            <div className="pt-3 border-t border-gray-100 space-y-2">
+                                <div className="flex items-center justify-between text-xs gap-2">
+                                    <span className="text-gray-400 truncate">{formatLongDate(selectedDateStr)}</span>
+                                    <span className="font-bold text-[#0b1354] shrink-0">{selectedDateEntries.length} found</span>
+                                </div>
+
+                                {selectedDateEntries.length > 0 ? (
+                                    <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                                        {selectedDateEntries.map(({ event, schedule }) => (
+                                            <div key={event.event_id} className="p-2.5 rounded-xl bg-indigo-50/50 border border-indigo-100/60 text-xs space-y-2">
+                                                <div>
+                                                    <p className="font-bold text-[#0b1354] truncate">{event.title}</p>
+                                                    <p className="text-[11px] text-gray-500 mt-0.5 flex items-center gap-1">
+                                                        <MapPin className="h-3 w-3 text-amber-500" /> {event.location || 'Location TBA'}
+                                                    </p>
+                                                </div>
+
+                                                {schedule.slots?.map((slot, slotIdx) => {
+                                                    const inState = windowState(slot, 'in', schedule.date);
+                                                    const outState = windowState(slot, 'out', schedule.date);
+                                                    const inDone = hasCheckedInSlot(event.event_id, slotIdx, schedule.date, 'in');
+                                                    const outDone = hasCheckedInSlot(event.event_id, slotIdx, schedule.date, 'out');
+                                                    const badge = slotBadge({
+                                                        hasIn: Boolean(slot.time_in_start),
+                                                        hasOut: Boolean(slot.time_out_start),
+                                                        inState,
+                                                        outState,
+                                                        inDone,
+                                                        outDone,
+                                                    });
+
+                                                    return (
+                                                        <div key={slotIdx} className="rounded-lg bg-white/80 border border-indigo-100/60 p-2 space-y-1">
+                                                            <div className="flex items-center justify-between">
+                                                                <span className="font-bold text-gray-400 uppercase text-[10px]">Slot {slotIdx + 1}</span>
+                                                                <SlotStatusBadge status={badge} />
+                                                            </div>
+                                                            {slot.time_in_start && (
+                                                                <p className="text-[11px] text-gray-600 flex items-center gap-1">
+                                                                    <Clock className="h-3 w-3 text-gray-400" /> Check-in opens {formatTime(slot.time_in_start)}
+                                                                </p>
+                                                            )}
+                                                            {slot.time_out_start && (
+                                                                <p className="text-[11px] text-gray-600 flex items-center gap-1">
+                                                                    <Clock className="h-3 w-3 text-gray-400" /> Check-out opens {formatTime(slot.time_out_start)}
+                                                                </p>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="text-[11px] text-gray-400 italic text-center py-2">No events scheduled for this date.</p>
+                                )}
+                            </div>
                         </div>
-                    )}
+
+                        {/* COMING UP EVENTS (Dynamic from Admin) */}
+                        <div className="bg-white p-6 rounded-3xl shadow-xs border border-gray-100 space-y-4">
+                            <div className="flex items-center justify-between">
+                                <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">
+                                    <Sparkles className="h-5 w-5 text-amber-500" /> Coming Up
+                                </h3>
+                                <Link href="/events" className="text-xs font-bold text-[#0b1354] hover:underline flex items-center gap-0.5">
+                                    View all <ArrowUpRight className="h-3.5 w-3.5" />
+                                </Link>
+                            </div>
+
+                            {upcomingEvents.length > 0 ? (
+                                <div className="space-y-3">
+                                    {upcomingEvents.slice(0, 3).map((evt) => (
+                                        <button
+                                            key={evt.event_id}
+                                            type="button"
+                                            onClick={() => jumpToDate(evt.next_date)}
+                                            className="w-full text-left flex items-start gap-3 p-3 rounded-2xl bg-gray-50 border border-gray-100 hover:bg-amber-50/50 transition"
+                                        >
+                                            <div className="h-9 w-9 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0 font-bold text-xs">
+                                                {evt.next_date.split('-')[2]}
+                                            </div>
+                                            <div className="min-w-0 flex-1">
+                                                <p className="text-xs font-bold text-gray-900 truncate">{evt.title}</p>
+                                                <p className="text-[11px] text-gray-400 mt-0.5 truncate">
+                                                    {formatDateRange(evt.start_date, evt.end_date)}
+                                                    {evt.day_count > 1 ? ` \u2022 ${evt.day_count} days` : ''}
+                                                    {evt.location ? ` \u2022 ${evt.location}` : ''}
+                                                </p>
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+                            ) : (
+                                <p className="text-xs text-gray-400 text-center py-6">No upcoming events scheduled.</p>
+                            )}
+                        </div>
+
+                        {/* ATTENDANCE HISTORY QUICK CARD */}
+                        <div className="bg-white p-6 rounded-3xl shadow-xs border border-gray-100 space-y-4">
+                            <div className="flex items-center justify-between">
+                                <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">
+                                    <History className="h-5 w-5 text-[#0b1354]" /> Attendance History
+                                </h3>
+                                <Link href="/attendance/history" className="text-xs font-bold text-[#0b1354] hover:underline flex items-center gap-0.5">
+                                    View all <ChevronRight className="h-3.5 w-3.5" />
+                                </Link>
+                            </div>
+
+                            {recentAttendances.length > 0 ? (
+                                <div className="space-y-3">
+                                    {recentAttendances.map((log) => {
+                                        const logDate = new Date(log.logged_at || log.attendance_time);
+                                        return (
+                                            <div key={log.attendance_id} className="flex items-center justify-between p-3 rounded-2xl bg-gray-50 border border-gray-100">
+                                                <div className="min-w-0 pr-2">
+                                                    <p className="text-xs font-bold text-gray-900 truncate">{log.event?.title || 'Event'}</p>
+                                                    <p className="text-[11px] text-gray-400 mt-0.5">
+                                                        {logDate.toLocaleDateString()} &bull; {logDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                    </p>
+                                                </div>
+                                                <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700 border border-emerald-200">
+                                                    {log.status || 'Present'}
+                                                </span>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <p className="text-xs text-gray-400 text-center py-6">No attendance records found yet.</p>
+                            )}
+                        </div>
+
+                    </div>
                 </div>
             </div>
 
-            {selectedEvent && (
-                <CheckInModal event={selectedEvent} onClose={() => setSelectedEvent(null)} />
+            {/* SHARED LIVENESS CHECK-IN MODAL */}
+            {selectedSlotEvent && (
+                <CheckInModal 
+                    event={selectedSlotEvent.event as any} 
+                    slot={selectedSlotEvent.slot}
+                    slotIndex={selectedSlotEvent.slotIndex}
+                    dateStr={selectedSlotEvent.dateStr}
+                    type={selectedSlotEvent.type}
+                    onClose={() => setSelectedSlotEvent(null)} 
+                />
             )}
         </>
     );
@@ -347,505 +598,16 @@ export default function Dashboard({
 
 function StatCard({ icon, label, value, caption }: { icon: React.ReactNode; label: string; value: string; caption: string }) {
     return (
-        <div className="rounded-xl bg-white dark:bg-[#090d16] p-5 shadow-sm border border-gray-100 dark:border-slate-800/60">
-            <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400">
-                <span>{icon}</span>
-                <span className="text-xs font-medium">{label}</span>
+        <div className="rounded-3xl bg-white p-6 shadow-xs border border-gray-100 flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-gray-400">{label}</span>
+                <div className="h-10 w-10 rounded-2xl bg-indigo-50 flex items-center justify-center">
+                    {icon}
+                </div>
             </div>
-            <p className="mt-2 text-2xl font-bold text-gray-900 dark:text-white">{value}</p>
-            <p className="text-xs text-gray-400 dark:text-gray-500">{caption}</p>
-        </div>
-    );
-}
-
-function ConfidenceBadge({ score }: { score: number }) {
-    const pct = score <= 1 ? score * 100 : score;
-    return (
-        <span className="inline-flex items-center rounded-full bg-emerald-50 dark:bg-emerald-950/30 px-2 py-0.5 font-mono text-xs font-medium text-emerald-700 dark:text-emerald-400 border border-emerald-100 dark:border-emerald-800/40">
-            {pct.toFixed(1)}%
-        </span>
-    );
-}
-
-type SetupStage = 'LOCATING' | 'STARTING_CAMERA' | 'READY';
-
-function CheckInModal({ event, onClose }: { event: Event; onClose: () => void }) {
-    const videoRef = useRef<HTMLVideoElement | null>(null);
-    const landmarkerRef = useRef<FaceLandmarker | null>(null);
-    const requestRef = useRef<number | null>(null);
-    const mountedRef = useRef(true);
-
-    const stepRef = useRef<LivenessStep>('LOOK_CENTER');
-    const frameCountRef = useRef(0);
-    const lastVideoTimeRef = useRef(-1);
-    const holdCountRef = useRef(0);
-    const turnHoldRef = useRef(0);
-    const challengeStartRef = useRef<number | null>(null);
-    const hasSubmittedRef = useRef(false);
-
-    const frontalFrameRef = useRef<Promise<Blob | null> | null>(null);
-    const peakFrameRef = useRef<Promise<Blob | null> | null>(null);
-
-    const [step, setStep] = useState<LivenessStep>('LOOK_CENTER');
-    const [setupStage, setSetupStage] = useState<SetupStage>('LOCATING');
-    const [streamStarted, setStreamStarted] = useState(false);
-    const [modelReady, setModelReady] = useState(false);
-    const [cameraError, setCameraError] = useState<string | null>(null);
-    const [locationError, setLocationError] = useState<string | null>(null);
-    const [modalError, setModalError] = useState<string | null>(null);
-    const [accuracyWarning, setAccuracyWarning] = useState<string | null>(null);
-    const [hint, setHint] = useState<string | null>(null);
-    const [holdProgress, setHoldProgress] = useState(0);
-    const [turnProgress, setTurnProgress] = useState(0);
-    const [isSubmitting, setIsSubmitting] = useState(false);
-    const [retryToken, setRetryToken] = useState(0);
-
-    const [userCoords, setUserCoords] = useState<{ latitude: number; longitude: number } | null>(null);
-    const [direction, setDirection] = useState<Direction>(randomDirection);
-
-    const isReady = setupStage === 'READY' && streamStarted && modelReady;
-    const blockingError = locationError ?? cameraError ?? modalError;
-
-    const goToStep = (next: LivenessStep) => {
-        if (stepRef.current === next) return;
-        stepRef.current = next;
-        setStep(next);
-    };
-
-    const resetChallenge = () => {
-        holdCountRef.current = 0;
-        turnHoldRef.current = 0;
-        hasSubmittedRef.current = false;
-        challengeStartRef.current = null;
-        frontalFrameRef.current = null;
-        peakFrameRef.current = null;
-        setHoldProgress(0);
-        setTurnProgress(0);
-        goToStep('LOOK_CENTER');
-    };
-
-    const stopCameraStream = () => {
-        if (requestRef.current !== null) {
-            cancelAnimationFrame(requestRef.current);
-            requestRef.current = null;
-        }
-        if (videoRef.current?.srcObject) {
-            (videoRef.current.srcObject as MediaStream).getTracks().forEach((t) => t.stop());
-            videoRef.current.srcObject = null;
-        }
-        setStreamStarted(false);
-    };
-
-    useEffect(() => {
-        mountedRef.current = true;
-        setCameraError(null);
-        setLocationError(null);
-        setModalError(null);
-        setAccuracyWarning(null);
-        setSetupStage('LOCATING');
-
-        const verifyLocationAndInitialize = async () => {
-            if (!navigator.geolocation) {
-                if (mountedRef.current) setLocationError('Geolocation is not supported by your browser.');
-                return;
-            }
-
-            navigator.geolocation.getCurrentPosition(
-                async (position) => {
-                    if (!mountedRef.current) return;
-
-                    const { latitude, longitude, accuracy } = position.coords;
-                    setUserCoords({ latitude, longitude });
-
-                    if (accuracy > LOW_ACCURACY_WARNING_METERS) {
-                        setAccuracyWarning(
-                            `Your GPS signal is weak (±${Math.round(accuracy)}m). Move outdoors or away from tall buildings for a more reliable check-in.`,
-                        );
-                    }
-
-                    if (event.geofence_enabled && event.latitude && event.longitude && event.radius_meters) {
-                        const distance = distanceInMeters(latitude, longitude, event.latitude, event.longitude);
-                        if (distance > event.radius_meters) {
-                            setLocationError(
-                                `You are outside the event area. Move about ${Math.round(distance - event.radius_meters)}m closer to check in.`,
-                            );
-                            return;
-                        }
-                    }
-
-                    setSetupStage('STARTING_CAMERA');
-                    await initializeCameraAndModel();
-                },
-                (error) => {
-                    if (mountedRef.current) setLocationError(describeGeolocationError(error));
-                },
-                { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
-            );
-        };
-
-        async function initializeCameraAndModel() {
-            const landmarkerPromise = getSharedLandmarker();
-            landmarkerPromise.catch(() => {});
-
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia(VIDEO_CONSTRAINTS);
-                if (!mountedRef.current || !videoRef.current) {
-                    stream.getTracks().forEach((t) => t.stop());
-                    return;
-                }
-                videoRef.current.srcObject = stream;
-                await videoRef.current.play().catch(() => {});
-                lastVideoTimeRef.current = -1;
-                setStreamStarted(true);
-            } catch (error) {
-                if (mountedRef.current) setCameraError(describeCameraError(error));
-                return;
-            }
-
-            try {
-                const landmarker = await landmarkerPromise;
-                if (!mountedRef.current) return;
-                landmarkerRef.current = landmarker;
-                setModelReady(true);
-                setSetupStage('READY');
-            } catch (error) {
-                if (mountedRef.current) setCameraError('Unable to load face detection. Check your connection and try again.');
-            }
-        }
-
-        verifyLocationAndInitialize();
-
-        return () => {
-            mountedRef.current = false;
-            stopCameraStream();
-            landmarkerRef.current = null;
-        };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [event, retryToken]);
-
-    useEffect(() => {
-        if (!isReady || blockingError) return;
-
-        let stopped = false;
-
-        const processFrame = () => {
-            const video = videoRef.current;
-            const landmarker = landmarkerRef.current;
-
-            if (!video || !landmarker || video.readyState < 2) {
-                return;
-            }
-
-            if (video.currentTime === lastVideoTimeRef.current) {
-                return;
-            }
-
-            lastVideoTimeRef.current = video.currentTime;
-
-            let faces: Landmark[][] = [];
-
-            try {
-                const result = landmarker.detectForVideo(
-                    video,
-                    performance.now()
-                );
-
-                faces = result.faceLandmarks ?? [];
-            } catch (error) {
-                console.error('Face detection error:', error);
-                return;
-            }
-
-            if (faces.length === 0) {
-                setHint(null);
-                resetChallenge();
-                return;
-            }
-
-            if (faces.length > 1) {
-                setHint('Only one face should be visible.');
-                resetChallenge();
-                return;
-            }
-
-            const landmarks = faces[0];
-            const yaw = calculateYaw(landmarks);
-            const turned = yaw * DIRECTION_SIGN[direction];
-
-            switch (stepRef.current) {
-                case 'LOOK_CENTER': {
-                    const placementIssue = getPlacementIssue(landmarks);
-
-                    if (placementIssue) {
-                        holdCountRef.current = 0;
-                        setHoldProgress(0);
-                        setHint(placementIssue);
-                        return;
-                    }
-
-                    if (Math.abs(yaw) > FRONTAL_YAW_MAX) {
-                        holdCountRef.current = 0;
-                        setHoldProgress(0);
-                        setHint('Look straight at the camera.');
-                        return;
-                    }
-
-                    setHint(null);
-                    holdCountRef.current += 1;
-                    setHoldProgress(Math.min(holdCountRef.current / FRONTAL_HOLD_FRAMES, 1));
-
-                    if (holdCountRef.current >= FRONTAL_HOLD_FRAMES) {
-                        frontalFrameRef.current = captureFrame(video, { quality: 0.7 });
-                        challengeStartRef.current = performance.now();
-                        turnHoldRef.current = 0;
-                        goToStep('TURN');
-                    }
-                    return;
-                }
-
-                case 'TURN': {
-                    const startedAt = challengeStartRef.current ?? performance.now();
-
-                    if (performance.now() - startedAt > CHALLENGE_TIMEOUT_MS) {
-                        resetChallenge();
-                        setHint("Time ran out. Let's try again.");
-                        return;
-                    }
-
-                    if (turned <= -WRONG_WAY_YAW) {
-                        turnHoldRef.current = 0;
-                        setTurnProgress(0);
-                        setHint(`Turn to your ${direction}, not the other way.`);
-                        return;
-                    }
-
-                    setHint(null);
-                    setTurnProgress(Math.min(Math.max(turned / TURN_YAW_MIN, 0), 1));
-
-                    if (turned >= TURN_YAW_MIN) {
-                        turnHoldRef.current += 1;
-
-                        if (turnHoldRef.current >= TURN_HOLD_FRAMES) {
-                            peakFrameRef.current = captureFrame(video, { quality: 0.7 });
-                            void submitAttendance(frontalFrameRef.current, peakFrameRef.current);
-                            return;
-                        }
-                    } else {
-                        turnHoldRef.current = 0;
-                    }
-                    return;
-                }
-
-                case 'VERIFYING':
-                case 'PASSED':
-                    return;
-            }
-        };
-
-        const tick = () => {
-            if (stopped) return;
-
-            const currentStep = stepRef.current;
-            if (currentStep === 'VERIFYING' || currentStep === 'PASSED') {
-                return;
-            }
-
-            frameCountRef.current += 1;
-            if (frameCountRef.current % PROCESS_EVERY_N_FRAMES === 0) {
-                processFrame();
-            }
-
-            if (stepRef.current === 'VERIFYING' || stepRef.current === 'PASSED') {
-                return;
-            }
-
-            requestRef.current = requestAnimationFrame(tick);
-        };
-
-        requestRef.current = requestAnimationFrame(tick);
-
-        return () => {
-            stopped = true;
-            if (requestRef.current !== null) {
-                cancelAnimationFrame(requestRef.current);
-                requestRef.current = null;
-            }
-        };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isReady, blockingError, direction]);
-
-    const submitAttendance = async (
-        frontalPromise: Promise<Blob | null> | null,
-        peakPromise: Promise<Blob | null> | null,
-    ) => {
-        if (hasSubmittedRef.current) return;
-        hasSubmittedRef.current = true;
-        goToStep('VERIFYING');
-        setHint(null);
-
-        try {
-            const [frontal, peak] = await Promise.all([frontalPromise, peakPromise]);
-            if (!frontal || !peak) throw new Error('Failed to capture camera frames.');
-
-            stopCameraStream();
-            setIsSubmitting(true);
-
-            const formData = new FormData();
-            formData.append('event_id', String(event.event_id));
-            formData.append('live_camera_frame', frontal, 'frontal.jpg');
-            formData.append('turn_peak_frame', peak, 'turn-peak.jpg');
-            formData.append('direction', direction);
-
-            if (userCoords) {
-                formData.append('latitude', String(userCoords.latitude));
-                formData.append('longitude', String(userCoords.longitude));
-            }
-
-            router.post('/attendance/check-in', formData, {
-                forceFormData: true,
-                onSuccess: () => {
-                    setIsSubmitting(false);
-                    goToStep('PASSED');
-                    setTimeout(() => {
-                        stopCameraStream();
-                        onClose();
-                    }, 1200);
-                },
-                onError: (errors: Record<string, string>) => {
-                    setIsSubmitting(false);
-                    setModalError(errors.attendance || errors.live_camera_frame || 'Verification failed.');
-                },
-            });
-        } catch {
-            setIsSubmitting(false);
-            setModalError('Failed to process the camera frames. Please try again.');
-        }
-    };
-
-    const handleRetry = () => {
-        stopCameraStream();
-        hasSubmittedRef.current = false;
-        setModelReady(false);
-        setDirection(randomDirection());
-        resetChallenge();
-        setRetryToken((n) => n + 1);
-    };
-
-    const instruction = (() => {
-        if (setupStage === 'LOCATING') return { text: 'Acquiring GPS location...', icon: Loader2, spin: true };
-        if (setupStage === 'STARTING_CAMERA') return { text: 'Starting camera...', icon: Loader2, spin: true };
-        switch (step) {
-            case 'LOOK_CENTER':
-                return { text: 'Look straight at the camera', icon: Eye, spin: false };
-            case 'TURN':
-                return { text: `Turn your head to your ${direction}`, icon: direction === 'left' ? ArrowLeft : ArrowRight, spin: false };
-            case 'VERIFYING':
-                return { text: 'Verifying attendance...', icon: RefreshCw, spin: true };
-            case 'PASSED':
-                return { text: 'Checked in successfully!', icon: CheckCircle2, spin: false };
-        }
-    })();
-    const ActiveIcon = instruction.icon;
-    const isSettingUp = setupStage !== 'READY';
-
-    return (
-        <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="checkin-title"
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
-            onClick={(e) => {
-                if (e.target === e.currentTarget) {
-                    stopCameraStream();
-                    onClose();
-                }
-            }}
-        >
-            <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#090d16] text-gray-900 dark:text-white shadow-2xl overflow-hidden border border-gray-100 dark:border-slate-800">
-                <div className="relative px-6 pt-6 pb-4 border-b border-gray-100 dark:border-slate-800">
-                    <button onClick={() => { stopCameraStream(); onClose(); }} className="absolute right-4 top-4 rounded-full p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-slate-800">
-                        <X className="h-5 w-5" />
-                    </button>
-                    <h2 id="checkin-title" className="text-lg font-bold pr-8">{event.title}</h2>
-                    <p className="mt-1 text-xs text-gray-500">Active Liveness & Geofence Check-in</p>
-                </div>
-
-                <div className="flex flex-col items-center px-6 py-6">
-                    <div className="relative h-48 w-48 overflow-hidden rounded-full border-4 border-[#1B1F5C] dark:border-amber-400 bg-black mb-3">
-                        <video
-                            ref={videoRef}
-                            autoPlay
-                            playsInline
-                            muted
-                            className={`h-full w-full object-cover scale-x-[-1] ${isSettingUp || blockingError ? 'opacity-0' : 'opacity-100'}`}
-                        />
-
-                        {isSettingUp && !blockingError && (
-                            <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900/90 text-white p-4 text-center z-10">
-                                <Loader2 className="h-8 w-8 animate-spin text-[#C9973E] mb-2" />
-                                <p className="text-[11px] font-medium">{instruction.text}</p>
-                            </div>
-                        )}
-
-                        {blockingError && (
-                            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-gray-900/95 text-white p-4 text-center z-10">
-                                <AlertTriangle className="h-7 w-7 text-rose-400" />
-                                <p className="text-[11px] font-medium leading-relaxed">{blockingError}</p>
-                                <button
-                                    type="button"
-                                    onClick={handleRetry}
-                                    className="mt-1 rounded-full px-4 py-1.5 text-xs font-semibold text-white"
-                                    style={{ backgroundColor: GOLD }}
-                                >
-                                    Try again
-                                </button>
-                            </div>
-                        )}
-
-                        {!isSettingUp && !blockingError && (
-                            <div className="pointer-events-none absolute inset-2 rounded-full border-2 border-dashed border-[#F5A623] animate-pulse" />
-                        )}
-
-                        {step === 'TURN' && !isSettingUp && !blockingError && (
-                            <div className={`absolute top-1/2 -translate-y-1/2 rounded-full bg-black/60 p-2 text-white ${direction === 'left' ? 'left-2' : 'right-2'}`}>
-                                <ActiveIcon className="h-6 w-6 animate-pulse" />
-                            </div>
-                        )}
-                    </div>
-
-                    {!blockingError && (
-                        <div className="flex items-center gap-2 rounded-lg bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-xs font-semibold text-amber-800 dark:text-amber-400 border border-amber-200 dark:border-amber-800/40 mb-2">
-                            <ActiveIcon className={`h-4 w-4 shrink-0 ${instruction.spin ? 'animate-spin' : ''}`} />
-                            <span>{instruction.text}</span>
-                        </div>
-                    )}
-
-                    {!blockingError && step === 'LOOK_CENTER' && !isSettingUp && (
-                        <div className="h-1 w-40 overflow-hidden rounded-full bg-gray-100 dark:bg-slate-800" aria-hidden="true">
-                            <div
-                                className="h-full bg-[#1B1F5C] dark:bg-amber-400 transition-[width] duration-150"
-                                style={{ width: `${Math.round(holdProgress * 100)}%` }}
-                            />
-                        </div>
-                    )}
-                    {!blockingError && step === 'TURN' && (
-                        <div className="h-1 w-40 overflow-hidden rounded-full bg-gray-100 dark:bg-slate-800" aria-hidden="true">
-                            <div
-                                className="h-full bg-[#1B1F5C] dark:bg-amber-400 transition-[width] duration-150"
-                                style={{ width: `${Math.round(turnProgress * 100)}%` }}
-                            />
-                        </div>
-                    )}
-
-                    {accuracyWarning && !blockingError && (
-                        <p className="mt-2 flex items-start gap-1.5 text-[11px] text-amber-600 dark:text-amber-400 text-center">
-                            <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                            <span>{accuracyWarning}</span>
-                        </p>
-                    )}
-
-                    {hint && !blockingError && <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-400 text-center">{hint}</p>}
-                </div>
+            <div className="mt-4">
+                <p className="text-3xl font-black text-gray-900 tracking-tight">{value}</p>
+                <p className="text-xs text-gray-400 mt-1">{caption}</p>
             </div>
         </div>
     );

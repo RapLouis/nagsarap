@@ -102,11 +102,8 @@ class Event extends Model
     {
         $today = now()->toDateString();
         return $query->where('approval_status', 'approved')
-            ->where(function ($q) use ($today) {
-                $q->whereDate('event_date', '>', $today)
-                  ->orWhereHas('days', function ($sub) use ($today) {
-                      $sub->whereDate('event_date', '>', $today);
-                  });
+            ->whereHas('days', function ($sub) use ($today) {
+                $sub->whereDate('event_date', '>', $today);
             });
     }
 
@@ -131,4 +128,26 @@ class Event extends Model
 
     public function scopePending(Builder $query): Builder { return $query->where('approval_status','pending'); }
     public function scopeDeclined(Builder $query): Builder { return $query->where('approval_status','declined'); }
+
+    /**
+     * Events a student is allowed to see: approved by an admin and switched on.
+     * (Kept separate from scopeUpcoming so the admin tabs keep showing inactive events.)
+     */
+    public function scopeForStudents(Builder $query): Builder
+    {
+        return $query->where('approval_status', 'approved')->where('is_active', true);
+    }
+
+    /**
+     * Events that have at least one event_days row between $from and $to (Y-m-d),
+     * eager loading only the days inside that range, ordered by date.
+     */
+    public function scopeWithDaysBetween(Builder $query, string $from, string $to): Builder
+    {
+        $inRange = fn ($q) => $q->whereDate('event_date', '>=', $from)
+            ->whereDate('event_date', '<=', $to);
+
+        return $query->whereHas('days', $inRange)
+            ->with(['days' => fn ($q) => $inRange($q)->orderBy('event_date')]);
+    }
 }

@@ -329,25 +329,25 @@ export default function Events({
 
         const mappedSchedules = hasExistingSchedules
             ? eventItem.schedules!.map((sch) => ({
-                  date: sch.date,
-                  slots: sch.slots && sch.slots.length > 0 ? sch.slots : [{
-                      time_in_start: '08:00',
-                      time_in_end: '',
-                      time_out_start: '17:00',
-                      time_out_end: '',
-                  }],
-              }))
+                date: sch.date,
+                slots: sch.slots && sch.slots.length > 0 ? sch.slots : [{
+                    time_in_start: '08:00',
+                    time_in_end: '',
+                    time_out_start: '17:00',
+                    time_out_end: '',
+                }],
+            }))
             : getEventDays(eventItem.event_date, eventItem.event_end_date).map((day) => ({
-                  date: day,
-                  slots: [
-                      {
-                          time_in_start: '08:00',
-                          time_in_end: '',
-                          time_out_start: '17:00',
-                          time_out_end: '',
-                      },
-                  ],
-              }));
+                date: day,
+                slots: [
+                    {
+                        time_in_start: '08:00',
+                        time_in_end: '',
+                        time_out_start: '17:00',
+                        time_out_end: '',
+                    },
+                ],
+            }));
 
         const containsMultipleSlots = mappedSchedules.some(s => s.slots && s.slots.length > 1);
         if (containsMultipleSlots || (hasMultiDay && mappedSchedules.length > 1)) {
@@ -583,7 +583,6 @@ export default function Events({
                                                 </Link>
                                             </td>
 
-                                            {/* TIME-IN WINDOW (AM/PM Formatted) */}
                                             <td className="px-6 py-4 text-gray-600">
                                                 <Link href={`/admin/analytics/events/${item.event_id}`} className="block space-y-1.5">
                                                     {item?.schedules?.[0]?.slots && item.schedules[0].slots.length > 0 ? (
@@ -602,7 +601,6 @@ export default function Events({
                                                 </Link>
                                             </td>
 
-                                            {/* TIME-OUT WINDOW (AM/PM Formatted) */}
                                             <td className="px-6 py-4 text-gray-600">
                                                 <Link href={`/admin/analytics/events/${item.event_id}`} className="block space-y-1.5">
                                                     {item?.schedules?.[0]?.slots?.some(slot => slot?.time_out_start) ? (
@@ -875,7 +873,7 @@ export default function Events({
                                                     <input
                                                         type="time"
                                                         required
-                                                        value={uniformSchedule.time_in_start}
+                                                        value={uniformSchedule.time_in_start ?? ''}
                                                         onChange={(e) => handleUniformChange('time_in_start', e.target.value)}
                                                         className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2 text-gray-800 text-sm font-medium"
                                                     />
@@ -884,7 +882,7 @@ export default function Events({
                                                     <label className="block font-bold text-gray-600 text-xs">Time-In Cutoff</label>
                                                     <input
                                                         type="time"
-                                                        value={uniformSchedule.time_in_end}
+                                                        value={uniformSchedule.time_in_end ?? ''}
                                                         onChange={(e) => handleUniformChange('time_in_end', e.target.value)}
                                                         className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2 text-gray-800 text-sm font-medium"
                                                     />
@@ -896,7 +894,7 @@ export default function Events({
                                                     <label className="block font-bold text-gray-600 text-xs">Time-Out Start</label>
                                                     <input
                                                         type="time"
-                                                        value={uniformSchedule.time_out_start}
+                                                        value={uniformSchedule.time_out_start ?? ''}
                                                         onChange={(e) => handleUniformChange('time_out_start', e.target.value)}
                                                         className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2 text-gray-800 text-sm font-medium"
                                                     />
@@ -905,7 +903,7 @@ export default function Events({
                                                     <label className="block font-bold text-gray-600 text-xs">Time-Out Cutoff</label>
                                                     <input
                                                         type="time"
-                                                        value={uniformSchedule.time_out_end}
+                                                        value={uniformSchedule.time_out_end ?? ''}
                                                         onChange={(e) => handleUniformChange('time_out_end', e.target.value)}
                                                         className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2 text-gray-800 text-sm font-medium"
                                                     />
@@ -977,7 +975,7 @@ export default function Events({
                                                                     <input
                                                                         type="time"
                                                                         required
-                                                                        value={slot.time_in_start}
+                                                                        value={slot.time_in_start ?? ''}
                                                                         onChange={(e) => {
                                                                             const updated = [...data.schedules];
                                                                             updated[dayIndex].slots[slotIndex].time_in_start = e.target.value;
@@ -991,7 +989,7 @@ export default function Events({
                                                                     <label className="block font-bold text-gray-600 text-xs">Time-In Cutoff</label>
                                                                     <input
                                                                         type="time"
-                                                                        value={slot.time_in_end}
+                                                                        value={slot.time_in_end ?? ''}
                                                                         onChange={(e) => {
                                                                             const updated = [...data.schedules];
                                                                             updated[dayIndex].slots[slotIndex].time_in_end = e.target.value;
@@ -1008,7 +1006,7 @@ export default function Events({
                                                                     <label className="block font-bold text-gray-600 text-xs">Time-Out Start</label>
                                                                     <input
                                                                         type="time"
-                                                                        value={slot.time_out_start}
+                                                                        value={slot.time_out_start ?? ''}
                                                                         onChange={(e) => {
                                                                             const updated = [...data.schedules];
                                                                             updated[dayIndex].slots[slotIndex].time_out_start = e.target.value;
@@ -1022,7 +1020,7 @@ export default function Events({
                                                                     <label className="block font-bold text-gray-600 text-xs">Time-Out Cutoff</label>
                                                                     <input
                                                                         type="time"
-                                                                        value={slot.time_out_end}
+                                                                        value={slot.time_out_end ?? ''}
                                                                         onChange={(e) => {
                                                                             const updated = [...data.schedules];
                                                                             updated[dayIndex].slots[slotIndex].time_out_end = e.target.value;

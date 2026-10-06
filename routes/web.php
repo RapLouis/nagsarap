@@ -6,7 +6,6 @@ use App\Http\Controllers\AttendanceController;
 use App\Http\Controllers\EventController;
 use App\Http\Controllers\FaceVerificationController;
 use App\Http\Controllers\Admin\AnalyticsController;
-use App\Http\Controllers\StudentCheckInController;
 use App\Models\Event;
 use App\Models\Student;
 use Illuminate\Support\Facades\Auth;
@@ -71,10 +70,35 @@ Route::middleware(['auth', 'verified'])->group(function () {
     // STUDENT CHECK-IN HUB
     // =========================================================================
 
-    Route::get(
-        '/check-in',
-        [StudentCheckInController::class, 'index']
-    )->name('check-in');
+    Route::get('/check-in', function () {
+        /** @var \App\Models\User $user */
+        $user = Auth::user();
+
+        $student = $user->load([
+            'student.attendances.event'
+        ])->student;
+
+        if ($student) {
+            $student->face_photo_url = $student->face_photo_path
+                ? route('student.face-photo', ['student' => $student->student_id])
+                : null;
+        }
+
+        $activeEvents = Event::ongoing()->with('days')->get()->transform(function ($event) {
+            $event->schedules = $event->days->map(function ($day) {
+                return [
+                    'date'  => Carbon::parse($day->event_date)->format('Y-m-d'),
+                    'slots' => $day->slots ?? [],
+                ];
+            });
+            return $event;
+        });
+
+        return Inertia::render('CheckIn', [
+            'student' => $student,
+            'activeEvents' => $activeEvents,
+        ]);
+    })->name('check-in');
 
 
     // =========================================================================
