@@ -4,7 +4,8 @@ import AdminLayout from '@/layouts/admin-layout';
 import DeleteModal from '@/components/delete-modal';
 import LocationPicker from '@/components/location-picker';
 import FormSwitch from '@/components/ui/form-switch';
-import {
+import { formatAMPM } from '@/lib/timeUtils';
+import { 
     Calendar,
     MapPin,
     Plus,
@@ -27,21 +28,17 @@ import {
     ArrowLeft,
     FileText,
 } from 'lucide-react';
+import { 
+    TimeSlot, 
+    ScheduleItem, 
+    validateTimeSlots, 
+    getEventDays, 
+    formatDate, 
+    relativeDateLabel 
+} from '@/lib/eventValidation';
 
 type TabKey = 'ongoing' | 'upcoming' | 'completed' | 'pending' | 'declined';
 type Point = { lat: number; lng: number };
-
-type TimeSlot = {
-    time_in_start: string;
-    time_in_end: string;
-    time_out_start: string;
-    time_out_end: string;
-};
-
-type ScheduleItem = {
-    date: string;
-    slots: TimeSlot[];
-};
 
 type EventItem = {
     event_id: number;
@@ -57,10 +54,6 @@ type EventItem = {
     event_date: string;
     event_end_date: string | null;
     schedules: ScheduleItem[] | null;
-    time_in_start: string;
-    time_in_end: string | null;
-    time_out_start: string | null;
-    time_out_end: string | null;
     approval_status: 'approved' | 'pending' | 'declined';
     is_active: boolean;
 };
@@ -84,44 +77,6 @@ const TABS: { key: TabKey; label: string; activeColor: string }[] = [
     { key: 'declined', label: 'Declined', activeColor: 'text-rose-600 border-rose-600 bg-rose-50/50' },
 ];
 
-function relativeDateLabel(dateStr: string): string {
-    const eventDate = new Date(dateStr + 'T00:00:00');
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const diffDays = Math.round((eventDate.getTime() - today.getTime()) / 86400000);
-
-    if (diffDays === 0) return 'Today';
-    if (diffDays === 1) return 'Tomorrow';
-    if (diffDays === -1) return 'Yesterday';
-    if (diffDays > 1 && diffDays <= 7) return `In ${diffDays} days`;
-    if (diffDays < -1 && diffDays >= -7) return `${Math.abs(diffDays)} days ago`;
-    return '';
-}
-
-function formatDate(dateStr: string): string {
-    return new Date(dateStr + 'T00:00:00').toLocaleDateString(undefined, {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-    });
-}
-
-function getEventDays(startDate: string, endDate: string | null): string[] {
-    if (!startDate) return [];
-    if (!endDate || endDate <= startDate) return [startDate];
-
-    const days: string[] = [];
-    const current = new Date(startDate + 'T00:00:00');
-    const end = new Date(endDate + 'T00:00:00');
-
-    while (current <= end) {
-        days.push(current.toISOString().split('T')[0]);
-        current.setDate(current.getDate() + 1);
-    }
-    return days;
-}
-
 export default function Events({
     events,
     counts = { ongoing: 0, upcoming: 0, completed: 0, pending: 0, declined: 0 },
@@ -132,6 +87,7 @@ export default function Events({
     const [isFiltering, setIsFiltering] = useState(false);
     const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const isFirstRun = useRef(true);
+    const isEditingLoad = useRef(false);
 
     // Wizard Flow States
     const [currentStep, setCurrentStep] = useState<number>(1);
@@ -177,31 +133,14 @@ export default function Events({
 
     const hasFormErrors = Object.keys(errors).length > 0;
 
-    // Time validation check helper
-    const validateTimeSlots = (schedules: ScheduleItem[]): boolean => {
-        for (const sched of schedules) {
-            for (const slot of sched.slots) {
-                if (slot.time_in_start && slot.time_in_end && slot.time_in_start >= slot.time_in_end) {
-                    setTimeValidationError(`Conflict on ${sched.date}: Time-In Start must be earlier than Time-In Cutoff.`);
-                    return false;
-                }
-                if (slot.time_in_end && slot.time_out_start && slot.time_in_end >= slot.time_out_start) {
-                    setTimeValidationError(`Conflict on ${sched.date}: Time-In Cutoff cannot overlap or be after Time-Out Start.`);
-                    return false;
-                }
-                if (slot.time_out_start && slot.time_out_end && slot.time_out_start >= slot.time_out_end) {
-                    setTimeValidationError(`Conflict on ${sched.date}: Time-Out Start must be earlier than Time-Out Cutoff.`);
-                    return false;
-                }
-            }
-        }
-        setTimeValidationError(null);
-        return true;
-    };
-
-    // Synchronize schedules automatically when dates, multi-day toggle, or modes change
     useEffect(() => {
         if (!data.event_date) return;
+
+        if (isEditingLoad.current) {
+            isEditingLoad.current = false;
+            return;
+        }
+
         const days = getEventDays(data.event_date, isMultiDay ? data.event_end_date : null);
 
         const newSchedules = days.map((day) => {
@@ -229,7 +168,7 @@ export default function Events({
         });
 
         setData('schedules', newSchedules);
-        validateTimeSlots(newSchedules);
+        validateTimeSlots(newSchedules, setTimeValidationError);
     }, [data.event_date, data.event_end_date, isMultiDay, scheduleMode, uniformSchedule]);
 
     const handleUniformChange = (field: keyof TimeSlot, value: string) => {
@@ -242,7 +181,7 @@ export default function Events({
                 slots: s.slots.map((slot) => ({ ...slot, [field]: value })),
             }));
             setData('schedules', updatedSchedules);
-            validateTimeSlots(updatedSchedules);
+            validateTimeSlots(updatedSchedules, setTimeValidationError);
         }
     };
 
@@ -277,7 +216,6 @@ export default function Events({
         return () => {
             if (debounceRef.current) clearTimeout(debounceRef.current);
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [search]);
 
     const geocodeVenueName = async () => {
@@ -352,6 +290,7 @@ export default function Events({
     };
 
     const openCreateModal = () => {
+        isEditingLoad.current = false;
         setEditingEvent(null);
         reset();
         clearErrors();
@@ -373,6 +312,7 @@ export default function Events({
     };
 
     const openEditModal = (eventItem: EventItem) => {
+        isEditingLoad.current = true;
         setEditingEvent(eventItem);
         clearErrors();
         setCurrentStep(1);
@@ -382,22 +322,39 @@ export default function Events({
         const hasMultiDay = Boolean(eventItem.event_end_date && eventItem.event_end_date !== eventItem.event_date);
         setIsMultiDay(hasMultiDay);
 
-        const savedLat =
-            eventItem.latitude !== null && eventItem.latitude !== undefined ? Number(eventItem.latitude) : 18.1972;
-        const savedLng =
-            eventItem.longitude !== null && eventItem.longitude !== undefined ? Number(eventItem.longitude) : 120.5928;
+        const savedLat = eventItem.latitude !== null && eventItem.latitude !== undefined ? Number(eventItem.latitude) : 18.1972;
+        const savedLng = eventItem.longitude !== null && eventItem.longitude !== undefined ? Number(eventItem.longitude) : 120.5928;
 
-        const defaultSchedules = getEventDays(eventItem.event_date, eventItem.event_end_date).map((day) => ({
-            date: day,
-            slots: [
-                {
-                    time_in_start: eventItem.time_in_start || '08:00',
-                    time_in_end: eventItem.time_in_end || '',
-                    time_out_start: eventItem.time_out_start || '17:00',
-                    time_out_end: eventItem.time_out_end || '',
-                },
-            ],
-        }));
+        const hasExistingSchedules = eventItem.schedules && eventItem.schedules.length > 0;
+
+        const mappedSchedules = hasExistingSchedules
+            ? eventItem.schedules!.map((sch) => ({
+                  date: sch.date,
+                  slots: sch.slots && sch.slots.length > 0 ? sch.slots : [{
+                      time_in_start: '08:00',
+                      time_in_end: '',
+                      time_out_start: '17:00',
+                      time_out_end: '',
+                  }],
+              }))
+            : getEventDays(eventItem.event_date, eventItem.event_end_date).map((day) => ({
+                  date: day,
+                  slots: [
+                      {
+                          time_in_start: '08:00',
+                          time_in_end: '',
+                          time_out_start: '17:00',
+                          time_out_end: '',
+                      },
+                  ],
+              }));
+
+        const containsMultipleSlots = mappedSchedules.some(s => s.slots && s.slots.length > 1);
+        if (containsMultipleSlots || (hasMultiDay && mappedSchedules.length > 1)) {
+            setScheduleMode('custom');
+        } else {
+            setScheduleMode('uniform');
+        }
 
         setData({
             title: eventItem.title,
@@ -408,11 +365,10 @@ export default function Events({
             latitude: savedLat,
             longitude: savedLng,
             radius_meters: Number(eventItem.radius_meters) || 100,
-            geofence_polygon:
-                eventItem.geofence_polygon && eventItem.geofence_polygon.length >= 3 ? eventItem.geofence_polygon : null,
+            geofence_polygon: eventItem.geofence_polygon && eventItem.geofence_polygon.length >= 3 ? eventItem.geofence_polygon : null,
             event_date: eventItem.event_date,
             event_end_date: eventItem.event_end_date || '',
-            schedules: eventItem.schedules && eventItem.schedules.length > 0 ? eventItem.schedules : defaultSchedules,
+            schedules: mappedSchedules,
             approval_status: eventItem.approval_status || 'approved',
             is_active: Boolean(eventItem.is_active),
         });
@@ -423,7 +379,7 @@ export default function Events({
     const handleFormSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         
-        if (!validateTimeSlots(data.schedules)) {
+        if (!validateTimeSlots(data.schedules, setTimeValidationError)) {
             return;
         }
 
@@ -477,7 +433,6 @@ export default function Events({
             <Head title="Events Management" />
 
             <div className="p-6 space-y-6">
-                {/* SUCCESS BANNER */}
                 {successMessage && (
                     <div className="flex items-center justify-between rounded-2xl bg-emerald-50 border border-emerald-200 p-4 text-emerald-800 shadow-xs transition-all">
                         <div className="flex items-center gap-2 text-sm font-semibold">
@@ -494,7 +449,6 @@ export default function Events({
                     </div>
                 )}
 
-                {/* HEADER */}
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                     <div>
                         <h2 className="text-2xl font-bold text-gray-800">Events Management</h2>
@@ -510,7 +464,6 @@ export default function Events({
                     </button>
                 </div>
 
-                {/* TAB NAVIGATION */}
                 <div className="border-b border-gray-200 bg-white px-4 rounded-2xl shadow-xs">
                     <nav className="-mb-px flex space-x-6 overflow-x-auto">
                         {TABS.map((tab) => {
@@ -538,7 +491,6 @@ export default function Events({
                     </nav>
                 </div>
 
-                {/* SEARCH TOOLBAR */}
                 <div className="flex items-center justify-between bg-white p-4 rounded-2xl border border-gray-100 shadow-xs">
                     <div className="relative w-full sm:w-80">
                         <input
@@ -566,7 +518,6 @@ export default function Events({
                     </div>
                 </div>
 
-                {/* EVENTS — DESKTOP TABLE */}
                 <div className="hidden sm:block overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-xs">
                     <table className="w-full text-left text-sm text-gray-600">
                         <thead className="bg-gray-50 text-xs font-semibold uppercase text-gray-500">
@@ -632,24 +583,40 @@ export default function Events({
                                                 </Link>
                                             </td>
 
+                                            {/* TIME-IN WINDOW (AM/PM Formatted) */}
                                             <td className="px-6 py-4 text-gray-600">
-                                                <Link href={`/admin/analytics/events/${item.event_id}`} className="block">
-                                                    <div className="flex items-center gap-2 font-medium text-emerald-700">
-                                                        <LogIn className="h-4 w-4" />
-                                                        <span>{item.time_in_start}</span>
-                                                        {item.time_in_end && <span className="text-gray-400">- {item.time_in_end}</span>}
-                                                    </div>
+                                                <Link href={`/admin/analytics/events/${item.event_id}`} className="block space-y-1.5">
+                                                    {item?.schedules?.[0]?.slots && item.schedules[0].slots.length > 0 ? (
+                                                        item.schedules[0].slots.map((slot, index) => (
+                                                            <div key={index} className="flex items-center gap-2 font-medium text-emerald-700 text-xs">
+                                                                <LogIn className="h-3.5 w-3.5 shrink-0" />
+                                                                <span>{formatAMPM(slot?.time_in_start)}</span>
+                                                                {slot?.time_in_end && (
+                                                                    <span className="text-gray-400">- {formatAMPM(slot.time_in_end)}</span>
+                                                                )}
+                                                            </div>
+                                                        ))
+                                                    ) : (
+                                                        <span className="text-gray-300">N/A</span>
+                                                    )}
                                                 </Link>
                                             </td>
 
+                                            {/* TIME-OUT WINDOW (AM/PM Formatted) */}
                                             <td className="px-6 py-4 text-gray-600">
-                                                <Link href={`/admin/analytics/events/${item.event_id}`} className="block">
-                                                    {item.time_out_start ? (
-                                                        <div className="flex items-center gap-2 font-medium text-amber-700">
-                                                            <LogOut className="h-4 w-4" />
-                                                            <span>{item.time_out_start}</span>
-                                                            {item.time_out_end && <span className="text-gray-400">- {item.time_out_end}</span>}
-                                                        </div>
+                                                <Link href={`/admin/analytics/events/${item.event_id}`} className="block space-y-1.5">
+                                                    {item?.schedules?.[0]?.slots?.some(slot => slot?.time_out_start) ? (
+                                                        item.schedules[0].slots.map((slot, index) => (
+                                                            slot?.time_out_start ? (
+                                                                <div key={index} className="flex items-center gap-2 font-medium text-amber-700 text-xs">
+                                                                    <LogOut className="h-3.5 w-3.5 shrink-0" />
+                                                                    <span>{formatAMPM(slot.time_out_start)}</span>
+                                                                    {slot?.time_out_end && (
+                                                                        <span className="text-gray-400">- {formatAMPM(slot.time_out_end)}</span>
+                                                                    )}
+                                                                </div>
+                                                            ) : null
+                                                        ))
                                                     ) : (
                                                         <span className="text-gray-300">Disabled</span>
                                                     )}
@@ -722,7 +689,6 @@ export default function Events({
                     </table>
                 </div>
 
-                {/* PAGINATION */}
                 {events.links.length > 3 && (
                     <nav className="flex flex-wrap items-center justify-center gap-1.5" aria-label="Pagination">
                         {events.links.map((link, idx) => (
@@ -745,11 +711,10 @@ export default function Events({
                 )}
             </div>
 
-            {/* 3-STEP WIZARD FORM MODAL */}
+            {/* WIZARD FORM MODAL */}
             {isFormOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-xs">
                     <div className="flex w-full max-w-3xl max-h-[92vh] flex-col rounded-3xl bg-white shadow-2xl transition-all">
-                        {/* Modal Header */}
                         <div className="flex items-center justify-between border-b border-gray-100 p-6 pb-4">
                             <div className="flex items-center gap-3">
                                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#1B1F5C]/10 text-[#1B1F5C]">
@@ -790,8 +755,6 @@ export default function Events({
                         )}
 
                         <form id="event-form" onSubmit={handleFormSubmit} className="flex-1 overflow-y-auto px-6 py-4 space-y-5 text-sm">
-                            
-                            {/* ================= STEP 1: EVENT DETAILS & SCHEDULES ================= */}
                             {currentStep === 1 && (
                                 <div className="space-y-4 animate-fadeIn">
                                     <div>
@@ -823,7 +786,6 @@ export default function Events({
                                         />
                                     </div>
 
-                                    {/* Multi-Day Range Toggle */}
                                     <div className="rounded-2xl border border-gray-200 bg-gray-50/50 p-4 space-y-3">
                                         <FormSwitch
                                             checked={isMultiDay}
@@ -868,7 +830,6 @@ export default function Events({
                                         </div>
                                     </div>
 
-                                    {/* MULTI-DAY SCHEDULE MODE SELECTOR (Uniform vs Custom) */}
                                     {isMultiDay && (
                                         <div className="rounded-2xl border border-blue-100 bg-blue-50/40 p-4 space-y-3">
                                             <label className="block font-bold text-blue-900 uppercase tracking-wider text-xs">
@@ -901,7 +862,6 @@ export default function Events({
                                         </div>
                                     )}
 
-                                    {/* UNIFORM SCHEDULE CONFIG (If Multi-Day + Uniform) */}
                                     {isMultiDay && scheduleMode === 'uniform' && (
                                         <div className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4 space-y-3">
                                             <div className="flex items-center gap-2 font-bold text-emerald-800 text-xs">
@@ -909,7 +869,6 @@ export default function Events({
                                                 <span>Uniform Hours (Applied to All Days)</span>
                                             </div>
 
-                                            {/* Time-In Row */}
                                             <div className="grid grid-cols-2 gap-3 items-end pt-2 border-t border-emerald-200/50">
                                                 <div>
                                                     <label className="block font-bold text-gray-600 text-xs">Time-In Start *</label>
@@ -932,7 +891,6 @@ export default function Events({
                                                 </div>
                                             </div>
 
-                                            {/* Time-Out Row */}
                                             <div className="grid grid-cols-2 gap-3 items-end pt-2 border-t border-emerald-200/50">
                                                 <div>
                                                     <label className="block font-bold text-gray-600 text-xs">Time-Out Start</label>
@@ -956,7 +914,6 @@ export default function Events({
                                         </div>
                                     )}
 
-                                    {/* CUSTOM DAILY SCHEDULES OR SINGLE-DAY CONFIG (WITH MULTIPLE SLOTS + ADD BUTTON) */}
                                     {(!isMultiDay || scheduleMode === 'custom') &&
                                         data.schedules.map((schedule, dayIndex) => {
                                             const dayNumber = dayIndex + 1;
@@ -983,7 +940,7 @@ export default function Events({
                                                                     time_out_end: '17:30',
                                                                 });
                                                                 setData('schedules', updated);
-                                                                validateTimeSlots(updated);
+                                                                validateTimeSlots(updated, setTimeValidationError);
                                                             }}
                                                             className="inline-flex items-center gap-1 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 transition"
                                                         >
@@ -1001,7 +958,7 @@ export default function Events({
                                                                         const updated = [...data.schedules];
                                                                         updated[dayIndex].slots.splice(slotIndex, 1);
                                                                         setData('schedules', updated);
-                                                                        validateTimeSlots(updated);
+                                                                        validateTimeSlots(updated, setTimeValidationError);
                                                                     }}
                                                                     className="absolute right-2 top-2 rounded-lg p-1 text-gray-400 hover:bg-rose-50 hover:text-rose-600 transition"
                                                                     title="Remove Slot"
@@ -1014,7 +971,6 @@ export default function Events({
                                                                 Slot {slotIndex + 1}
                                                             </span>
 
-                                                            {/* Time-In Inputs */}
                                                             <div className="grid grid-cols-2 gap-3 items-end">
                                                                 <div>
                                                                     <label className="block font-bold text-gray-600 text-xs">Time-In Start *</label>
@@ -1026,7 +982,7 @@ export default function Events({
                                                                             const updated = [...data.schedules];
                                                                             updated[dayIndex].slots[slotIndex].time_in_start = e.target.value;
                                                                             setData('schedules', updated);
-                                                                            validateTimeSlots(updated);
+                                                                            validateTimeSlots(updated, setTimeValidationError);
                                                                         }}
                                                                         className="mt-1.5 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-gray-800 font-medium text-sm"
                                                                     />
@@ -1040,14 +996,13 @@ export default function Events({
                                                                             const updated = [...data.schedules];
                                                                             updated[dayIndex].slots[slotIndex].time_in_end = e.target.value;
                                                                             setData('schedules', updated);
-                                                                            validateTimeSlots(updated);
+                                                                            validateTimeSlots(updated, setTimeValidationError);
                                                                         }}
                                                                         className="mt-1.5 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-gray-800 font-medium text-sm"
                                                                     />
                                                                 </div>
                                                             </div>
 
-                                                            {/* Time-Out Inputs */}
                                                             <div className="grid grid-cols-2 gap-3 items-end pt-2 border-t border-gray-100">
                                                                 <div>
                                                                     <label className="block font-bold text-gray-600 text-xs">Time-Out Start</label>
@@ -1058,7 +1013,7 @@ export default function Events({
                                                                             const updated = [...data.schedules];
                                                                             updated[dayIndex].slots[slotIndex].time_out_start = e.target.value;
                                                                             setData('schedules', updated);
-                                                                            validateTimeSlots(updated);
+                                                                            validateTimeSlots(updated, setTimeValidationError);
                                                                         }}
                                                                         className="mt-1.5 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-gray-800 font-medium text-sm"
                                                                     />
@@ -1072,7 +1027,7 @@ export default function Events({
                                                                             const updated = [...data.schedules];
                                                                             updated[dayIndex].slots[slotIndex].time_out_end = e.target.value;
                                                                             setData('schedules', updated);
-                                                                            validateTimeSlots(updated);
+                                                                            validateTimeSlots(updated, setTimeValidationError);
                                                                         }}
                                                                         className="mt-1.5 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-gray-800 font-medium text-sm"
                                                                     />
@@ -1086,7 +1041,6 @@ export default function Events({
                                 </div>
                             )}
 
-                            {/* ================= STEP 2: VENUE & GEOFENCING ================= */}
                             {currentStep === 2 && (
                                 <div className="space-y-4 animate-fadeIn">
                                     <div>
@@ -1133,7 +1087,6 @@ export default function Events({
                                         )}
                                     </div>
 
-                                    {/* GEOFENCE CONFIGURATION */}
                                     <div className="rounded-2xl border border-blue-100 bg-blue-50/30 p-4 space-y-3">
                                         <div className="flex items-center justify-between">
                                             <div className="flex items-center gap-2 font-bold text-blue-900 text-xs">
@@ -1210,7 +1163,6 @@ export default function Events({
                                 </div>
                             )}
 
-                            {/* ================= STEP 3: REVIEW & CONFIRMATION ================= */}
                             {currentStep === 3 && (
                                 <div className="space-y-4 animate-fadeIn">
                                     <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4 space-y-3">
@@ -1255,7 +1207,6 @@ export default function Events({
                             )}
                         </form>
 
-                        {/* WIZARD FOOTER NAVIGATION */}
                         <div className="flex items-center justify-between border-t border-gray-100 p-6 pt-4">
                             <div>
                                 {currentStep > 1 && (
