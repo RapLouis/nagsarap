@@ -79,8 +79,8 @@ class AttendanceController extends Controller
             ], 422);
         }
 
-        // 1. Strict Time Slot Window Alignment
-        $appTimezone = config('app.timezone', 'UTC');
+        // 1. Strict Time Slot Window Alignment (Supports both Time-In and Time-Out)
+        $appTimezone = config('app.timezone', 'Asia/Manila');
         $now = Carbon::now($appTimezone);
         $today = $now->toDateString();
 
@@ -90,7 +90,7 @@ class AttendanceController extends Controller
             return response()->json([
                 'success' => false,
                 'code' => 'NO_SCHEDULE_TODAY',
-                'message' => 'No active schedule or time slots configured for today.',
+                'message' => 'No active schedule configured for today.',
             ], 422);
         }
 
@@ -100,15 +100,25 @@ class AttendanceController extends Controller
             return response()->json([
                 'success' => false,
                 'code' => 'NO_SLOTS_TODAY',
-                'message' => 'No active schedule or time slots configured for today.',
+                'message' => 'No active schedule slots configured for today.',
             ], 422);
         }
 
+        $checkType = $validated['type'] ?? 'time_in';
         $allowedTimeWindow = false;
+
         foreach ($slots as $slot) {
-            if (!empty($slot['time_in_start'])) {
-                $start = Carbon::parse($today . ' ' . $slot['time_in_start'], $appTimezone);
-                $cutoff = !empty($slot['time_in_end']) ? Carbon::parse($today . ' ' . $slot['time_in_end'], $appTimezone) : null;
+            if ($checkType === 'time_out') {
+                $startStr = $slot['time_out_start'] ?? $slot['time_in_start'] ?? null;
+                $endStr = $slot['time_out_end'] ?? $slot['time_in_end'] ?? null;
+            } else {
+                $startStr = $slot['time_in_start'] ?? null;
+                $endStr = $slot['time_in_end'] ?? null;
+            }
+
+            if (!empty($startStr)) {
+                $start = Carbon::parse($today . ' ' . $startStr, $appTimezone);
+                $cutoff = !empty($endStr) ? Carbon::parse($today . ' ' . $endStr, $appTimezone) : null;
 
                 if ($cutoff) {
                     if ($now->between($start, $cutoff)) {
@@ -128,7 +138,7 @@ class AttendanceController extends Controller
             return response()->json([
                 'success' => false,
                 'code' => 'TIME_WINDOW_CLOSED',
-                'message' => 'Attendance is currently closed. You can only check in during designated time slots.',
+                'message' => 'Attendance is currently closed for ' . str_replace('_', ' ', $checkType) . '.',
             ], 422);
         }
 
