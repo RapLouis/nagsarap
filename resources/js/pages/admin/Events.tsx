@@ -554,12 +554,12 @@ export default function Events({
                     <table className="w-full text-left text-sm text-gray-600">
                         <thead className="bg-gray-50 text-xs font-semibold uppercase text-gray-500">
                             <tr>
-                                <th className="px-6 py-4">Event Details[cite: 10]</th>
-                                <th className="px-6 py-4">Geofence Type[cite: 10]</th>
-                                <th className="px-6 py-4">Time-In Window[cite: 10]</th>
-                                <th className="px-6 py-4">Time-Out Window[cite: 10]</th>
-                                <th className="px-6 py-4">Status[cite: 10]</th>
-                                <th className="px-6 py-4 text-right">Actions[cite: 10]</th>
+                                <th className="px-6 py-4">Event Details</th>
+                                <th className="px-6 py-4">Geofence Type</th>
+                                <th className="px-6 py-4">Time-In Window</th>
+                                <th className="px-6 py-4">Time-Out Window</th>
+                                <th className="px-6 py-4">Status</th>
+                                <th className="px-6 py-4 text-right">Actions</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 text-sm">
