@@ -79,8 +79,7 @@ class AttendanceController extends Controller
             ], 422);
         }
 
-        // 1. Strict Time Slot Window Alignment
-        $appTimezone = config('app.timezone', 'UTC');
+        $appTimezone = config('app.timezone', 'Asia/Manila');
         $now = Carbon::now($appTimezone);
         $today = $now->toDateString();
 
@@ -90,7 +89,7 @@ class AttendanceController extends Controller
             return response()->json([
                 'success' => false,
                 'code' => 'NO_SCHEDULE_TODAY',
-                'message' => 'No active schedule or time slots configured for today.',
+                'message' => 'No active schedule configured for today.',
             ], 422);
         }
 
@@ -100,15 +99,25 @@ class AttendanceController extends Controller
             return response()->json([
                 'success' => false,
                 'code' => 'NO_SLOTS_TODAY',
-                'message' => 'No active schedule or time slots configured for today.',
+                'message' => 'No active schedule slots configured for today.',
             ], 422);
         }
 
+        $checkType = $validated['type'] ?? 'time_in';
         $allowedTimeWindow = false;
+
         foreach ($slots as $slot) {
-            if (!empty($slot['time_in_start'])) {
-                $start = Carbon::parse($today . ' ' . $slot['time_in_start'], $appTimezone);
-                $cutoff = !empty($slot['time_in_end']) ? Carbon::parse($today . ' ' . $slot['time_in_end'], $appTimezone) : null;
+            if ($checkType === 'time_out') {
+                $startStr = $slot['time_out_start'] ?? $slot['time_in_start'] ?? null;
+                $endStr = $slot['time_out_end'] ?? $slot['time_in_end'] ?? null;
+            } else {
+                $startStr = $slot['time_in_start'] ?? null;
+                $endStr = $slot['time_in_end'] ?? null;
+            }
+
+            if (!empty($startStr)) {
+                $start = Carbon::parse($today . ' ' . $startStr, $appTimezone);
+                $cutoff = !empty($endStr) ? Carbon::parse($today . ' ' . $endStr, $appTimezone) : null;
 
                 if ($cutoff) {
                     if ($now->between($start, $cutoff)) {
@@ -128,11 +137,10 @@ class AttendanceController extends Controller
             return response()->json([
                 'success' => false,
                 'code' => 'TIME_WINDOW_CLOSED',
-                'message' => 'Attendance is currently closed. You can only check in during designated time slots.',
+                'message' => 'Attendance is currently closed for ' . str_replace('_', ' ', $checkType) . '.',
             ], 422);
         }
 
-        // 2. Geofence Check
         if ($event->is_geofenced && $event->latitude && $event->longitude) {
             $distance = $this->calculateDistance(
                 (float) $validated['latitude'],
@@ -151,7 +159,6 @@ class AttendanceController extends Controller
             }
         }
 
-        // 3. Challenge Consumption
         $challenge = $challenges->consume(
             $student->student_id,
             $validated['challenge_nonce'],
@@ -172,7 +179,6 @@ class AttendanceController extends Controller
 
         $direction = $challenge['direction'];
 
-        // 4. Biometric Liveness Verification
         try {
             $liveness = $bio->verifyLiveness(
                 $direction,
@@ -201,7 +207,6 @@ class AttendanceController extends Controller
             ], 422);
         }
 
-        // 5. Save Attendance Record
         try {
             $attendance = $service->record(
                 user: $user,
@@ -213,6 +218,8 @@ class AttendanceController extends Controller
                     ? (float) $validated['location_accuracy']
                     : null,
                 livenessPassed: true,
+                sessionType: $checkType,
+                type: $checkType,
                 source: 'mobile_online',
                 isOfflineSync: false
             );
@@ -266,11 +273,24 @@ class AttendanceController extends Controller
             'location_accuracy' => ['nullable', 'numeric', 'min:0', 'max:10000'],
             'center_frame' => ['required', 'image', 'mimes:jpeg,jpg,png', 'max:5048'],
             'turned_frame' => ['required', 'image', 'mimes:jpeg,jpg,png', 'max:5048'],
+            'type' => ['nullable', 'string', 'in:time_in,time_out'],
+            'session_type' => ['nullable', 'string', 'in:time_in,time_out'],
         ]);
 
         $user = $request->user();
+        $student = $user?->student;
+
+        if (!$student) {
+            return response()->json([
+                'success' => false,
+                'code' => 'STUDENT_REQUIRED',
+                'message' => 'Student record not found.',
+            ], 403);
+        }
+
         $event = Event::findOrFail($validated['event_id']);
         $direction = $validated['liveness_direction'];
+        $sessionType = $validated['type'] ?? $validated['session_type'] ?? 'time_in';
 
         try {
             $liveness = $bio->verifyLiveness(
@@ -307,6 +327,8 @@ class AttendanceController extends Controller
                 livenessPassed: true,
                 attendanceUuid: $validated['attendance_uuid'],
                 attendanceTime: $validated['attendance_time'],
+                sessionType: $sessionType,
+                type: $sessionType,
                 source: 'mobile_offline',
                 isOfflineSync: true
             );
@@ -317,6 +339,12 @@ class AttendanceController extends Controller
                 'message' => $e->getMessage(),
                 'data' => $e->data,
             ], $e->httpStatus);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'success' => false,
+                'code' => 'ATTENDANCE_RECORD_ERROR',
+                'message' => $e->getMessage(),
+            ], 500);
         }
 
         $this->notify($request, $event, true, 'Offline attendance synchronized successfully.', $attendance->status);
