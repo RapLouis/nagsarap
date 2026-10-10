@@ -194,8 +194,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       backgroundImage:
           _profilePhoto != null ? MemoryImage(_profilePhoto!) : null,
       child: _profilePhoto == null
-          ? Icon(Icons.person_rounded,
-              color: const Color(0xFF64748B), size: radius * 1.2)
+          ? Icon(
+              Icons.person_rounded,
+              color: const Color(0xFF64748B),
+              size: radius * 1.2,
+            )
           : null,
     );
   }
@@ -358,6 +361,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _showProfileMenu() async {
+    await _openProfile();
+  }
+
   Future<void> _openAttendanceScannerForEvent(EventItem event) async {
     final hasTimeIn = _hasTimeInForEvent(event);
     final hasTimeOut = _hasTimeOutForEvent(event);
@@ -422,7 +429,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   const Text(
                     'Select Event',
                     style: TextStyle(
-                        fontSize: 22, fontWeight: FontWeight.w800, color: navy),
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                      color: navy,
+                    ),
                   ),
                   const SizedBox(height: 4),
                   const Text(
@@ -440,7 +450,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       ),
                       child: ListTile(
                         contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 4),
+                          horizontal: 16,
+                          vertical: 4,
+                        ),
                         leading: Container(
                           width: 42,
                           height: 42,
@@ -448,20 +460,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             color: gold.withValues(alpha: 0.2),
                             shape: BoxShape.circle,
                           ),
-                          child: const Icon(Icons.event_available_rounded,
-                              color: navy),
+                          child: const Icon(
+                            Icons.event_available_rounded,
+                            color: navy,
+                          ),
                         ),
                         title: Text(
                           event.name,
                           style: const TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 15,
-                              color: navy),
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15,
+                            color: navy,
+                          ),
                         ),
-                        subtitle: Text(_eventSubtitle(event),
-                            style: const TextStyle(fontSize: 12)),
-                        trailing:
-                            const Icon(Icons.chevron_right_rounded, color: navy),
+                        subtitle: Text(
+                          _eventSubtitle(event),
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        trailing: const Icon(
+                          Icons.chevron_right_rounded,
+                          color: navy,
+                        ),
                         onTap: () => Navigator.pop(sheetContext, event),
                       ),
                     ),
@@ -531,8 +550,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
                 const SizedBox(height: 12),
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
                   decoration: BoxDecoration(
                     color: isCompleted
                         ? const Color(0xFFDCFCE7)
@@ -714,7 +735,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         ),
                         Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 4),
+                            horizontal: 10,
+                            vertical: 4,
+                          ),
                           decoration: BoxDecoration(
                             color: navy.withValues(alpha: 0.08),
                             borderRadius: BorderRadius.circular(12),
@@ -735,7 +758,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       const Padding(
                         padding: EdgeInsets.symmetric(vertical: 80),
                         child: Center(
-                            child: CircularProgressIndicator(color: navy)),
+                          child: CircularProgressIndicator(color: navy),
+                        ),
                       )
                     else ...[
                       if (_pendingOfflineCount > 0 || _syncingOffline) ...[
@@ -777,7 +801,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         color: navy,
         boxShadow: [
           BoxShadow(
-              color: Color(0x1A080878), blurRadius: 10, offset: Offset(0, 4)),
+            color: Color(0x1A080878),
+            blurRadius: 10,
+            offset: Offset(0, 4),
+          ),
         ],
       ),
       child: Row(
@@ -872,7 +899,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         border: Border.all(color: gold.withValues(alpha: 0.6)),
         boxShadow: const [
           BoxShadow(
-              color: Color(0x08000000), blurRadius: 10, offset: Offset(0, 4)),
+            color: Color(0x08000000),
+            blurRadius: 10,
+            offset: Offset(0, 4),
+          ),
         ],
       ),
       child: Row(
@@ -890,10 +920,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     width: 22,
                     height: 22,
                     child: CircularProgressIndicator(
-                        strokeWidth: 2.5, color: navy),
+                      strokeWidth: 2.5,
+                      color: navy,
+                    ),
                   )
-                : const Icon(Icons.cloud_upload_outlined,
-                    color: navy, size: 24),
+                : const Icon(
+                    Icons.cloud_upload_outlined,
+                    color: navy,
+                    size: 24,
+                  ),
           ),
           const SizedBox(width: 14),
           Expanded(
@@ -905,7 +940,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       ? 'Synchronizing attendance'
                       : 'Pending offline attendance',
                   style: const TextStyle(
-                      color: navy, fontSize: 14, fontWeight: FontWeight.w800),
+                    color: navy,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
                 const SizedBox(height: 3),
                 Text(
@@ -913,7 +951,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       ? 'Verifying saved records with server.'
                       : '$_pendingOfflineCount record${_pendingOfflineCount == 1 ? '' : 's'} waiting for sync.',
                   style: const TextStyle(
-                      color: Color(0xFF786200), fontSize: 11.5, height: 1.35),
+                    color: Color(0xFF786200),
+                    fontSize: 11.5,
+                    height: 1.35,
+                  ),
                 ),
               ],
             ),
@@ -1071,9 +1112,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         child: Text(
                           label,
                           style: const TextStyle(
-                              color: navy,
-                              fontSize: 20,
-                              fontWeight: FontWeight.w800),
+                            color: navy,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
                       ),
                       IconButton(
@@ -1086,8 +1128,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   Expanded(
                     child: events.isEmpty
                         ? const Center(
-                            child: Text('No events scheduled.',
-                                style: TextStyle(color: muted)),
+                            child: Text(
+                              'No events scheduled.',
+                              style: TextStyle(color: muted),
+                            ),
                           )
                         : ListView.separated(
                             itemCount: events.length,
@@ -1101,12 +1145,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                   color: const Color(0xFFF8FAFC),
                                   borderRadius: BorderRadius.circular(14),
                                   border: Border.all(
-                                      color: const Color(0xFFE2E8F0)),
+                                    color: const Color(0xFFE2E8F0),
+                                  ),
                                 ),
-                                child: Text(event.name,
-                                    style: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: navy)),
+                                child: Text(
+                                  event.name,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: navy,
+                                  ),
+                                ),
                               );
                             },
                           ),
@@ -1176,8 +1224,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ],
                 ),
               ),
-              const Icon(Icons.arrow_forward_ios_rounded,
-                  color: navy, size: 14),
+              const Icon(
+                Icons.arrow_forward_ios_rounded,
+                color: navy,
+                size: 14,
+              ),
             ],
           ),
         ),
@@ -1199,8 +1250,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           children: [
             Icon(Icons.event_busy_outlined, color: navy, size: 40),
             SizedBox(height: 10),
-            Text('No activity today',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: navy)),
+            Text(
+              'No activity today',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: navy,
+              ),
+            ),
           ],
         ),
       );
@@ -1209,8 +1266,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text("Today's Events",
-            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: navy)),
+        const Text(
+          "Today's Events",
+          style: TextStyle(
+            fontSize: 17,
+            fontWeight: FontWeight.w800,
+            color: navy,
+          ),
+        ),
         const SizedBox(height: 12),
         for (final event in _todayEvents) ...[
           _buildEventCard(event, today: true),
@@ -1227,12 +1290,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Text('Upcoming Events',
-                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: navy)),
+            const Text(
+              'Upcoming Events',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w800,
+                color: navy,
+              ),
+            ),
             TextButton(
               onPressed: _openCalendar,
-              child: const Text('View Calendar',
-                  style: TextStyle(color: navy, fontWeight: FontWeight.bold)),
+              child: const Text(
+                'View Calendar',
+                style: TextStyle(color: navy, fontWeight: FontWeight.bold),
+              ),
             ),
           ],
         ),
@@ -1270,7 +1341,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             border: Border.all(
               color: isCompleted
                   ? const Color(0xFFBBF7D0)
-                  : (isTimeInDone ? const Color(0xFFFDE68A) : const Color(0xFFE2E8F0)),
+                  : (isTimeInDone
+                      ? const Color(0xFFFDE68A)
+                      : const Color(0xFFE2E8F0)),
             ),
             boxShadow: const [
               BoxShadow(
@@ -1301,10 +1374,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           child: Text(
                             event.name,
                             style: const TextStyle(
-                                fontSize: 15, fontWeight: FontWeight.bold, color: navy),
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                              color: navy,
+                            ),
                           ),
                         ),
-                        const Icon(Icons.chevron_right_rounded, color: muted, size: 20),
+                        const Icon(
+                          Icons.chevron_right_rounded,
+                          color: muted,
+                          size: 20,
+                        ),
                       ],
                     ),
                     const SizedBox(height: 6),
@@ -1336,54 +1416,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           Text(_error ?? 'Error loading dashboard.'),
         ],
       ),
-    );
-  }
-
-  Future<void> _showProfileMenu() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      builder: (ctx) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.person_rounded, color: navy),
-                  title: Text(_fullName, style: const TextStyle(fontWeight: FontWeight.bold)),
-                  subtitle: Text(_studentNumber),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _openProfile();
-                  },
-                ),
-                const Divider(),
-                ListTile(
-                  leading: const Icon(Icons.logout_rounded, color: Colors.red),
-                  title: const Text('Log Out', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _confirmLogout();
-                  },
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Future<void> _confirmLogout() async {
-    await AuthService.instance.logout();
-    if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute<void>(builder: (_) => const AuthGate()),
-      (route) => false,
     );
   }
 

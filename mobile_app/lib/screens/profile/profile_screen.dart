@@ -1,10 +1,12 @@
-import 'package:flutter/material.dart';
-
 import 'dart:typed_data';
 
+import 'package:flutter/material.dart';
+
 import '../../models/student_profile.dart';
+import '../../services/auth_service.dart';
 import '../../services/profile_service.dart';
 import '../../widgets/main_bottom_navigation.dart';
+import '../auth/auth_gate.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -15,11 +17,8 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen> {
   static const Color navy = Color(0xFF080878);
-
   static const Color gold = Color(0xFFFFC800);
-
   static const Color background = Color(0xFFF6F6F6);
-
   static const Color muted = Color(0xFF777783);
 
   bool _loading = true;
@@ -31,7 +30,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   void initState() {
     super.initState();
-
     _loadProfile();
   }
 
@@ -51,13 +49,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final result = results[0] as ProfileResult;
     final photo = results[1] as Uint8List?;
 
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
 
     setState(() {
       _loading = false;
-
       if (result.success && result.profile != null) {
         _profile = result.profile;
         _profilePhoto = photo;
@@ -68,6 +63,48 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _error = result.message;
       }
     });
+  }
+
+  Future<void> _confirmLogout() async {
+    final shouldLogout = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        title: const Text(
+          'Confirm Logout',
+          style: TextStyle(fontWeight: FontWeight.bold, color: navy),
+        ),
+        content: const Text('Are you sure you want to log out of your account?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: muted)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFDC2626),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            child: const Text('Log Out'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldLogout == true) {
+      await AuthService.instance.logout();
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute<void>(builder: (_) => const AuthGate()),
+        (route) => false,
+      );
+    }
   }
 
   @override
@@ -82,6 +119,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
           'Profile',
           style: TextStyle(fontWeight: FontWeight.w700),
         ),
+        actions: [
+          // Upper Right Log Out Button
+          IconButton(
+            tooltip: 'Log Out',
+            onPressed: _confirmLogout,
+            icon: const Icon(Icons.logout_rounded, color: Colors.white),
+          ),
+        ],
       ),
       body: RefreshIndicator(
         color: navy,
@@ -120,9 +165,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       padding: const EdgeInsets.fromLTRB(18, 22, 18, 112),
       children: [
         _buildProfileHeader(profile),
-
         const SizedBox(height: 18),
-
         _buildSection(
           title: 'Personal Information',
           children: [
@@ -144,9 +187,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           ],
         ),
-
         const SizedBox(height: 16),
-
         _buildSection(
           title: 'Academic Information',
           children: [
@@ -173,10 +214,32 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           ],
         ),
-
         const SizedBox(height: 16),
-
         _buildVerificationCard(profile),
+        const SizedBox(height: 24),
+        // Bottom Log Out Button
+        SizedBox(
+          width: double.infinity,
+          height: 48,
+          child: OutlinedButton.icon(
+            onPressed: _confirmLogout,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFFDC2626),
+              side: const BorderSide(color: Color(0xFFFCA5A5)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+            ),
+            icon: const Icon(Icons.logout_rounded, size: 20),
+            label: const Text(
+              'Log Out',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -211,9 +274,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   : const Icon(Icons.person_rounded, color: navy, size: 50),
             ),
           ),
-
           const SizedBox(height: 15),
-
           Text(
             profile.displayName,
             textAlign: TextAlign.center,
@@ -223,7 +284,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
               fontWeight: FontWeight.w800,
             ),
           ),
-
           if (profile.studentNumber.isNotEmpty) ...[
             const SizedBox(height: 5),
             Text(
@@ -275,14 +335,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Widget _buildVerificationCard(StudentProfile profile) {
     final verified = profile.isVerified;
-
-    final statusColor = verified
-        ? const Color(0xFF159947)
-        : const Color(0xFFD97706);
-
-    final statusBackground = verified
-        ? const Color(0xFFE8F6EC)
-        : const Color(0xFFFFF3CD);
+    final statusColor =
+        verified ? const Color(0xFF159947) : const Color(0xFFD97706);
+    final statusBackground =
+        verified ? const Color(0xFFE8F6EC) : const Color(0xFFFFF3CD);
 
     return Container(
       width: double.infinity,
@@ -310,9 +366,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               size: 27,
             ),
           ),
-
           const SizedBox(width: 13),
-
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -339,9 +393,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ],
             ),
           ),
-
           const SizedBox(width: 8),
-
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             decoration: BoxDecoration(
@@ -373,9 +425,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       child: Column(
         children: [
           const Icon(Icons.error_outline_rounded, color: Colors.red, size: 46),
-
           const SizedBox(height: 13),
-
           const Text(
             'Unable to load profile',
             style: TextStyle(
@@ -384,17 +434,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
               fontWeight: FontWeight.w700,
             ),
           ),
-
           const SizedBox(height: 8),
-
           Text(
             _error ?? 'Please try again.',
             textAlign: TextAlign.center,
             style: const TextStyle(color: muted, fontSize: 13),
           ),
-
           const SizedBox(height: 18),
-
           FilledButton(
             onPressed: _loadProfile,
             style: FilledButton.styleFrom(
@@ -410,11 +456,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   String _display(String value) {
     final clean = value.trim();
-
-    if (clean.isEmpty) {
-      return 'Not available';
-    }
-
+    if (clean.isEmpty) return 'Not available';
     return clean;
   }
 
@@ -422,17 +464,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (profile.verificationStatus.trim().isEmpty) {
       return 'Verification status is not available.';
     }
-
     return 'Current status: ${_statusLabel(profile.verificationStatus)}.';
   }
 
   String _statusLabel(String value) {
     final clean = value.trim();
-
-    if (clean.isEmpty) {
-      return 'Pending';
-    }
-
+    if (clean.isEmpty) return 'Pending';
     return clean
         .split(RegExp(r'[_\s]+'))
         .where((word) => word.isNotEmpty)
@@ -476,9 +513,7 @@ class _ProfileRow extends StatelessWidget {
                 ),
                 child: Icon(icon, color: _ProfileScreenState.navy, size: 20),
               ),
-
               const SizedBox(width: 12),
-
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -491,9 +526,7 @@ class _ProfileRow extends StatelessWidget {
                         fontWeight: FontWeight.w500,
                       ),
                     ),
-
                     const SizedBox(height: 4),
-
                     Text(
                       value,
                       style: const TextStyle(
@@ -509,7 +542,6 @@ class _ProfileRow extends StatelessWidget {
             ],
           ),
         ),
-
         if (showDivider)
           const Padding(
             padding: EdgeInsets.only(left: 67),
