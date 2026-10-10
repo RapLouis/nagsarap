@@ -26,15 +26,15 @@ class MainBottomNavigation extends StatelessWidget {
     VoidCallback? onPressed,
   }) {
     return Container(
-      width: 62,
-      height: 62,
+      width: 58,
+      height: 58,
       decoration: BoxDecoration(
         color: const Color(0xFFFFC800),
         shape: BoxShape.circle,
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFFFFC800).withValues(alpha: 0.4),
-            blurRadius: 12,
+            color: const Color(0xFFFFC800).withValues(alpha: 0.35),
+            blurRadius: 14,
             offset: const Offset(0, 4),
           ),
         ],
@@ -46,7 +46,7 @@ class MainBottomNavigation extends StatelessWidget {
         child: const Icon(
           Icons.qr_code_scanner_rounded,
           color: Color(0xFF080878),
-          size: 28,
+          size: 26,
         ),
       ),
     );
@@ -55,99 +55,117 @@ class MainBottomNavigation extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = themeController.isDarkMode;
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
     final backgroundColor = isDark ? const Color(0xFF1E293B) : Colors.white;
     final unselectedColor =
-        isDark ? const Color(0xFF94A3B8) : const Color(0xFF808080);
+        isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
     final selectedColor =
         isDark ? const Color(0xFFFFC800) : const Color(0xFF080878);
 
     return Container(
-      height: 72,
       decoration: BoxDecoration(
         color: backgroundColor,
-        boxShadow: const [
+        boxShadow: [
           BoxShadow(
-            color: Color(0x1A000000),
-            blurRadius: 10,
-            offset: Offset(0, -2),
+            color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.06),
+            blurRadius: 16,
+            offset: const Offset(0, -4),
           ),
         ],
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          _navItem(
-            context,
-            icon: Icons.home_rounded,
-            label: 'Home',
-            isSelected: currentIndex == 0,
-            selectedColor: selectedColor,
-            unselectedColor: unselectedColor,
-            onTap: () {
-              if (currentIndex == 0) {
-                onHomeRefresh?.call();
-              } else {
-                Navigator.of(context).pushAndRemoveUntil(
-                  MaterialPageRoute<void>(builder: (_) => const HomeScreen()),
-                  (route) => false,
-                );
-              }
-            },
+      child: SafeArea(
+        top: false,
+        bottom: true,
+        child: Padding(
+          padding: EdgeInsets.only(
+            top: 8,
+            bottom: bottomInset > 0 ? 0 : 6,
           ),
-          _navItem(
-            context,
-            icon: Icons.notifications_rounded,
-            label: 'Notifications',
-            isSelected: currentIndex == 1,
-            badgeCount: notificationBadge,
-            selectedColor: selectedColor,
-            unselectedColor: unselectedColor,
-            onTap: () {
-              if (currentIndex != 1) {
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const NotificationsScreen(),
-                  ),
-                );
-              }
-            },
+          child: SizedBox(
+            height: 60,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _navItem(
+                  context,
+                  icon: Icons.grid_view_rounded,
+                  label: 'Home',
+                  isSelected: currentIndex == 0,
+                  selectedColor: selectedColor,
+                  unselectedColor: unselectedColor,
+                  onTap: () {
+                    if (currentIndex == 0) {
+                      onHomeRefresh?.call();
+                    } else {
+                      Navigator.of(context).pushAndRemoveUntil(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const HomeScreen(),
+                        ),
+                        (route) => false,
+                      );
+                    }
+                  },
+                ),
+                _navItem(
+                  context,
+                  icon: Icons.notifications_none_rounded,
+                  selectedIcon: Icons.notifications_rounded,
+                  label: 'Notifications',
+                  isSelected: currentIndex == 1,
+                  badgeCount: notificationBadge,
+                  selectedColor: selectedColor,
+                  unselectedColor: unselectedColor,
+                  onTap: () {
+                    if (currentIndex != 1) {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const NotificationsScreen(),
+                        ),
+                      );
+                    }
+                  },
+                ),
+                const SizedBox(width: 48), // Center floating action button gap
+                _navItem(
+                  context,
+                  icon: Icons.calendar_today_rounded,
+                  selectedIcon: Icons.calendar_month_rounded,
+                  label: 'Calendar',
+                  isSelected: currentIndex == 2,
+                  selectedColor: selectedColor,
+                  unselectedColor: unselectedColor,
+                  onTap: () {
+                    if (currentIndex != 2) {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const CalendarScreen(),
+                        ),
+                      );
+                    }
+                  },
+                ),
+                _navItem(
+                  context,
+                  icon: Icons.assignment_outlined,
+                  selectedIcon: Icons.assignment_rounded,
+                  label: 'Sanction',
+                  isSelected: currentIndex == 3,
+                  selectedColor: selectedColor,
+                  unselectedColor: unselectedColor,
+                  onTap: () {
+                    if (currentIndex != 3) {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const SanctionsScreen(),
+                        ),
+                      );
+                    }
+                  },
+                ),
+              ],
+            ),
           ),
-          const SizedBox(width: 48), // Spacer for center scanner FAB
-          _navItem(
-            context,
-            icon: Icons.calendar_month_rounded,
-            label: 'Calendar',
-            isSelected: currentIndex == 2,
-            selectedColor: selectedColor,
-            unselectedColor: unselectedColor,
-            onTap: () {
-              if (currentIndex != 2) {
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const CalendarScreen(),
-                  ),
-                );
-              }
-            },
-          ),
-          _navItem(
-            context,
-            icon: Icons.assignment_late_rounded,
-            label: 'Sanction',
-            isSelected: currentIndex == 3,
-            selectedColor: selectedColor,
-            unselectedColor: unselectedColor,
-            onTap: () {
-              if (currentIndex != 3) {
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const SanctionsScreen(),
-                  ),
-                );
-              }
-            },
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -155,6 +173,7 @@ class MainBottomNavigation extends StatelessWidget {
   Widget _navItem(
     BuildContext context, {
     required IconData icon,
+    IconData? selectedIcon,
     required String label,
     required bool isSelected,
     required Color selectedColor,
@@ -163,27 +182,29 @@ class MainBottomNavigation extends StatelessWidget {
     int badgeCount = 0,
   }) {
     final color = isSelected ? selectedColor : unselectedColor;
+    final activeIcon = isSelected ? (selectedIcon ?? icon) : icon;
 
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         child: Column(
           mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Stack(
               clipBehavior: Clip.none,
               children: [
-                Icon(icon, color: color, size: 24),
+                Icon(activeIcon, color: color, size: 22),
                 if (badgeCount > 0)
                   Positioned(
-                    right: -6,
-                    top: -4,
+                    right: -5,
+                    top: -3,
                     child: Container(
                       padding: const EdgeInsets.all(3),
                       decoration: const BoxDecoration(
-                        color: Colors.red,
+                        color: Color(0xFFEF4444),
                         shape: BoxShape.circle,
                       ),
                       constraints: const BoxConstraints(
@@ -195,7 +216,7 @@ class MainBottomNavigation extends StatelessWidget {
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 8,
-                          fontWeight: FontWeight.bold,
+                          fontWeight: FontWeight.w800,
                         ),
                         textAlign: TextAlign.center,
                       ),
@@ -203,13 +224,14 @@ class MainBottomNavigation extends StatelessWidget {
                   ),
               ],
             ),
-            const SizedBox(height: 3),
+            const SizedBox(height: 4),
             Text(
               label,
               style: TextStyle(
                 color: color,
-                fontSize: 11,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                fontSize: 10.5,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                letterSpacing: -0.1,
               ),
             ),
           ],

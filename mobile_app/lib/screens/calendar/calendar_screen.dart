@@ -217,6 +217,36 @@ class _CalendarScreenState extends State<CalendarScreen> {
     return null;
   }
 
+  String _getTimeInWindow(EventItem event) {
+    final start = _parseEventTime(event.startTime);
+    final end = _parseEventTime(event.endTime);
+
+    if (start == null || end == null) {
+      return event.startTime.isNotEmpty ? event.startTime : 'TBA';
+    }
+
+    final midpoint = start.add(end.difference(start) ~/ 2);
+    final timeInStart = start.subtract(const Duration(minutes: 30));
+
+    final outFmt = DateFormat('h:mm a');
+    return '${outFmt.format(timeInStart)} – ${outFmt.format(midpoint)}';
+  }
+
+  String _getTimeOutWindow(EventItem event) {
+    final start = _parseEventTime(event.startTime);
+    final end = _parseEventTime(event.endTime);
+
+    if (start == null || end == null) {
+      return event.endTime.isNotEmpty ? event.endTime : 'TBA';
+    }
+
+    final midpoint = start.add(end.difference(start) ~/ 2);
+    final timeOutEnd = end.add(const Duration(minutes: 30));
+
+    final outFmt = DateFormat('h:mm a');
+    return '${outFmt.format(midpoint)} – ${outFmt.format(timeOutEnd)}';
+  }
+
   void _previousMonth() {
     setState(() {
       _displayedMonth =
@@ -254,16 +284,17 @@ class _CalendarScreenState extends State<CalendarScreen> {
         final bool isFullyAttended = _isEventFullyAttended(event);
         final bool isPartial = _isEventPartiallyAttended(event);
         final bool hasGeofence = event.geofenceEnabled;
+        final recordsCount = _getRecordsForEvent(event).length;
 
         final Color statusColor = isFullyAttended
             ? attendedColor
             : (isPartial ? partialColor : missedColor);
 
         final String statusLabel = isFullyAttended
-            ? 'Fully Attended (Time-In & Time-Out Complete)'
+            ? 'Fully Attended (2/2)'
             : (isPartial
-                ? 'In Progress (Partial Attendance Recorded)'
-                : 'Pending Attendance');
+                ? 'In Progress (1/2)'
+                : 'Pending Attendance (0/2)');
 
         return Dialog(
           elevation: 12,
@@ -349,7 +380,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                           const SizedBox(width: 6),
                           Flexible(
                             child: Text(
-                              statusLabel,
+                              '$statusLabel • Recorded $recordsCount/2',
                               style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w800,
@@ -369,10 +400,17 @@ class _CalendarScreenState extends State<CalendarScreen> {
                     ),
                     const SizedBox(height: 18),
                     _buildModalDetailRow(
-                      icon: Icons.access_time_filled_rounded,
+                      icon: Icons.login_rounded,
                       iconColor: gold,
-                      title: 'Schedule Window',
-                      subtitle: _formatTimeRange(event),
+                      title: 'Time-In Window',
+                      subtitle: _getTimeInWindow(event),
+                    ),
+                    const SizedBox(height: 14),
+                    _buildModalDetailRow(
+                      icon: Icons.logout_rounded,
+                      iconColor: gold,
+                      title: 'Time-Out Window',
+                      subtitle: _getTimeOutWindow(event),
                     ),
                     const SizedBox(height: 14),
                     _buildModalDetailRow(
@@ -808,22 +846,11 @@ class _CalendarScreenState extends State<CalendarScreen> {
     final isDark = themeController.isDarkMode;
     final fullyAttended = _isEventFullyAttended(event);
     final partiallyAttended = _isEventPartiallyAttended(event);
-    final today = event.date != null && _sameDay(event.date!, DateTime.now());
-    final ended = event.date != null && _eventHasEnded(event, DateTime.now());
+    final recordsCount = _getRecordsForEvent(event).length;
 
     final statusColor = fullyAttended
         ? attendedColor
-        : (partiallyAttended
-            ? partialColor
-            : (ended ? missedColor : eventColor));
-
-    final statusText = fullyAttended
-        ? 'Fully Attended'
-        : (partiallyAttended
-            ? 'In Progress'
-            : (ended
-                ? 'Not Attended'
-                : (today ? 'Scheduled Today' : 'Upcoming Event')));
+        : (partiallyAttended ? partialColor : eventColor);
 
     return Material(
       color: Colors.transparent,
@@ -890,10 +917,10 @@ class _CalendarScreenState extends State<CalendarScreen> {
                             ),
                           ),
                           child: Text(
-                            statusText,
+                            '$recordsCount/2',
                             style: TextStyle(
                               color: statusColor,
-                              fontSize: 10,
+                              fontSize: 11,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -904,38 +931,40 @@ class _CalendarScreenState extends State<CalendarScreen> {
                     Row(
                       children: [
                         Icon(
-                          Icons.access_time_rounded,
+                          Icons.login_rounded,
                           color: isDark ? gold : navy,
-                          size: 15,
+                          size: 14,
                         ),
                         const SizedBox(width: 6),
                         Text(
-                          _formatTimeRange(event),
+                          'In: ${_getTimeInWindow(event)}',
                           style: TextStyle(
-                            fontSize: 12,
+                            fontSize: 11.5,
                             fontWeight: FontWeight.w600,
                             color: isDark ? Colors.white70 : Colors.black87,
                           ),
                         ),
                       ],
                     ),
-                    if (event.venue.isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.location_on_outlined,
-                            color: isDark ? gold : navy,
-                            size: 15,
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.logout_rounded,
+                          color: isDark ? gold : navy,
+                          size: 14,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Out: ${_getTimeOutWindow(event)}',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            color: isDark ? Colors.white70 : Colors.black87,
                           ),
-                          const SizedBox(width: 6),
-                          Text(
-                            event.venue,
-                            style: const TextStyle(color: muted, fontSize: 12),
-                          ),
-                        ],
-                      ),
-                    ],
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -1034,32 +1063,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
     return first.year == second.year &&
         first.month == second.month &&
         first.day == second.day;
-  }
-
-  String _formatTimeRange(EventItem event) {
-    final start = _formatTime(event.startTime);
-    final end = _formatTime(event.endTime);
-
-    if (start.isNotEmpty && end.isNotEmpty) {
-      return '$start - $end';
-    }
-    if (start.isNotEmpty) return start;
-    if (end.isNotEmpty) return end;
-    return 'Time not specified';
-  }
-
-  String _formatTime(String value) {
-    final clean = value.trim();
-    if (clean.isEmpty) return '';
-
-    const formats = ['HH:mm:ss', 'HH:mm', 'h:mm a', 'hh:mm a'];
-    for (final format in formats) {
-      try {
-        final parsed = DateFormat(format, 'en_US').parseLoose(clean);
-        return DateFormat('h:mm a').format(parsed);
-      } catch (_) {}
-    }
-    return clean;
   }
 }
 

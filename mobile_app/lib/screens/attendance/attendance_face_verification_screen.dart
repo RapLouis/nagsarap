@@ -58,7 +58,7 @@ class _AttendanceFaceVerificationScreenState
 
   late bool _hasTimeIn;
   late bool _hasTimeOut;
-  late AttendanceSessionType _currentSession;
+  AttendanceSessionType? _currentSession;
 
   String _direction = 'left';
   String? _challengeNonce;
@@ -86,37 +86,56 @@ class _AttendanceFaceVerificationScreenState
     _hasTimeIn = widget.hasTimeIn;
     _hasTimeOut = widget.hasTimeOut;
 
-    _currentSession = _determineCurrentSession();
-
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     )..repeat(reverse: true);
 
-    _prepareAndStartSequential();
+    _currentSession = _determineCurrentSession();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_currentSession == null) {
+        _showClosedDialog('Attendance is currently closed for this event.');
+      } else {
+        _prepareAndStartSequential();
+      }
+    });
   }
 
-  AttendanceSessionType _determineCurrentSession() {
-    if (!_hasTimeIn) {
-      final now = DateTime.now();
-      final startTime = _parseEventTime(widget.event.startTime);
-      final endTime = _parseEventTime(widget.event.endTime);
+  /// Automatically calculates whether current time falls within Time-In or Time-Out window.
+  AttendanceSessionType? _determineCurrentSession() {
+    final now = DateTime.now();
+    final startTime = _parseEventTime(widget.event.startTime);
+    final endTime = _parseEventTime(widget.event.endTime);
 
-      if (startTime != null && endTime != null) {
-        if (now.isBefore(endTime) &&
-            now.isAfter(startTime.subtract(const Duration(minutes: 30)))) {
-          // Check if current time has reached time-out window boundary
-          final timeOutStart = DateTime(now.year, now.month, now.day, 15, 0);
-          if (now.isAfter(timeOutStart) || now.isAtSameMomentAs(timeOutStart)) {
-            return AttendanceSessionType.timeOut;
-          }
-          return AttendanceSessionType.timeIn;
+    // Default time-in / time-out window buffers if start/end times exist
+    if (startTime != null && endTime != null) {
+      // Buffer: Allow Time-In starting 30 mins before event start up to midpoint
+      final midpoint = startTime.add(endTime.difference(startTime) ~/ 2);
+      final timeInStart = startTime.subtract(const Duration(minutes: 30));
+
+      // 1. If student already completed Time-In, check if current time is within Time-Out window
+      if (_hasTimeIn) {
+        if (!_hasTimeOut && now.isAfter(midpoint) && now.isBefore(endTime.add(const Duration(minutes: 30)))) {
+          return AttendanceSessionType.timeOut;
         }
+        return null; // Time-Out is closed or attendance completed
       }
-      return AttendanceSessionType.timeIn;
+
+      // 2. If student has not timed-in yet, evaluate current window
+      if (now.isAfter(timeInStart) && now.isBefore(midpoint)) {
+        return AttendanceSessionType.timeIn;
+      } else if (now.isAfter(midpoint) && now.isBefore(endTime.add(const Duration(minutes: 30)))) {
+        return AttendanceSessionType.timeOut;
+      }
+
+      return null; // Outside valid attendance schedule
     }
 
-    return AttendanceSessionType.timeOut;
+    // Fallback if schedule parsing fails
+    if (_hasTimeIn && !_hasTimeOut) return AttendanceSessionType.timeOut;
+    if (!_hasTimeIn) return AttendanceSessionType.timeIn;
+    return null;
   }
 
   DateTime? _parseEventTime(String timeStr) {
@@ -141,13 +160,53 @@ class _AttendanceFaceVerificationScreenState
     return null;
   }
 
-  void _switchSession(AttendanceSessionType newSession) {
-    if (_currentSession == newSession) return;
-    setState(() {
-      _currentSession = newSession;
-      _error = null;
-    });
-    _prepareAndStartSequential();
+  Future<void> _showClosedDialog(String message) async {
+    if (!mounted) return;
+    final isDark = themeController.isDarkMode;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            const Icon(Icons.access_time_filled_rounded, color: Colors.orangeAccent, size: 26),
+            const SizedBox(width: 10),
+            Text(
+              'Attendance Closed',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 18,
+                color: isDark ? Colors.white : brandNavy,
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          message,
+          style: TextStyle(
+            fontSize: 14,
+            color: isDark ? const Color(0xFFCBD5E1) : const Color(0xFF475569),
+          ),
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(dialogCtx).pop();
+              Navigator.of(context).pop();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: isDark ? brandGold : brandNavy,
+              foregroundColor: isDark ? brandNavy : Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            child: const Text('OK', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _prepareAndStartSequential() async {
@@ -498,17 +557,8 @@ class _AttendanceFaceVerificationScreenState
     if (!mounted || _disposed) return;
 
     if (!result.success) {
-      final msg = result.message.toLowerCase();
-
-      if (msg.contains('closed for time in') ||
-          msg.contains('closed for time_in')) {
-        _currentSession = AttendanceSessionType.timeOut;
-      } else if (msg.contains('closed for time out') ||
-          msg.contains('closed for time_out')) {
-        _currentSession = AttendanceSessionType.timeIn;
-      }
-
       _fail(result.message);
+      _showClosedDialog(result.message);
       return;
     }
 
@@ -649,6 +699,9 @@ class _AttendanceFaceVerificationScreenState
   @override
   Widget build(BuildContext context) {
     final isDark = themeController.isDarkMode;
+    final sessionTitle = _currentSession == AttendanceSessionType.timeIn
+        ? 'Time-In'
+        : (_currentSession == AttendanceSessionType.timeOut ? 'Time-Out ' : 'Closed');
 
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
@@ -666,7 +719,7 @@ class _AttendanceFaceVerificationScreenState
           children: [
             const SizedBox(height: 20),
             Text(
-              'Face Verification (${_currentSession == AttendanceSessionType.timeIn ? 'Time-In' : 'Time-Out'})',
+              'Face Verification ($sessionTitle)',
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
@@ -757,45 +810,15 @@ class _AttendanceFaceVerificationScreenState
             const Spacer(),
             if (_error != null && _step == _LivenessStep.failed)
               Padding(
-                padding:
-                    const EdgeInsets.only(bottom: 12, left: 20, right: 20),
-                child: Column(
-                  children: [
-                    Text(
-                      _error!,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: Colors.redAccent,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    OutlinedButton.icon(
-                      onPressed: () {
-                        _switchSession(
-                          _currentSession == AttendanceSessionType.timeIn
-                              ? AttendanceSessionType.timeOut
-                              : AttendanceSessionType.timeIn,
-                        );
-                      },
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: isDark ? brandGold : brandNavy,
-                        side: const BorderSide(color: brandGold),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      icon: const Icon(Icons.swap_horiz_rounded, size: 18),
-                      label: Text(
-                        'Try ${_currentSession == AttendanceSessionType.timeIn ? 'Time-Out' : 'Time-In'} Instead',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ],
+                padding: const EdgeInsets.only(bottom: 12, left: 20, right: 20),
+                child: Text(
+                  _error!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.redAccent,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
                 ),
               )
             else if (_hint != null)
