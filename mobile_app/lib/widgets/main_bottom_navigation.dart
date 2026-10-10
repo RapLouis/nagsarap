@@ -1,11 +1,17 @@
 import 'package:flutter/material.dart';
 
+import '../main.dart';
 import '../screens/calendar/calendar_screen.dart';
 import '../screens/home/home_screen.dart';
 import '../screens/notifications/notifications_screen.dart';
 import '../screens/sanctions/sanctions_screen.dart';
 
 class MainBottomNavigation extends StatelessWidget {
+  final int currentIndex;
+  final int notificationBadge;
+  final VoidCallback? onHomeRefresh;
+  final VoidCallback? onScan;
+
   const MainBottomNavigation({
     super.key,
     required this.currentIndex,
@@ -14,119 +20,166 @@ class MainBottomNavigation extends StatelessWidget {
     this.onScan,
   });
 
-  final int currentIndex;
-  final int notificationBadge;
-  final VoidCallback? onHomeRefresh;
-  final VoidCallback? onScan;
-
-  static const Color brandNavy = Color(0xFF080878);
-  static const Color brandGold = Color(0xFFFFC800);
-
-  void _onItemTapped(BuildContext context, int index) {
-    if (index == currentIndex) {
-      if (index == 0 && onHomeRefresh != null) {
-        onHomeRefresh!();
-      }
-      return;
-    }
-
-    Widget destination;
-    switch (index) {
-      case 0:
-        destination = const HomeScreen();
-        break;
-      case 1:
-        destination = const NotificationsScreen();
-        break;
-      case 2:
-        destination = const CalendarScreen();
-        break;
-      case 3:
-        destination = const SanctionsScreen();
-        break;
-      default:
-        destination = const HomeScreen();
-    }
-
-    Navigator.of(context).pushReplacement(
-      PageRouteBuilder(
-        pageBuilder: (_, _, _) => destination,
-        transitionDuration: Duration.zero,
-        reverseTransitionDuration: Duration.zero,
+  static Widget scannerButton(
+    BuildContext context, {
+    int currentIndex = -1,
+    VoidCallback? onPressed,
+  }) {
+    return Container(
+      width: 62,
+      height: 62,
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFC800),
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFFFFC800).withValues(alpha: 0.4),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: RawMaterialButton(
+        onPressed: onPressed,
+        shape: const CircleBorder(),
+        elevation: 0,
+        child: const Icon(
+          Icons.qr_code_scanner_rounded,
+          color: Color(0xFF080878),
+          size: 28,
+        ),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return BottomAppBar(
-      shape: currentIndex == 0 ? const CircularNotchedRectangle() : null,
-      notchMargin: 8,
-      color: Colors.white,
-      elevation: 12,
-      child: SizedBox(
-        height: 60,
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: [
-            _buildNavItem(
-              context: context,
-              index: 0,
-              icon: Icons.home_rounded,
-              label: 'Home',
-            ),
-            _buildNavItem(
-              context: context,
-              index: 1,
-              icon: Icons.notifications_rounded,
-              label: 'Notifications',
-              badgeCount: notificationBadge,
-            ),
-            if (currentIndex == 0) const SizedBox(width: 48),
-            _buildNavItem(
-              context: context,
-              index: 2,
-              icon: Icons.calendar_month_rounded,
-              label: 'Calendar',
-            ),
-            _buildNavItem(
-              context: context,
-              index: 3,
-              icon: Icons.assignment_late_rounded,
-              label: 'Sanction',
-            ),
-          ],
-        ),
+    final isDark = themeController.isDarkMode;
+    final backgroundColor = isDark ? const Color(0xFF1E293B) : Colors.white;
+    final unselectedColor =
+        isDark ? const Color(0xFF94A3B8) : const Color(0xFF808080);
+    final selectedColor =
+        isDark ? const Color(0xFFFFC800) : const Color(0xFF080878);
+
+    return Container(
+      height: 72,
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x1A000000),
+            blurRadius: 10,
+            offset: Offset(0, -2),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          _navItem(
+            context,
+            icon: Icons.home_rounded,
+            label: 'Home',
+            isSelected: currentIndex == 0,
+            selectedColor: selectedColor,
+            unselectedColor: unselectedColor,
+            onTap: () {
+              if (currentIndex == 0) {
+                onHomeRefresh?.call();
+              } else {
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute<void>(builder: (_) => const HomeScreen()),
+                  (route) => false,
+                );
+              }
+            },
+          ),
+          _navItem(
+            context,
+            icon: Icons.notifications_rounded,
+            label: 'Notifications',
+            isSelected: currentIndex == 1,
+            badgeCount: notificationBadge,
+            selectedColor: selectedColor,
+            unselectedColor: unselectedColor,
+            onTap: () {
+              if (currentIndex != 1) {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const NotificationsScreen(),
+                  ),
+                );
+              }
+            },
+          ),
+          const SizedBox(width: 48), // Spacer for center scanner FAB
+          _navItem(
+            context,
+            icon: Icons.calendar_month_rounded,
+            label: 'Calendar',
+            isSelected: currentIndex == 2,
+            selectedColor: selectedColor,
+            unselectedColor: unselectedColor,
+            onTap: () {
+              if (currentIndex != 2) {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const CalendarScreen(),
+                  ),
+                );
+              }
+            },
+          ),
+          _navItem(
+            context,
+            icon: Icons.assignment_late_rounded,
+            label: 'Sanction',
+            isSelected: currentIndex == 3,
+            selectedColor: selectedColor,
+            unselectedColor: unselectedColor,
+            onTap: () {
+              if (currentIndex != 3) {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const SanctionsScreen(),
+                  ),
+                );
+              }
+            },
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildNavItem({
-    required BuildContext context,
-    required int index,
+  Widget _navItem(
+    BuildContext context, {
     required IconData icon,
     required String label,
+    required bool isSelected,
+    required Color selectedColor,
+    required Color unselectedColor,
+    required VoidCallback onTap,
     int badgeCount = 0,
   }) {
-    final bool isSelected = currentIndex == index;
-    final Color color = isSelected ? brandNavy : Colors.grey.shade500;
+    final color = isSelected ? selectedColor : unselectedColor;
 
     return InkWell(
-      onTap: () => _onItemTapped(context, index),
+      onTap: onTap,
       borderRadius: BorderRadius.circular(12),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Stack(
               clipBehavior: Clip.none,
               children: [
-                Icon(icon, color: color, size: 22),
+                Icon(icon, color: color, size: 24),
                 if (badgeCount > 0)
                   Positioned(
                     right: -6,
-                    top: -3,
+                    top: -4,
                     child: Container(
                       padding: const EdgeInsets.all(3),
                       decoration: const BoxDecoration(
@@ -138,7 +191,7 @@ class MainBottomNavigation extends StatelessWidget {
                         minHeight: 14,
                       ),
                       child: Text(
-                        badgeCount > 9 ? '9+' : '$badgeCount',
+                        '$badgeCount',
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 8,
@@ -150,40 +203,17 @@ class MainBottomNavigation extends StatelessWidget {
                   ),
               ],
             ),
-            const SizedBox(height: 2),
+            const SizedBox(height: 3),
             Text(
               label,
               style: TextStyle(
                 color: color,
-                fontSize: 10,
+                fontSize: 11,
                 fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
               ),
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  /// Scanner button helper that only renders when currentIndex == 0 (Home Screen)
-  static Widget? scannerButton(
-    BuildContext context, {
-    int currentIndex = 0,
-    VoidCallback? onPressed,
-  }) {
-    if (currentIndex != 0) return null;
-
-    return FloatingActionButton(
-      backgroundColor: brandGold,
-      elevation: 4,
-      onPressed: onPressed ??
-          () {
-            Navigator.of(context).pushNamed('/scan');
-          },
-      child: const Icon(
-        Icons.qr_code_scanner_rounded,
-        color: Colors.white,
-        size: 28,
       ),
     );
   }

@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../main.dart';
 import '../../models/attendance_history_item.dart';
 import '../../models/event_item.dart';
 import '../../services/attendance_history_service.dart';
@@ -15,7 +16,6 @@ import '../../widgets/main_bottom_navigation.dart';
 
 import '../attendance/attendance_face_verification_screen.dart';
 import '../attendance/attendance_history_screen.dart';
-import '../auth/auth_gate.dart';
 import '../calendar/calendar_screen.dart';
 import '../profile/profile_screen.dart';
 
@@ -38,7 +38,6 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   static const Color navy = Color(0xFF080878);
   static const Color gold = Color(0xFFFFC800);
-  static const Color background = Color(0xFFF8F9FC);
   static const Color muted = Color(0xFF808080);
 
   bool _loading = true;
@@ -361,10 +360,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _showProfileMenu() async {
-    await _openProfile();
-  }
-
   Future<void> _openAttendanceScannerForEvent(EventItem event) async {
     final hasTimeIn = _hasTimeInForEvent(event);
     final hasTimeOut = _hasTimeOutForEvent(event);
@@ -413,7 +408,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     } else {
       final selectedEvent = await showModalBottomSheet<EventItem>(
         context: context,
-        backgroundColor: Colors.white,
+        backgroundColor: Theme.of(context).cardColor,
         showDragHandle: true,
         shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
@@ -431,7 +426,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     style: TextStyle(
                       fontSize: 22,
                       fontWeight: FontWeight.w800,
-                      color: navy,
                     ),
                   ),
                   const SizedBox(height: 4),
@@ -444,9 +438,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     Container(
                       margin: const EdgeInsets.only(bottom: 8),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFF8FAFC),
+                        color: Theme.of(context).brightness == Brightness.dark
+                            ? const Color(0xFF1E293B)
+                            : const Color(0xFFF8FAFC),
                         borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: const Color(0xFFE2E8F0)),
+                        border: Border.all(
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? const Color(0xFF334155)
+                              : const Color(0xFFE2E8F0),
+                        ),
                       ),
                       child: ListTile(
                         contentPadding: const EdgeInsets.symmetric(
@@ -462,7 +462,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           ),
                           child: const Icon(
                             Icons.event_available_rounded,
-                            color: navy,
+                            color: gold,
                           ),
                         ),
                         title: Text(
@@ -470,7 +470,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           style: const TextStyle(
                             fontWeight: FontWeight.w700,
                             fontSize: 15,
-                            color: navy,
                           ),
                         ),
                         subtitle: Text(
@@ -479,7 +478,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         ),
                         trailing: const Icon(
                           Icons.chevron_right_rounded,
-                          color: navy,
                         ),
                         onTap: () => Navigator.pop(sheetContext, event),
                       ),
@@ -509,9 +507,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       builder: (ctx) {
         return Container(
           padding: const EdgeInsets.fromLTRB(22, 12, 22, 28),
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+          decoration: BoxDecoration(
+            color: Theme.of(context).cardColor,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
           ),
           child: SafeArea(
             child: Column(
@@ -523,7 +521,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     width: 38,
                     height: 4,
                     decoration: BoxDecoration(
-                      color: const Color(0xFFE2E8F0),
+                      color: const Color(0xFFCBD5E1),
                       borderRadius: BorderRadius.circular(2),
                     ),
                   ),
@@ -538,7 +536,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         style: const TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w800,
-                          color: navy,
                         ),
                       ),
                     ),
@@ -599,8 +596,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ),
                 ),
                 const SizedBox(height: 20),
-                const Divider(color: Color(0xFFE2E8F0)),
+                const Divider(),
                 const SizedBox(height: 16),
+                _modalInfoRow(
+                  Icons.person_outline_rounded,
+                  'Student Name',
+                  _fullName,
+                ),
+                const SizedBox(height: 12),
                 _modalInfoRow(
                   Icons.calendar_today_rounded,
                   'Date',
@@ -627,7 +630,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.bold,
-                      color: navy,
                     ),
                   ),
                   const SizedBox(height: 6),
@@ -635,7 +637,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     event.description,
                     style: const TextStyle(
                       fontSize: 13,
-                      color: Color(0xFF475569),
                       height: 1.4,
                     ),
                   ),
@@ -679,7 +680,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(icon, size: 18, color: navy),
+        Icon(icon, size: 18, color: gold),
         const SizedBox(width: 12),
         Expanded(
           child: Column(
@@ -695,7 +696,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
-                  color: navy,
                 ),
               ),
             ],
@@ -707,8 +707,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Scaffold(
-      backgroundColor: background,
       body: SafeArea(
         child: Column(
           children: [
@@ -724,10 +725,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text(
+                        Text(
                           "Today's Activity",
                           style: TextStyle(
-                            color: navy,
+                            color: isDark ? Colors.white : navy,
                             fontSize: 26,
                             fontWeight: FontWeight.w800,
                             letterSpacing: -0.5,
@@ -744,8 +745,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           ),
                           child: Text(
                             DateFormat('E, MMM d').format(DateTime.now()),
-                            style: const TextStyle(
-                              color: navy,
+                            style: TextStyle(
+                              color: isDark ? Colors.white : navy,
                               fontSize: 12,
                               fontWeight: FontWeight.w700,
                             ),
@@ -794,12 +795,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildHeader() {
+    final isDark = themeController.isDarkMode;
+
     return Container(
       height: 84,
       padding: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: const BoxDecoration(
-        color: navy,
-        boxShadow: [
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B) : navy,
+        boxShadow: const [
           BoxShadow(
             color: Color(0x1A080878),
             blurRadius: 10,
@@ -869,7 +872,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 const SizedBox(width: 10),
                 InkWell(
                   borderRadius: BorderRadius.circular(30),
-                  onTap: _showProfileMenu,
+                  onTap: _openProfile,
                   child: Container(
                     padding: const EdgeInsets.all(2),
                     decoration: BoxDecoration(
@@ -1009,6 +1012,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     required Color accentColor,
     required VoidCallback onTap,
   }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Material(
       color: Colors.transparent,
       borderRadius: BorderRadius.circular(20),
@@ -1018,9 +1023,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: Theme.of(context).cardColor,
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: const Color(0xFFE2E8F0)),
+            border: Border.all(
+              color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+            ),
             boxShadow: [
               BoxShadow(
                 color: accentColor.withValues(alpha: 0.08),
@@ -1044,10 +1051,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               const SizedBox(height: 12),
               Text(
                 count,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 24,
                   fontWeight: FontWeight.w900,
-                  color: navy,
+                  color: isDark ? Colors.white : navy,
                   height: 1.0,
                 ),
               ),
@@ -1078,7 +1085,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             : const Color(0xFFF59E0B);
 
         return Dialog(
-          backgroundColor: Colors.white,
+          backgroundColor: Theme.of(context).cardColor,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(28),
           ),
@@ -1112,7 +1119,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         child: Text(
                           label,
                           style: const TextStyle(
-                            color: navy,
                             fontSize: 20,
                             fontWeight: FontWeight.w800,
                           ),
@@ -1142,17 +1148,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               return Container(
                                 padding: const EdgeInsets.all(12),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFFF8FAFC),
+                                  color: Theme.of(context).brightness ==
+                                          Brightness.dark
+                                      ? const Color(0xFF1E293B)
+                                      : const Color(0xFFF8FAFC),
                                   borderRadius: BorderRadius.circular(14),
                                   border: Border.all(
-                                    color: const Color(0xFFE2E8F0),
+                                    color: Theme.of(context).brightness ==
+                                            Brightness.dark
+                                        ? const Color(0xFF334155)
+                                        : const Color(0xFFE2E8F0),
                                   ),
                                 ),
                                 child: Text(
                                   event.name,
                                   style: const TextStyle(
                                     fontWeight: FontWeight.bold,
-                                    color: navy,
                                   ),
                                 ),
                               );
@@ -1170,6 +1181,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Widget _buildHistoryCard() {
     final hasRecords = _attendanceCount > 0;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Material(
       color: Colors.transparent,
@@ -1179,9 +1191,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         child: Container(
           padding: const EdgeInsets.all(18),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: Theme.of(context).cardColor,
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: const Color(0xFFE2E8F0)),
+            border: Border.all(
+              color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+            ),
             boxShadow: const [
               BoxShadow(
                 color: Color(0x06000000),
@@ -1196,20 +1210,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 width: 48,
                 height: 48,
                 decoration: BoxDecoration(
-                  color: navy.withValues(alpha: 0.08),
+                  color: gold.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(14),
                 ),
-                child: const Icon(Icons.history_rounded, color: navy, size: 26),
+                child: const Icon(Icons.history_rounded, color: gold, size: 26),
               ),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
+                    Text(
                       'Attendance History',
                       style: TextStyle(
-                        color: navy,
+                        color: isDark ? Colors.white : navy,
                         fontSize: 15,
                         fontWeight: FontWeight.w800,
                       ),
@@ -1224,9 +1238,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ],
                 ),
               ),
-              const Icon(
+              Icon(
                 Icons.arrow_forward_ios_rounded,
-                color: navy,
+                color: isDark ? Colors.white70 : navy,
                 size: 14,
               ),
             ],
@@ -1237,25 +1251,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildTodaySection() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     if (_todayEvents.isEmpty) {
       return Container(
         width: double.infinity,
         padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Theme.of(context).cardColor,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: const Color(0xFFE2E8F0)),
+          border: Border.all(
+            color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+          ),
         ),
         child: const Column(
           children: [
-            Icon(Icons.event_busy_outlined, color: navy, size: 40),
+            Icon(Icons.event_busy_outlined, color: gold, size: 40),
             SizedBox(height: 10),
             Text(
               'No activity today',
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
-                color: navy,
               ),
             ),
           ],
@@ -1266,12 +1283,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
+        Text(
           "Today's Events",
           style: TextStyle(
             fontSize: 17,
             fontWeight: FontWeight.w800,
-            color: navy,
+            color: isDark ? Colors.white : navy,
           ),
         ),
         const SizedBox(height: 12),
@@ -1284,25 +1301,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildUpcomingSection() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Text(
+            Text(
               'Upcoming Events',
               style: TextStyle(
                 fontSize: 17,
                 fontWeight: FontWeight.w800,
-                color: navy,
+                color: isDark ? Colors.white : navy,
               ),
             ),
             TextButton(
               onPressed: _openCalendar,
               child: const Text(
                 'View Calendar',
-                style: TextStyle(color: navy, fontWeight: FontWeight.bold),
+                style: TextStyle(color: gold, fontWeight: FontWeight.bold),
               ),
             ),
           ],
@@ -1320,6 +1339,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final count = _getAttendanceCountForEvent(event);
     final isCompleted = count >= 2;
     final isTimeInDone = count == 1;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     final Color statusColor = isCompleted
         ? const Color(0xFF16A34A)
@@ -1335,15 +1355,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
             color: isCompleted
-                ? const Color(0xFFF0FDF4)
-                : (isTimeInDone ? const Color(0xFFFFFBEB) : Colors.white),
+                ? (isDark ? const Color(0xFF064E3B) : const Color(0xFFF0FDF4))
+                : (isTimeInDone
+                    ? (isDark ? const Color(0xFF78350F) : const Color(0xFFFFFBEB))
+                    : Theme.of(context).cardColor),
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
               color: isCompleted
                   ? const Color(0xFFBBF7D0)
                   : (isTimeInDone
                       ? const Color(0xFFFDE68A)
-                      : const Color(0xFFE2E8F0)),
+                      : (isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0))),
             ),
             boxShadow: const [
               BoxShadow(
@@ -1376,7 +1398,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             style: const TextStyle(
                               fontSize: 15,
                               fontWeight: FontWeight.bold,
-                              color: navy,
                             ),
                           ),
                         ),
@@ -1406,7 +1427,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(20),
       ),
       child: Column(

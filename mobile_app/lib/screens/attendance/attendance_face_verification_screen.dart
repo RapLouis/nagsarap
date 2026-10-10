@@ -3,9 +3,10 @@ import 'dart:async';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-import '../../core/app_colors.dart';
+import '../../main.dart';
 import '../../models/event_item.dart';
 import '../../services/attendance_service.dart';
 
@@ -35,6 +36,10 @@ class AttendanceFaceVerificationScreen extends StatefulWidget {
 class _AttendanceFaceVerificationScreenState
     extends State<AttendanceFaceVerificationScreen>
     with SingleTickerProviderStateMixin {
+  static const Color brandNavy = Color(0xFF080878);
+  static const Color brandGold = Color(0xFFFFC800);
+  static const Color muted = Color(0xFF94A3B8);
+
   static const double frontalYawMax = 0.15;
   static const int frontalHoldFrames = 2;
   static const double turnYawMin = 0.18;
@@ -81,15 +86,67 @@ class _AttendanceFaceVerificationScreenState
     _hasTimeIn = widget.hasTimeIn;
     _hasTimeOut = widget.hasTimeOut;
 
-    _currentSession = !_hasTimeIn
-        ? AttendanceSessionType.timeIn
-        : AttendanceSessionType.timeOut;
+    _currentSession = _determineCurrentSession();
 
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     )..repeat(reverse: true);
 
+    _prepareAndStartSequential();
+  }
+
+  AttendanceSessionType _determineCurrentSession() {
+    if (!_hasTimeIn) {
+      final now = DateTime.now();
+      final startTime = _parseEventTime(widget.event.startTime);
+      final endTime = _parseEventTime(widget.event.endTime);
+
+      if (startTime != null && endTime != null) {
+        if (now.isBefore(endTime) &&
+            now.isAfter(startTime.subtract(const Duration(minutes: 30)))) {
+          // Check if current time has reached time-out window boundary
+          final timeOutStart = DateTime(now.year, now.month, now.day, 15, 0);
+          if (now.isAfter(timeOutStart) || now.isAtSameMomentAs(timeOutStart)) {
+            return AttendanceSessionType.timeOut;
+          }
+          return AttendanceSessionType.timeIn;
+        }
+      }
+      return AttendanceSessionType.timeIn;
+    }
+
+    return AttendanceSessionType.timeOut;
+  }
+
+  DateTime? _parseEventTime(String timeStr) {
+    final clean = timeStr.trim();
+    if (clean.isEmpty) return null;
+
+    const formats = ['HH:mm:ss', 'HH:mm', 'h:mm a', 'hh:mm a'];
+    for (final format in formats) {
+      try {
+        final parsed = DateFormat(format, 'en_US').parseLoose(clean);
+        final now = DateTime.now();
+        return DateTime(
+          now.year,
+          now.month,
+          now.day,
+          parsed.hour,
+          parsed.minute,
+          parsed.second,
+        );
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  void _switchSession(AttendanceSessionType newSession) {
+    if (_currentSession == newSession) return;
+    setState(() {
+      _currentSession = newSession;
+      _error = null;
+    });
     _prepareAndStartSequential();
   }
 
@@ -110,7 +167,8 @@ class _AttendanceFaceVerificationScreenState
 
       final cameraFuture = _initCameraFast();
       final locationFuture = _getFastPosition();
-      final challengeFuture = AttendanceService.instance.requestLivenessChallenge(
+      final challengeFuture =
+          AttendanceService.instance.requestLivenessChallenge(
         eventId: widget.event.id!,
       );
 
@@ -187,7 +245,8 @@ class _AttendanceFaceVerificationScreenState
       if (perm == LocationPermission.denied) {
         perm = await Geolocator.requestPermission();
       }
-      if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+      if (perm == LocationPermission.denied ||
+          perm == LocationPermission.deniedForever) {
         return null;
       }
 
@@ -219,7 +278,8 @@ class _AttendanceFaceVerificationScreenState
 
     if (lat == null || lng == null || rad <= 0) return;
 
-    final dist = Geolocator.distanceBetween(pos.latitude, pos.longitude, lat, lng);
+    final dist =
+        Geolocator.distanceBetween(pos.latitude, pos.longitude, lat, lng);
     if (dist > rad) {
       final remaining = (dist - rad).round();
       throw Exception('Outside event area. Move $remaining m closer.');
@@ -228,7 +288,10 @@ class _AttendanceFaceVerificationScreenState
 
   Future<void> _startChallenge() async {
     final controller = _camera;
-    if (_running || controller == null || !controller.value.isInitialized || _disposed) {
+    if (_running ||
+        controller == null ||
+        !controller.value.isInitialized ||
+        _disposed) {
       return;
     }
 
@@ -269,7 +332,9 @@ class _AttendanceFaceVerificationScreenState
   Future<void> _captureAndAnalyze() async {
     if (_analyzing || !_running || _disposed) return;
     final controller = _camera;
-    if (controller == null || !controller.value.isInitialized || controller.value.isTakingPicture) {
+    if (controller == null ||
+        !controller.value.isInitialized ||
+        controller.value.isTakingPicture) {
       return;
     }
 
@@ -415,7 +480,8 @@ class _AttendanceFaceVerificationScreenState
       _hint = null;
     });
 
-    final typeStr = _currentSession == AttendanceSessionType.timeIn ? 'time_in' : 'time_out';
+    final typeStr =
+        _currentSession == AttendanceSessionType.timeIn ? 'time_in' : 'time_out';
 
     final result = await AttendanceService.instance.mobileCheckIn(
       eventId: eventId,
@@ -432,6 +498,16 @@ class _AttendanceFaceVerificationScreenState
     if (!mounted || _disposed) return;
 
     if (!result.success) {
+      final msg = result.message.toLowerCase();
+
+      if (msg.contains('closed for time in') ||
+          msg.contains('closed for time_in')) {
+        _currentSession = AttendanceSessionType.timeOut;
+      } else if (msg.contains('closed for time out') ||
+          msg.contains('closed for time_out')) {
+        _currentSession = AttendanceSessionType.timeIn;
+      }
+
       _fail(result.message);
       return;
     }
@@ -455,6 +531,7 @@ class _AttendanceFaceVerificationScreenState
     if (!mounted) return;
 
     Timer? timer;
+    final isDark = themeController.isDarkMode;
 
     await showDialog<void>(
       context: context,
@@ -466,16 +543,20 @@ class _AttendanceFaceVerificationScreenState
           }
         });
 
-        final nameText = widget.studentName != null && widget.studentName!.isNotEmpty
-            ? widget.studentName!
-            : 'Student';
+        final nameText =
+            widget.studentName != null && widget.studentName!.isNotEmpty
+                ? widget.studentName!
+                : 'Student';
 
-        final sessionText = _currentSession == AttendanceSessionType.timeIn ? 'Time-In' : 'Time-Out';
+        final sessionText = _currentSession == AttendanceSessionType.timeIn
+            ? 'Time-In'
+            : 'Time-Out';
 
         return Dialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
           elevation: 16,
-          backgroundColor: Colors.white,
+          backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
             child: Column(
@@ -498,10 +579,10 @@ class _AttendanceFaceVerificationScreenState
                 Text(
                   'Welcome, $nameText!',
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w800,
-                    color: AppColors.navy,
+                    color: isDark ? Colors.white : brandNavy,
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -510,7 +591,7 @@ class _AttendanceFaceVerificationScreenState
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     fontSize: 13,
-                    color: Colors.grey,
+                    color: muted,
                   ),
                 ),
                 const SizedBox(height: 22),
@@ -522,7 +603,8 @@ class _AttendanceFaceVerificationScreenState
                       Navigator.pop(dialogContext);
                     },
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.navy,
+                      backgroundColor: isDark ? brandGold : brandNavy,
+                      foregroundColor: isDark ? brandNavy : Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
@@ -531,7 +613,6 @@ class _AttendanceFaceVerificationScreenState
                     child: const Text(
                       'Continue',
                       style: TextStyle(
-                        color: Colors.white,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -567,10 +648,12 @@ class _AttendanceFaceVerificationScreenState
 
   @override
   Widget build(BuildContext context) {
+    final isDark = themeController.isDarkMode;
+
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
-        backgroundColor: AppColors.navy,
+        backgroundColor: isDark ? const Color(0xFF1E293B) : brandNavy,
         foregroundColor: Colors.white,
         elevation: 0,
         title: Text(
@@ -584,19 +667,18 @@ class _AttendanceFaceVerificationScreenState
             const SizedBox(height: 20),
             Text(
               'Face Verification (${_currentSession == AttendanceSessionType.timeIn ? 'Time-In' : 'Time-Out'})',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
-                color: AppColors.navy,
+                color: isDark ? Colors.white : brandNavy,
               ),
             ),
             const SizedBox(height: 4),
             Text(
               widget.event.venue,
-              style: const TextStyle(fontSize: 13, color: Colors.grey),
+              style: const TextStyle(fontSize: 13, color: muted),
             ),
             const Spacer(),
-            
             Center(
               child: Stack(
                 alignment: Alignment.center,
@@ -610,7 +692,7 @@ class _AttendanceFaceVerificationScreenState
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           border: Border.all(
-                            color: AppColors.gold.withValues(
+                            color: brandGold.withValues(
                               alpha: 0.3 + (_pulseController.value * 0.4),
                             ),
                             width: 3.5,
@@ -625,10 +707,12 @@ class _AttendanceFaceVerificationScreenState
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: Colors.black,
-                      border: Border.all(color: AppColors.gold, width: 4),
+                      border: Border.all(color: brandGold, width: 4),
                     ),
                     child: ClipOval(
-                      child: _cameraReady && _camera != null && _camera!.value.isInitialized
+                      child: _cameraReady &&
+                              _camera != null &&
+                              _camera!.value.isInitialized
                           ? FittedBox(
                               fit: BoxFit.cover,
                               child: SizedBox(
@@ -638,7 +722,9 @@ class _AttendanceFaceVerificationScreenState
                               ),
                             )
                           : const Center(
-                              child: CircularProgressIndicator(color: AppColors.gold),
+                              child: CircularProgressIndicator(
+                                color: brandGold,
+                              ),
                             ),
                     ),
                   ),
@@ -649,12 +735,15 @@ class _AttendanceFaceVerificationScreenState
                       child: Container(
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color: AppColors.navy.withValues(alpha: 0.85),
+                          color: (isDark ? const Color(0xFF1E293B) : brandNavy)
+                              .withValues(alpha: 0.85),
                           shape: BoxShape.circle,
-                          border: Border.all(color: AppColors.gold, width: 2),
+                          border: Border.all(color: brandGold, width: 2),
                         ),
                         child: Icon(
-                          _direction == 'left' ? Icons.arrow_back : Icons.arrow_forward,
+                          _direction == 'left'
+                              ? Icons.arrow_back
+                              : Icons.arrow_forward,
                           color: Colors.white,
                           size: 28,
                         ),
@@ -664,21 +753,49 @@ class _AttendanceFaceVerificationScreenState
               ),
             ),
             const SizedBox(height: 18),
-
             _buildInstructionBadge(),
-            
             const Spacer(),
             if (_error != null && _step == _LivenessStep.failed)
               Padding(
-                padding: const EdgeInsets.only(bottom: 12, left: 20, right: 20),
-                child: Text(
-                  _error!,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: Colors.redAccent,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
-                  ),
+                padding:
+                    const EdgeInsets.only(bottom: 12, left: 20, right: 20),
+                child: Column(
+                  children: [
+                    Text(
+                      _error!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.redAccent,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        _switchSession(
+                          _currentSession == AttendanceSessionType.timeIn
+                              ? AttendanceSessionType.timeOut
+                              : AttendanceSessionType.timeIn,
+                        );
+                      },
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: isDark ? brandGold : brandNavy,
+                        side: const BorderSide(color: brandGold),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      icon: const Icon(Icons.swap_horiz_rounded, size: 18),
+                      label: Text(
+                        'Try ${_currentSession == AttendanceSessionType.timeIn ? 'Time-Out' : 'Time-In'} Instead',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               )
             else if (_hint != null)
@@ -687,7 +804,7 @@ class _AttendanceFaceVerificationScreenState
                 child: Text(
                   _hint!,
                   style: const TextStyle(
-                    color: AppColors.gold,
+                    color: brandGold,
                     fontWeight: FontWeight.bold,
                     fontSize: 13,
                   ),
@@ -702,6 +819,7 @@ class _AttendanceFaceVerificationScreenState
   }
 
   Widget _buildInstructionBadge() {
+    final isDark = themeController.isDarkMode;
     String text;
     IconData icon;
     bool spin = false;
@@ -733,28 +851,30 @@ class _AttendanceFaceVerificationScreenState
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFF8E7),
+        color: isDark ? const Color(0xFF1E293B) : const Color(0xFFFFF8E7),
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: AppColors.gold.withValues(alpha: 0.6)),
+        border: Border.all(
+          color: isDark ? const Color(0xFF334155) : brandGold.withValues(alpha: 0.6),
+        ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           spin
-              ? const SizedBox(
+              ? SizedBox(
                   width: 18,
                   height: 18,
                   child: CircularProgressIndicator(
                     strokeWidth: 2,
-                    color: AppColors.navy,
+                    color: isDark ? brandGold : brandNavy,
                   ),
                 )
-              : Icon(icon, color: AppColors.navy, size: 20),
+              : Icon(icon, color: isDark ? brandGold : brandNavy, size: 20),
           const SizedBox(width: 8),
           Text(
             text,
-            style: const TextStyle(
-              color: AppColors.navy,
+            style: TextStyle(
+              color: isDark ? Colors.white : brandNavy,
               fontWeight: FontWeight.bold,
               fontSize: 13,
             ),
@@ -765,7 +885,10 @@ class _AttendanceFaceVerificationScreenState
   }
 
   Widget _buildProgressBar() {
-    double progress = _step == _LivenessStep.lookCenter ? _holdProgress : _turnProgress;
+    final isDark = themeController.isDarkMode;
+    double progress =
+        _step == _LivenessStep.lookCenter ? _holdProgress : _turnProgress;
+
     return SizedBox(
       width: 180,
       height: 6,
@@ -773,8 +896,10 @@ class _AttendanceFaceVerificationScreenState
         borderRadius: BorderRadius.circular(3),
         child: LinearProgressIndicator(
           value: progress,
-          backgroundColor: Colors.grey.shade300,
-          valueColor: const AlwaysStoppedAnimation<Color>(AppColors.navy),
+          backgroundColor: isDark ? const Color(0xFF334155) : Colors.grey.shade300,
+          valueColor: AlwaysStoppedAnimation<Color>(
+            isDark ? brandGold : brandNavy,
+          ),
         ),
       ),
     );

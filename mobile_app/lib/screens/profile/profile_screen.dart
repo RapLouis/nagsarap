@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../../main.dart';
 import '../../models/student_profile.dart';
 import '../../services/auth_service.dart';
 import '../../services/profile_service.dart';
@@ -18,7 +19,6 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   static const Color navy = Color(0xFF080878);
   static const Color gold = Color(0xFFFFC800);
-  static const Color background = Color(0xFFF6F6F6);
   static const Color muted = Color(0xFF777783);
 
   bool _loading = true;
@@ -74,7 +74,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
         title: const Text(
           'Confirm Logout',
-          style: TextStyle(fontWeight: FontWeight.bold, color: navy),
+          style: TextStyle(fontWeight: FontWeight.bold),
         ),
         content: const Text('Are you sure you want to log out of your account?'),
         actions: [
@@ -109,10 +109,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = themeController.isDarkMode;
+
     return Scaffold(
-      backgroundColor: background,
       appBar: AppBar(
-        backgroundColor: navy,
+        backgroundColor: isDark ? const Color(0xFF1E293B) : navy,
         foregroundColor: Colors.white,
         elevation: 0,
         title: const Text(
@@ -120,7 +121,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
           style: TextStyle(fontWeight: FontWeight.w700),
         ),
         actions: [
-          // Upper Right Log Out Button
+          // Theme Toggle Button
+          IconButton(
+            tooltip: isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode',
+            onPressed: () {
+              themeController.toggleTheme();
+              setState(() {});
+            },
+            icon: Icon(
+              isDark ? Icons.wb_sunny_rounded : Icons.dark_mode_rounded,
+              color: gold,
+            ),
+          ),
+          // Log Out Button
           IconButton(
             tooltip: 'Log Out',
             onPressed: _confirmLogout,
@@ -245,11 +258,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildProfileHeader(StudentProfile profile) {
+    final isDark = themeController.isDarkMode;
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
-        color: navy,
+        color: isDark ? const Color(0xFF1E293B) : navy,
         borderRadius: BorderRadius.circular(20),
       ),
       child: Column(
@@ -304,12 +319,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
     required String title,
     required List<Widget> children,
   }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFE2E2E8)),
+        border: Border.all(
+          color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E2E8),
+        ),
       ),
       clipBehavior: Clip.antiAlias,
       child: Column(
@@ -319,8 +338,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
             padding: const EdgeInsets.fromLTRB(17, 16, 17, 12),
             child: Text(
               title,
-              style: const TextStyle(
-                color: navy,
+              style: TextStyle(
+                color: isDark ? Colors.white : navy,
                 fontSize: 15,
                 fontWeight: FontWeight.w800,
               ),
@@ -339,14 +358,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
         verified ? const Color(0xFF159947) : const Color(0xFFD97706);
     final statusBackground =
         verified ? const Color(0xFFE8F6EC) : const Color(0xFFFFF3CD);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(17),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFE2E2E8)),
+        border: Border.all(
+          color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E2E8),
+        ),
       ),
       child: Row(
         children: [
@@ -371,10 +393,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
+                Text(
                   'Biometric Verification',
                   style: TextStyle(
-                    color: navy,
+                    color: isDark ? Colors.white : navy,
                     fontSize: 14,
                     fontWeight: FontWeight.w700,
                   ),
@@ -419,7 +441,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       width: double.infinity,
       padding: const EdgeInsets.all(28),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(18),
       ),
       child: Column(
@@ -429,7 +451,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
           const Text(
             'Unable to load profile',
             style: TextStyle(
-              color: Colors.black,
               fontSize: 18,
               fontWeight: FontWeight.w700,
             ),
@@ -496,6 +517,8 @@ class _ProfileRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Column(
       children: [
         Padding(
@@ -508,10 +531,14 @@ class _ProfileRow extends StatelessWidget {
                 height: 38,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFF1F1FB),
+                  color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F1FB),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: Icon(icon, color: _ProfileScreenState.navy, size: 20),
+                child: Icon(
+                  icon,
+                  color: isDark ? _ProfileScreenState.gold : _ProfileScreenState.navy,
+                  size: 20,
+                ),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -529,8 +556,8 @@ class _ProfileRow extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       value,
-                      style: const TextStyle(
-                        color: Colors.black,
+                      style: TextStyle(
+                        color: isDark ? Colors.white : Colors.black,
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
                         height: 1.3,
