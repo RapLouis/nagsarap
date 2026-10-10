@@ -509,6 +509,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     final timeInWin = _getTimeInWindow(event);
     final timeOutWin = _getTimeOutWindow(event);
+    final venueLocation = event.venue.isNotEmpty ? event.venue : 'Main Campus';
 
     showModalBottomSheet<void>(
       context: context,
@@ -561,7 +562,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 14),
+                if (event.description.isNotEmpty) ...[
+                  Text(
+                    'Event Details',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: isDark ? Colors.white : navy,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    event.description,
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.4,
+                      color: isDark ? const Color(0xFFCBD5E1) : Colors.black87,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                ],
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 12,
@@ -609,7 +630,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     ],
                   ),
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 16),
                 Divider(
                   color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
                 ),
@@ -637,34 +658,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   'Time-Out Window',
                   timeOutWin,
                 ),
-                if (event.venue.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  _modalInfoRow(
-                    Icons.location_on_outlined,
-                    'Venue',
-                    event.venue,
-                  ),
-                ],
-                if (event.description.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  Text(
-                    'Event Details',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                      color: isDark ? Colors.white : navy,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    event.description,
-                    style: TextStyle(
-                      fontSize: 13,
-                      height: 1.4,
-                      color: isDark ? const Color(0xFFCBD5E1) : Colors.black87,
-                    ),
-                  ),
-                ],
+                const SizedBox(height: 12),
+                _modalInfoRow(
+                  Icons.location_on_outlined,
+                  'Recording Location / Venue',
+                  venueLocation,
+                ),
                 const SizedBox(height: 24),
                 SizedBox(
                   width: double.infinity,
@@ -763,10 +762,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     final midpoint = start.add(end.difference(start) ~/ 2);
-    final timeInStart = start.subtract(const Duration(minutes: 30));
 
     final outFmt = DateFormat('h:mm a');
-    return '${outFmt.format(timeInStart)} – ${outFmt.format(midpoint)}';
+    return '${outFmt.format(start)} – ${outFmt.format(midpoint)}';
   }
 
   String _getTimeOutWindow(EventItem event) {
@@ -778,10 +776,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     final midpoint = start.add(end.difference(start) ~/ 2);
-    final timeOutEnd = end.add(const Duration(minutes: 30));
 
     final outFmt = DateFormat('h:mm a');
-    return '${outFmt.format(midpoint)} – ${outFmt.format(timeOutEnd)}';
+    return '${outFmt.format(midpoint)} – ${outFmt.format(end)}';
   }
 
   String _getDisplayWindow(EventItem event) {
@@ -817,16 +814,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Row(
                 children: [
-                  Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.white,
-                      border: Border.all(color: gold, width: 2),
+                  SizedBox(
+                    width: 52,
+                    height: 52,
+                    child: ClipOval(
+                      child: Image.asset(
+                        'lib/screens/images/logo.png',
+                        fit: BoxFit.cover,
+                      ),
                     ),
-                    alignment: Alignment.center,
-                    child: const Icon(Icons.school_rounded, color: navy, size: 22),
                   ),
                   const Spacer(),
                   Column(

@@ -226,10 +226,9 @@ class _CalendarScreenState extends State<CalendarScreen> {
     }
 
     final midpoint = start.add(end.difference(start) ~/ 2);
-    final timeInStart = start.subtract(const Duration(minutes: 30));
 
     final outFmt = DateFormat('h:mm a');
-    return '${outFmt.format(timeInStart)} – ${outFmt.format(midpoint)}';
+    return '${outFmt.format(start)} – ${outFmt.format(midpoint)}';
   }
 
   String _getTimeOutWindow(EventItem event) {
@@ -241,10 +240,9 @@ class _CalendarScreenState extends State<CalendarScreen> {
     }
 
     final midpoint = start.add(end.difference(start) ~/ 2);
-    final timeOutEnd = end.add(const Duration(minutes: 30));
 
     final outFmt = DateFormat('h:mm a');
-    return '${outFmt.format(midpoint)} – ${outFmt.format(timeOutEnd)}';
+    return '${outFmt.format(midpoint)} – ${outFmt.format(end)}';
   }
 
   void _previousMonth() {

@@ -102,37 +102,34 @@ class _AttendanceFaceVerificationScreenState
     });
   }
 
-  /// Automatically calculates whether current time falls within Time-In or Time-Out window.
   AttendanceSessionType? _determineCurrentSession() {
     final now = DateTime.now();
     final startTime = _parseEventTime(widget.event.startTime);
     final endTime = _parseEventTime(widget.event.endTime);
 
-    // Default time-in / time-out window buffers if start/end times exist
     if (startTime != null && endTime != null) {
-      // Buffer: Allow Time-In starting 30 mins before event start up to midpoint
       final midpoint = startTime.add(endTime.difference(startTime) ~/ 2);
       final timeInStart = startTime.subtract(const Duration(minutes: 30));
 
-      // 1. If student already completed Time-In, check if current time is within Time-Out window
       if (_hasTimeIn) {
-        if (!_hasTimeOut && now.isAfter(midpoint) && now.isBefore(endTime.add(const Duration(minutes: 30)))) {
+        if (!_hasTimeOut &&
+            now.isAfter(midpoint) &&
+            now.isBefore(endTime.add(const Duration(minutes: 30)))) {
           return AttendanceSessionType.timeOut;
         }
-        return null; // Time-Out is closed or attendance completed
+        return null;
       }
 
-      // 2. If student has not timed-in yet, evaluate current window
       if (now.isAfter(timeInStart) && now.isBefore(midpoint)) {
         return AttendanceSessionType.timeIn;
-      } else if (now.isAfter(midpoint) && now.isBefore(endTime.add(const Duration(minutes: 30)))) {
+      } else if (now.isAfter(midpoint) &&
+          now.isBefore(endTime.add(const Duration(minutes: 30)))) {
         return AttendanceSessionType.timeOut;
       }
 
-      return null; // Outside valid attendance schedule
+      return null;
     }
 
-    // Fallback if schedule parsing fails
     if (_hasTimeIn && !_hasTimeOut) return AttendanceSessionType.timeOut;
     if (!_hasTimeIn) return AttendanceSessionType.timeIn;
     return null;
@@ -172,7 +169,8 @@ class _AttendanceFaceVerificationScreenState
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Row(
           children: [
-            const Icon(Icons.access_time_filled_rounded, color: Colors.orangeAccent, size: 26),
+            const Icon(Icons.access_time_filled_rounded,
+                color: Colors.orangeAccent, size: 26),
             const SizedBox(width: 10),
             Text(
               'Attendance Closed',
@@ -200,9 +198,11 @@ class _AttendanceFaceVerificationScreenState
             style: ElevatedButton.styleFrom(
               backgroundColor: isDark ? brandGold : brandNavy,
               foregroundColor: isDark ? brandNavy : Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape:
+                  RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
-            child: const Text('OK', style: TextStyle(fontWeight: FontWeight.bold)),
+            child:
+                const Text('OK', style: TextStyle(fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -275,7 +275,7 @@ class _AttendanceFaceVerificationScreenState
 
     final controller = CameraController(
       selected,
-      ResolutionPreset.low,
+      ResolutionPreset.medium,
       enableAudio: false,
       imageFormatGroup: ImageFormatGroup.jpeg,
     );
@@ -409,7 +409,7 @@ class _AttendanceFaceVerificationScreenState
       if (!mounted || _disposed || !_running) return;
 
       if (!result.success || !result.faceDetected) {
-        _resetProgress('Position face inside frame');
+        _resetProgress('Position face clearly inside frame');
         return;
       }
 
@@ -445,7 +445,7 @@ class _AttendanceFaceVerificationScreenState
     switch (_step) {
       case _LivenessStep.lookCenter:
         if (yaw.abs() > frontalYawMax) {
-          _resetProgress('Look straight at the camera.');
+          _resetProgress('Please look directly at the camera');
           return;
         }
 
@@ -472,7 +472,7 @@ class _AttendanceFaceVerificationScreenState
         if (DateTime.now().difference(startTime) > challengeTimeout) {
           _prepareAndStartSequential();
           setState(() {
-            _hint = "Time ran out. Let's try again.";
+            _hint = 'Verification timed out. Please try again.';
           });
           return;
         }
@@ -485,7 +485,7 @@ class _AttendanceFaceVerificationScreenState
           setState(() {
             _turnHoldCount = 0;
             _turnProgress = 0.0;
-            _hint = 'Turn to your $_direction, not the other way.';
+            _hint = 'Incorrect turn! Turn head towards your $_direction.';
           });
           return;
         }
@@ -539,8 +539,9 @@ class _AttendanceFaceVerificationScreenState
       _hint = null;
     });
 
-    final typeStr =
-        _currentSession == AttendanceSessionType.timeIn ? 'time_in' : 'time_out';
+    final typeStr = _currentSession == AttendanceSessionType.timeIn
+        ? 'time_in'
+        : 'time_out';
 
     final result = await AttendanceService.instance.mobileCheckIn(
       eventId: eventId,
@@ -701,7 +702,9 @@ class _AttendanceFaceVerificationScreenState
     final isDark = themeController.isDarkMode;
     final sessionTitle = _currentSession == AttendanceSessionType.timeIn
         ? 'Time-In'
-        : (_currentSession == AttendanceSessionType.timeOut ? 'Time-Out ' : 'Closed');
+        : (_currentSession == AttendanceSessionType.timeOut
+            ? 'Time-Out'
+            : 'Closed');
 
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
@@ -715,23 +718,98 @@ class _AttendanceFaceVerificationScreenState
         ),
       ),
       body: SafeArea(
-        child: Column(
+        child: Stack(
+          alignment: Alignment.center,
           children: [
-            const SizedBox(height: 20),
-            Text(
-              'Face Verification ($sessionTitle)',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: isDark ? Colors.white : brandNavy,
+            // 1. Top Section - Fixed Positioned Overlay (Header, Badges & Error Messages)
+            Positioned(
+              top: 12,
+              left: 16,
+              right: 16,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Face Verification ($sessionTitle)',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: isDark ? Colors.white : brandNavy,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    widget.event.venue,
+                    style: const TextStyle(fontSize: 12.5, color: muted),
+                  ),
+                  const SizedBox(height: 12),
+                  _buildInstructionBadge(),
+                  if (_error != null && _step == _LivenessStep.failed) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFEF2F2),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFFCA5A5)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.error_outline_rounded,
+                              color: Color(0xFFDC2626), size: 18),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _error!,
+                              style: const TextStyle(
+                                color: Color(0xFF991B1B),
+                                fontWeight: FontWeight.w800,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ] else if (_hint != null) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? const Color(0xFF3B2D08)
+                            : const Color(0xFFFFFBEB),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFFDE68A)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.info_outline_rounded,
+                              color: Color(0xFFD97706), size: 18),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _hint!,
+                              style: TextStyle(
+                                color: isDark
+                                    ? brandGold
+                                    : const Color(0xFF92400E),
+                                fontWeight: FontWeight.w800,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
-            const SizedBox(height: 4),
-            Text(
-              widget.event.venue,
-              style: const TextStyle(fontSize: 13, color: muted),
-            ),
-            const Spacer(),
+
+            // 2. Absolute Dead Center Camera Circle Frame (Restored 250px Dimensions, No Distortion)
             Center(
               child: Stack(
                 alignment: Alignment.center,
@@ -766,13 +844,28 @@ class _AttendanceFaceVerificationScreenState
                       child: _cameraReady &&
                               _camera != null &&
                               _camera!.value.isInitialized
-                          ? FittedBox(
-                              fit: BoxFit.cover,
-                              child: SizedBox(
-                                width: 250,
-                                height: 250 * _camera!.value.aspectRatio,
-                                child: CameraPreview(_camera!),
-                              ),
+                          ? LayoutBuilder(
+                              builder: (context, constraints) {
+                                final previewRatio = _camera!.value.aspectRatio;
+                                return SizedBox(
+                                  width: constraints.maxWidth,
+                                  height: constraints.maxHeight,
+                                  child: ClipRect(
+                                    child: OverflowBox(
+                                      alignment: Alignment.center,
+                                      child: FittedBox(
+                                        fit: BoxFit.cover,
+                                        child: SizedBox(
+                                          width: constraints.maxWidth,
+                                          height: constraints.maxWidth *
+                                              previewRatio,
+                                          child: CameraPreview(_camera!),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
                             )
                           : const Center(
                               child: CircularProgressIndicator(
@@ -783,10 +876,10 @@ class _AttendanceFaceVerificationScreenState
                   ),
                   if (_step == _LivenessStep.turn)
                     Positioned(
-                      left: _direction == 'left' ? 16 : null,
-                      right: _direction == 'right' ? 16 : null,
+                      left: _direction == 'left' ? 14 : null,
+                      right: _direction == 'right' ? 14 : null,
                       child: Container(
-                        padding: const EdgeInsets.all(12),
+                        padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
                           color: (isDark ? const Color(0xFF1E293B) : brandNavy)
                               .withValues(alpha: 0.85),
@@ -798,43 +891,19 @@ class _AttendanceFaceVerificationScreenState
                               ? Icons.arrow_back
                               : Icons.arrow_forward,
                           color: Colors.white,
-                          size: 28,
+                          size: 26,
                         ),
                       ),
                     ),
                 ],
               ),
             ),
-            const SizedBox(height: 18),
-            _buildInstructionBadge(),
-            const Spacer(),
-            if (_error != null && _step == _LivenessStep.failed)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12, left: 20, right: 20),
-                child: Text(
-                  _error!,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: Colors.redAccent,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
-                  ),
-                ),
-              )
-            else if (_hint != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Text(
-                  _hint!,
-                  style: const TextStyle(
-                    color: brandGold,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
-                  ),
-                ),
-              ),
-            _buildProgressBar(),
-            const SizedBox(height: 30),
+
+            // 3. Bottom Progress Bar
+            Positioned(
+              bottom: 24,
+              child: _buildProgressBar(),
+            ),
           ],
         ),
       ),
@@ -877,7 +946,8 @@ class _AttendanceFaceVerificationScreenState
         color: isDark ? const Color(0xFF1E293B) : const Color(0xFFFFF8E7),
         borderRadius: BorderRadius.circular(24),
         border: Border.all(
-          color: isDark ? const Color(0xFF334155) : brandGold.withValues(alpha: 0.6),
+          color:
+              isDark ? const Color(0xFF334155) : brandGold.withValues(alpha: 0.6),
         ),
       ),
       child: Row(
@@ -919,7 +989,8 @@ class _AttendanceFaceVerificationScreenState
         borderRadius: BorderRadius.circular(3),
         child: LinearProgressIndicator(
           value: progress,
-          backgroundColor: isDark ? const Color(0xFF334155) : Colors.grey.shade300,
+          backgroundColor:
+              isDark ? const Color(0xFF334155) : Colors.grey.shade300,
           valueColor: AlwaysStoppedAnimation<Color>(
             isDark ? brandGold : brandNavy,
           ),

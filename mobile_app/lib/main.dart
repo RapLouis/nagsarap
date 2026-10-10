@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'controllers/theme_controller.dart';
-import 'screens/auth/auth_gate.dart';
+import 'screens/splash/app_splash_screen.dart';
 
 final ThemeController themeController = ThemeController();
 
@@ -36,10 +36,10 @@ class _MyAppState extends State<MyApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'CCIS Attendance',
+      title: 'Attend',
       debugShowCheckedModeBanner: false,
       themeMode: themeController.isDarkMode ? ThemeMode.dark : ThemeMode.light,
-      
+
       // Light Mode Configuration
       theme: ThemeData(
         brightness: Brightness.light,
@@ -76,7 +76,7 @@ class _MyAppState extends State<MyApp> {
         ),
       ),
 
-      home: const AuthGate(),
+      home: const AppSplashScreen(),
     );
   }
 }

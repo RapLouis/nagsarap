@@ -25,6 +25,11 @@ class MainBottomNavigation extends StatelessWidget {
     int currentIndex = -1,
     VoidCallback? onPressed,
   }) {
+    // Hide the scanner FAB if not on the Home screen (index 0)
+    if (currentIndex != 0) {
+      return const SizedBox.shrink();
+    }
+
     return Container(
       width: 58,
       height: 58,
@@ -125,7 +130,8 @@ class MainBottomNavigation extends StatelessWidget {
                     }
                   },
                 ),
-                const SizedBox(width: 48), // Center floating action button gap
+                // Only keep spacing gap for Floating Action Button on Home Screen
+                if (currentIndex == 0) const SizedBox(width: 48),
                 _navItem(
                   context,
                   icon: Icons.calendar_today_rounded,
