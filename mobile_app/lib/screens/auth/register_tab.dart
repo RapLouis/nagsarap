@@ -5,7 +5,6 @@ import 'package:image_picker/image_picker.dart';
 import '../../core/app_colors.dart';
 import '../../services/registration_service.dart';
 import '../../widgets/app_dialog.dart';
-import '../../widgets/app_text_field.dart';
 import 'registration_face_verification_screen.dart';
 
 class RegisterTab extends StatefulWidget {
@@ -70,7 +69,7 @@ class _RegisterTabState extends State<RegisterTab> {
   }
 
   // --------------------------------------------------------------------------
-  // PICK + REAL VALIDATE PROFILE PHOTO
+  // PICK + FAST VALIDATE PROFILE PHOTO
   // --------------------------------------------------------------------------
 
   Future<void> pickProfilePhoto() async {
@@ -79,9 +78,12 @@ class _RegisterTabState extends State<RegisterTab> {
     }
 
     try {
+      // Optimized for ultra-fast upload & AI scan speed
       final XFile? image = await imagePicker.pickImage(
         source: ImageSource.gallery,
-        imageQuality: 95,
+        imageQuality: 70,
+        maxWidth: 1024,
+        maxHeight: 1024,
       );
 
       if (image == null) {
@@ -96,23 +98,8 @@ class _RegisterTabState extends State<RegisterTab> {
         profilePhoto = image;
         validatingPhoto = true;
         facePhotoValid = false;
-        photoValidationMessage =
-            'Checking image quality and detecting face...';
+        photoValidationMessage = 'Scanning reference photo...';
       });
-
-      // ----------------------------------------------------------------------
-      // REAL SERVER VALIDATION
-      // ----------------------------------------------------------------------
-      //
-      // Flutter
-      //    ↓
-      // Laravel API
-      //    ↓
-      // FaceService
-      //    ↓
-      // Python OpenCV + InsightFace
-      //
-      // ----------------------------------------------------------------------
 
       final result =
           await RegistrationService.instance.validateReferencePhoto(
@@ -132,10 +119,6 @@ class _RegisterTabState extends State<RegisterTab> {
 
         return;
       }
-
-      // ----------------------------------------------------------------------
-      // INVALID IMAGE
-      // ----------------------------------------------------------------------
 
       setState(() {
         validatingPhoto = false;
@@ -167,8 +150,7 @@ class _RegisterTabState extends State<RegisterTab> {
       setState(() {
         validatingPhoto = false;
         facePhotoValid = false;
-        photoValidationMessage =
-            'Unable to process the selected photo.';
+        photoValidationMessage = 'Unable to process the selected photo.';
       });
 
       await showSimpleError(
@@ -271,38 +253,11 @@ class _RegisterTabState extends State<RegisterTab> {
   }
 
   // --------------------------------------------------------------------------
-  // STUDENT NUMBER
-  // --------------------------------------------------------------------------
-  //
-  // Required format:
-  //
-  // User types:
-  // 24123423
-  //
-  // Automatically becomes:
-  // 24-123423
-  //
-  // Maximum:
-  // 8 digits
-  //
-  // Displayed:
-  // YY-NNNNNN
-  //
+  // STUDENT NUMBER FORMATTER
   // --------------------------------------------------------------------------
 
   void formatStudentNumber(String value) {
-    // Keep numbers only.
     final digits = value.replaceAll(RegExp(r'[^0-9]'), '');
-
-    // Student number contains exactly 8 digits:
-    //
-    // YY + NNNNNN
-    //
-    // Example:
-    // 24123423
-    //
-    // becomes:
-    // 24-123423
     final limitedDigits =
         digits.length > 8 ? digits.substring(0, 8) : digits;
 
@@ -328,50 +283,26 @@ class _RegisterTabState extends State<RegisterTab> {
   }
 
   // --------------------------------------------------------------------------
-  // PASSWORD VALIDATION
+  // VALIDATION CHECKS
   // --------------------------------------------------------------------------
 
-  // Minimum 12 characters.
-  bool get hasMinimumLength =>
-      passwordController.text.length >= 12;
+  bool get hasMinimumLength => passwordController.text.length >= 12;
 
-  // At least one number.
-  bool get hasNumber =>
-      RegExp(r'[0-9]').hasMatch(passwordController.text);
+  bool get hasNumber => RegExp(r'[0-9]').hasMatch(passwordController.text);
 
-  // At least one special character.
   bool get hasSpecialCharacter =>
-      RegExp(
-        r'''[!@#$%^&*(),.?":{}|<>_\-+=/\\[\]]''',
-      ).hasMatch(passwordController.text);
+      RegExp(r'''[!@#$%^&*(),.?":{}|<>_\-+=/\\[\]]''')
+          .hasMatch(passwordController.text);
 
-  // Confirm password must match.
   bool get passwordsMatch =>
       passwordController.text.isNotEmpty &&
       passwordController.text == confirmPasswordController.text;
 
-  // Email validation.
-  bool get validEmail =>
-      RegExp(
-        r'^[^@\s]+@[^@\s]+\.[^@\s]+$',
-      ).hasMatch(emailController.text.trim());
+  bool get validEmail => RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+      .hasMatch(emailController.text.trim());
 
-  // Student number must be exactly:
-  //
-  // 2 digits
-  // -
-  // 6 digits
-  //
-  // Example:
-  // 24-123423
   bool get validStudentNumber =>
-      RegExp(
-        r'^\d{2}-\d{6}$',
-      ).hasMatch(studentNumberController.text.trim());
-
-  // --------------------------------------------------------------------------
-  // CAN REGISTER
-  // --------------------------------------------------------------------------
+      RegExp(r'^\d{2}-\d{6}$').hasMatch(studentNumberController.text.trim());
 
   bool get canRegister =>
       validStudentNumber &&
@@ -440,45 +371,18 @@ class _RegisterTabState extends State<RegisterTab> {
       return;
     }
 
-    // ------------------------------------------------------------------------
-    // REGISTRATION CREATED
-    // ------------------------------------------------------------------------
+    final studentName =
+        '${firstNameController.text.trim()} ${surnameController.text.trim()}';
 
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) {
-        return AppDialog(
-          type: AppDialogType.success,
-          title: 'Registration Successful',
-          message:
-              'Your account has been created. Continue to live face verification.',
-          primaryText: 'Continue',
-          primaryAction: () {
-            Navigator.of(dialogContext).pop();
-          },
-        );
-      },
-    );
-
-    if (!mounted) {
-      return;
-    }
-
-    // ------------------------------------------------------------------------
-    // LIVE FACE VERIFICATION
-    // ------------------------------------------------------------------------
-
+    // Proceed to live face verification with Liveness steps
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => const RegistrationFaceVerificationScreen(),
+        builder: (_) => RegistrationFaceVerificationScreen(
+          studentName: studentName,
+        ),
       ),
     );
   }
-
-  // --------------------------------------------------------------------------
-  // ERROR DIALOG
-  // --------------------------------------------------------------------------
 
   Future<void> showSimpleError({
     required String title,
@@ -505,141 +409,234 @@ class _RegisterTabState extends State<RegisterTab> {
   }
 
   // --------------------------------------------------------------------------
-  // UI
+  // CUSTOM ROUNDED INPUT FIELD BUILDER
   // --------------------------------------------------------------------------
+
+  Widget _buildRoundedInputField({
+    required String label,
+    required String hint,
+    required TextEditingController controller,
+    bool isRequired = false,
+    TextInputType keyboardType = TextInputType.text,
+    TextInputAction textInputAction = TextInputAction.next,
+    bool obscureText = false,
+    Widget? prefixIcon,
+    Widget? suffixIcon,
+    String? helperText,
+    ValueChanged<String>? onChanged,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        RichText(
+          text: TextSpan(
+            text: label,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: AppColors.navy,
+            ),
+            children: isRequired
+                ? [
+                    const TextSpan(
+                      text: ' *',
+                      style: TextStyle(
+                        color: AppColors.gold,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ]
+                : [],
+          ),
+        ),
+        const SizedBox(height: 6),
+        Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x0A000000),
+                blurRadius: 6,
+                offset: Offset(0, 2),
+              ),
+            ],
+          ),
+          child: TextField(
+            controller: controller,
+            keyboardType: keyboardType,
+            textInputAction: textInputAction,
+            obscureText: obscureText,
+            onChanged: onChanged,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              color: Colors.black87,
+            ),
+            decoration: InputDecoration(
+              hintText: hint,
+              hintStyle: const TextStyle(
+                fontSize: 13,
+                color: Color(0xFF94A3B8),
+              ),
+              prefixIcon: prefixIcon,
+              suffixIcon: suffixIcon,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 20,
+                vertical: 14,
+              ),
+              filled: true,
+              fillColor: Colors.white,
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(24),
+                borderSide: const BorderSide(
+                  color: Color(0xFFCBD5E1),
+                  width: 1.2,
+                ),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(24),
+                borderSide: const BorderSide(
+                  color: AppColors.gold,
+                  width: 1.8,
+                ),
+              ),
+            ),
+          ),
+        ),
+        if (helperText != null) ...[
+          const SizedBox(height: 4),
+          Padding(
+            padding: const EdgeInsets.only(left: 12),
+            child: Text(
+              helperText,
+              style: const TextStyle(
+                fontSize: 10,
+                color: AppColors.textMuted,
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(28, 30, 28, 45),
+      padding: const EdgeInsets.fromLTRB(28, 20, 28, 45),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // --------------------------------------------------------------------
-          // STUDENT NUMBER
-          // --------------------------------------------------------------------
-
-          AppTextField(
-            label: 'Student Number *',
-            hint: '23-140012',
+          _buildRoundedInputField(
+            label: 'Student Number',
+            isRequired: true,
+            hint: 'e.g. 23-140040',
             controller: studentNumberController,
             keyboardType: TextInputType.number,
-            helperText:
-                'Format: YY-NNNNNN (example: 23-140012)',
-            textInputAction: TextInputAction.next,
+            helperText: 'Format: YY-NNNNNN (e.g. 23-140040)',
+            prefixIcon: const Icon(
+              Icons.tag_rounded,
+              size: 18,
+              color: AppColors.textMuted,
+            ),
             onChanged: formatStudentNumber,
           ),
-
-          const SizedBox(height: 18),
-
-          // --------------------------------------------------------------------
-          // FIRST + SURNAME
-          // --------------------------------------------------------------------
-
+          const SizedBox(height: 16),
           Row(
             children: [
               Expanded(
-                child: AppTextField(
-                  label: 'First Name *',
-                  hint: 'First Name',
-                  controller: firstNameController,
-                  textInputAction: TextInputAction.next,
-                  onChanged: (_) {
-                    setState(() {});
-                  },
-                ),
-              ),
-
-              const SizedBox(width: 12),
-
-              Expanded(
-                child: AppTextField(
-                  label: 'Surname *',
+                child: _buildRoundedInputField(
+                  label: 'Surname',
+                  isRequired: true,
                   hint: 'Surname',
                   controller: surnameController,
-                  textInputAction: TextInputAction.next,
-                  onChanged: (_) {
-                    setState(() {});
-                  },
+                  prefixIcon: const Icon(
+                    Icons.person_outline_rounded,
+                    size: 18,
+                    color: AppColors.textMuted,
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildRoundedInputField(
+                  label: 'First Name',
+                  isRequired: true,
+                  hint: 'First name',
+                  controller: firstNameController,
+                  prefixIcon: const Icon(
+                    Icons.person_outline_rounded,
+                    size: 18,
+                    color: AppColors.textMuted,
+                  ),
+                  onChanged: (_) => setState(() {}),
                 ),
               ),
             ],
           ),
-
-          const SizedBox(height: 18),
-
-          // --------------------------------------------------------------------
-          // MIDDLE + EXTENSION
-          // --------------------------------------------------------------------
-
+          const SizedBox(height: 16),
           Row(
             children: [
               Expanded(
                 flex: 2,
-                child: AppTextField(
+                child: _buildRoundedInputField(
                   label: 'Middle Name',
-                  hint: 'Middle Name',
+                  hint: 'Middle name',
                   controller: middleNameController,
-                  textInputAction: TextInputAction.next,
                 ),
               ),
-
               const SizedBox(width: 12),
-
               Expanded(
-                child: AppTextField(
+                child: _buildRoundedInputField(
                   label: 'Extension',
-                  hint: 'Jr.',
+                  hint: 'Jr., Sr.',
                   controller: extensionController,
-                  textInputAction: TextInputAction.next,
                 ),
               ),
             ],
           ),
-
-          const SizedBox(height: 18),
-
-          // --------------------------------------------------------------------
-          // EMAIL
-          // --------------------------------------------------------------------
-
-          AppTextField(
-            label: 'Email Address *',
-            hint: 'example@email.com',
+          const SizedBox(height: 16),
+          _buildRoundedInputField(
+            label: 'Email Address',
+            isRequired: true,
+            hint: 'Enter your email address',
             controller: emailController,
             keyboardType: TextInputType.emailAddress,
-            textInputAction: TextInputAction.next,
-            onChanged: (_) {
-              setState(() {});
-            },
+            prefixIcon: const Icon(
+              Icons.mail_outline_rounded,
+              size: 18,
+              color: AppColors.textMuted,
+            ),
+            onChanged: (_) => setState(() {}),
           ),
-
           if (emailController.text.isNotEmpty && !validEmail) ...[
-            const SizedBox(height: 6),
-            const Text(
-              'Enter a valid email address',
-              style: TextStyle(
-                fontSize: 10,
-                color: AppColors.error,
+            const SizedBox(height: 4),
+            const Padding(
+              padding: EdgeInsets.only(left: 12),
+              child: Text(
+                'Enter a valid email address',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: AppColors.error,
+                ),
               ),
             ),
           ],
-
-          const SizedBox(height: 18),
-
-          // --------------------------------------------------------------------
-          // PASSWORD
-          // --------------------------------------------------------------------
-
-          AppTextField(
-            label: 'Set Password *',
-            hint: 'Enter your password',
+          const SizedBox(height: 16),
+          _buildRoundedInputField(
+            label: 'Password',
+            isRequired: true,
+            hint: 'Create a password',
             controller: passwordController,
             obscureText: hidePassword,
-            textInputAction: TextInputAction.next,
-            onChanged: (_) {
-              setState(() {});
-            },
+            prefixIcon: const Icon(
+              Icons.lock_outline_rounded,
+              size: 18,
+              color: AppColors.textMuted,
+            ),
+            onChanged: (_) => setState(() {}),
             suffixIcon: IconButton(
               onPressed: () {
                 setState(() {
@@ -650,42 +647,45 @@ class _RegisterTabState extends State<RegisterTab> {
                 hidePassword
                     ? Icons.visibility_off_outlined
                     : Icons.visibility_outlined,
+                size: 18,
+                color: AppColors.textMuted,
               ),
             ),
           ),
-
           const SizedBox(height: 10),
-
-          _PasswordRequirement(
-            passed: hasMinimumLength,
-            text: 'At least 12 characters',
+          Padding(
+            padding: const EdgeInsets.only(left: 6),
+            child: Column(
+              children: [
+                _PasswordRequirement(
+                  passed: hasMinimumLength,
+                  text: 'At least 12 characters',
+                ),
+                _PasswordRequirement(
+                  passed: hasNumber,
+                  text: 'At least one number',
+                ),
+                _PasswordRequirement(
+                  passed: hasSpecialCharacter,
+                  text: 'At least one special character',
+                ),
+              ],
+            ),
           ),
-
-          _PasswordRequirement(
-            passed: hasNumber,
-            text: 'At least one number',
-          ),
-
-          _PasswordRequirement(
-            passed: hasSpecialCharacter,
-            text: 'At least one special character',
-          ),
-
-          const SizedBox(height: 18),
-
-          // --------------------------------------------------------------------
-          // CONFIRM PASSWORD
-          // --------------------------------------------------------------------
-
-          AppTextField(
-            label: 'Confirm Password *',
+          const SizedBox(height: 16),
+          _buildRoundedInputField(
+            label: 'Confirm Password',
+            isRequired: true,
             hint: 'Confirm your password',
             controller: confirmPasswordController,
             obscureText: hideConfirmPassword,
             textInputAction: TextInputAction.done,
-            onChanged: (_) {
-              setState(() {});
-            },
+            prefixIcon: const Icon(
+              Icons.lock_outline_rounded,
+              size: 18,
+              color: AppColors.textMuted,
+            ),
+            onChanged: (_) => setState(() {}),
             suffixIcon: IconButton(
               onPressed: () {
                 setState(() {
@@ -696,259 +696,297 @@ class _RegisterTabState extends State<RegisterTab> {
                 hideConfirmPassword
                     ? Icons.visibility_off_outlined
                     : Icons.visibility_outlined,
+                size: 18,
+                color: AppColors.textMuted,
               ),
             ),
           ),
-
           if (confirmPasswordController.text.isNotEmpty) ...[
-            const SizedBox(height: 7),
-            Row(
-              children: [
-                Icon(
-                  passwordsMatch
-                      ? Icons.check_circle_rounded
-                      : Icons.cancel_rounded,
-                  size: 15,
-                  color: passwordsMatch
-                      ? AppColors.success
-                      : AppColors.error,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  passwordsMatch
-                      ? 'Passwords match'
-                      : 'Passwords do not match',
-                  style: TextStyle(
-                    fontSize: 11,
+            const SizedBox(height: 6),
+            Padding(
+              padding: const EdgeInsets.only(left: 12),
+              child: Row(
+                children: [
+                  Icon(
+                    passwordsMatch
+                        ? Icons.check_circle_rounded
+                        : Icons.cancel_rounded,
+                    size: 14,
                     color: passwordsMatch
                         ? AppColors.success
                         : AppColors.error,
                   ),
+                  const SizedBox(width: 6),
+                  Text(
+                    passwordsMatch
+                        ? 'Passwords match'
+                        : 'Passwords do not match',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: passwordsMatch
+                          ? AppColors.success
+                          : AppColors.error,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 24),
+          RichText(
+            text: const TextSpan(
+              text: 'Profile Picture',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: AppColors.navy,
+              ),
+              children: [
+                TextSpan(
+                  text: ' *',
+                  style: TextStyle(
+                    color: AppColors.gold,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ],
             ),
-          ],
-
-          const SizedBox(height: 26),
-
-          // --------------------------------------------------------------------
-          // REFERENCE PHOTO
-          // --------------------------------------------------------------------
-
-          const Text(
-            'Reference Photo *',
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-            ),
           ),
-
-          const SizedBox(height: 5),
-
-          const Text(
-            'Upload one clear face photo. The actual server will validate it before registration.',
-            style: TextStyle(
-              fontSize: 11,
-              height: 1.4,
-              color: AppColors.textSecondary,
-            ),
-          ),
-
-          const SizedBox(height: 10),
-
+          const SizedBox(height: 8),
           InkWell(
-            onTap: validatingPhoto || registering
-                ? null
-                : pickProfilePhoto,
-            borderRadius: BorderRadius.circular(16),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 180),
+            onTap: validatingPhoto || registering ? null : pickProfilePhoto,
+            borderRadius: BorderRadius.circular(20),
+            child: Container(
               width: double.infinity,
-              padding: const EdgeInsets.all(22),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
               decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(20),
                 border: Border.all(
                   color: facePhotoValid
                       ? AppColors.success
-                      : AppColors.gold,
-                  width: 1.3,
+                      : const Color(0xFFE2E8F0),
+                  width: 1.5,
                 ),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x06000000),
+                    blurRadius: 8,
+                    offset: Offset(0, 2),
+                  ),
+                ],
               ),
-              child: Column(
+              child: Row(
                 children: [
-                  if (validatingPhoto)
-                    const SizedBox(
-                      width: 42,
-                      height: 42,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 3,
-                        color: AppColors.navy,
-                      ),
-                    )
-                  else
-                    Icon(
-                      facePhotoValid
-                          ? Icons.verified_rounded
-                          : Icons.add_a_photo_outlined,
-                      size: 48,
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
                       color: facePhotoValid
-                          ? AppColors.success
-                          : AppColors.navy,
+                          ? const Color(0xFFDCFCE7)
+                          : const Color(0xFFF1F5F9),
+                      borderRadius: BorderRadius.circular(12),
                     ),
-
-                  const SizedBox(height: 10),
-
-                  Text(
-                    profilePhoto?.name ??
-                        'Upload Reference Photo',
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
+                    child: validatingPhoto
+                        ? const Padding(
+                            padding: EdgeInsets.all(10),
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              color: AppColors.navy,
+                            ),
+                          )
+                        : Icon(
+                            facePhotoValid
+                                ? Icons.check_circle_rounded
+                                : Icons.file_upload_outlined,
+                            size: 24,
+                            color: facePhotoValid
+                                ? AppColors.success
+                                : AppColors.navy,
+                          ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          profilePhoto?.name ?? 'Upload Profile Picture',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.navy,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          validatingPhoto
+                              ? 'Scanning reference photo...'
+                              : photoValidationMessage ??
+                                  'Clear, well-lit headshot (JPG, JPEG, PNG)',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: facePhotoValid
+                                ? AppColors.success
+                                : AppColors.textMuted,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-
-                  const SizedBox(height: 5),
-
-                  Text(
-                    validatingPhoto
-                        ? 'Validating with face service...'
-                        : photoValidationMessage ??
-                            'JPG, JPEG or PNG',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: facePhotoValid
-                          ? AppColors.success
-                          : AppColors.textSecondary,
-                    ),
-                  ),
-
-                  if (profilePhoto != null &&
-                      !validatingPhoto) ...[
-                    const SizedBox(height: 7),
-                    TextButton(
+                  if (profilePhoto != null && !validatingPhoto)
+                    IconButton(
                       onPressed: removeProfilePhoto,
-                      child: const Text('Remove Photo'),
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        color: Colors.grey,
+                        size: 18,
+                      ),
                     ),
-                  ],
                 ],
               ),
             ),
           ),
-
-          const SizedBox(height: 22),
-
-          // --------------------------------------------------------------------
-          // FORM 5
-          // --------------------------------------------------------------------
-
-          const Text(
-            'Form 5 Document *',
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
+          const SizedBox(height: 20),
+          RichText(
+            text: const TextSpan(
+              text: 'Form 5 Document',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: AppColors.navy,
+              ),
+              children: [
+                TextSpan(
+                  text: ' *',
+                  style: TextStyle(
+                    color: AppColors.gold,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
             ),
           ),
-
-          const SizedBox(height: 5),
-
-          const Text(
-            'Upload your current Form 5 for student information verification.',
-            style: TextStyle(
-              fontSize: 11,
-              color: AppColors.textSecondary,
-            ),
-          ),
-
-          const SizedBox(height: 10),
-
+          const SizedBox(height: 8),
           InkWell(
             onTap: registering ? null : pickForm5,
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(20),
             child: Container(
               width: double.infinity,
-              padding: const EdgeInsets.all(22),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
               decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(20),
                 border: Border.all(
                   color: form5 != null
                       ? AppColors.success
-                      : AppColors.gold,
+                      : const Color(0xFFE2E8F0),
+                  width: 1.5,
                 ),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x06000000),
+                    blurRadius: 8,
+                    offset: Offset(0, 2),
+                  ),
+                ],
               ),
-              child: Column(
+              child: Row(
                 children: [
-                  Icon(
-                    form5 != null
-                        ? Icons.check_circle_outline_rounded
-                        : Icons.upload_file_outlined,
-                    size: 45,
-                    color: form5 != null
-                        ? AppColors.success
-                        : AppColors.navy,
-                  ),
-
-                  const SizedBox(height: 8),
-
-                  Text(
-                    form5?.name ?? 'Upload your Form 5',
-                    textAlign: TextAlign.center,
-                  ),
-
-                  const SizedBox(height: 4),
-
-                  const Text(
-                    'PDF only • Maximum 10 MB',
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: AppColors.textMuted,
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: form5 != null
+                          ? const Color(0xFFDCFCE7)
+                          : const Color(0xFFF1F5F9),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(
+                      form5 != null
+                          ? Icons.description_rounded
+                          : Icons.picture_as_pdf_outlined,
+                      size: 24,
+                      color: form5 != null
+                          ? AppColors.success
+                          : AppColors.navy,
                     ),
                   ),
-
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          form5?.name ?? 'Upload Form 5 PDF',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.navy,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 2),
+                        const Text(
+                          'PDF document only (Max 10MB)',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: AppColors.textMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                   if (form5 != null)
-                    TextButton(
+                    IconButton(
                       onPressed: removeForm5,
-                      child: const Text('Remove Form 5'),
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        color: Colors.grey,
+                        size: 18,
+                      ),
                     ),
                 ],
               ),
             ),
           ),
-
           const SizedBox(height: 30),
-
-          // --------------------------------------------------------------------
-          // CREATE ACCOUNT
-          // --------------------------------------------------------------------
-
           SizedBox(
             width: double.infinity,
-            child: FilledButton(
-              onPressed: canRegister
-                  ? submitRegistration
-                  : null,
+            height: 50,
+            child: ElevatedButton(
+              onPressed: canRegister ? submitRegistration : null,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.navy,
+                disabledBackgroundColor: const Color(0xFFCBD5E1),
+                elevation: 2,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(25),
+                ),
+              ),
               child: registering
                   ? const SizedBox(
-                      width: 23,
-                      height: 23,
+                      width: 22,
+                      height: 22,
                       child: CircularProgressIndicator(
                         strokeWidth: 2.5,
                         color: Colors.white,
                       ),
                     )
                   : const Text(
-                      'Create Student Account',
+                      'Register & Verify Form 5',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
                     ),
             ),
           ),
-
-          const SizedBox(height: 15),
-
+          const SizedBox(height: 14),
           const Center(
             child: Text(
               'Your account will require live facial verification before activation.',
@@ -965,10 +1003,6 @@ class _RegisterTabState extends State<RegisterTab> {
   }
 }
 
-// ============================================================================
-// PASSWORD REQUIREMENT
-// ============================================================================
-
 class _PasswordRequirement extends StatelessWidget {
   final bool passed;
   final String text;
@@ -981,28 +1015,20 @@ class _PasswordRequirement extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 5),
+      padding: const EdgeInsets.only(bottom: 4),
       child: Row(
         children: [
           Icon(
-            passed
-                ? Icons.check_circle_rounded
-                : Icons.circle_outlined,
-            size: 14,
-            color: passed
-                ? AppColors.success
-                : AppColors.textMuted,
+            passed ? Icons.check_circle_rounded : Icons.circle_outlined,
+            size: 13,
+            color: passed ? AppColors.success : AppColors.textMuted,
           ),
-
-          const SizedBox(width: 7),
-
+          const SizedBox(width: 6),
           Text(
             text,
             style: TextStyle(
-              fontSize: 10,
-              color: passed
-                  ? AppColors.success
-                  : AppColors.textSecondary,
+              fontSize: 11,
+              color: passed ? AppColors.success : AppColors.textSecondary,
             ),
           ),
         ],

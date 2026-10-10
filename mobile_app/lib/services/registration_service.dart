@@ -3,9 +3,8 @@ import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
 
-import '../models/liveness_challenge.dart';
-
 import '../core/api_endpoints.dart';
+import '../models/liveness_challenge.dart';
 import 'api_service.dart';
 
 class LivenessChallengeResult {
@@ -123,7 +122,11 @@ class RegistrationService {
       final response = await _api.dio.post(
         ApiEndpoints.validateReferencePhoto,
         data: formData,
-        options: Options(contentType: 'multipart/form-data'),
+        options: Options(
+          contentType: 'multipart/form-data',
+          sendTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 15),
+        ),
       );
 
       final map = _asMap(response.data);
@@ -157,7 +160,7 @@ class RegistrationService {
   }
 
   // ===========================================================================
-  // REGISTER
+  // REGISTER STUDENT ACCOUNT
   // ===========================================================================
 
   Future<RegistrationResult> register({
@@ -175,28 +178,18 @@ class RegistrationService {
     try {
       final formData = FormData.fromMap({
         'student_number': studentNumber.trim(),
-
         'surname': surname.trim(),
-
         'firstname': firstname.trim(),
-
         'middlename': middlename.trim().isEmpty ? null : middlename.trim(),
-
         'ext': ext.trim().isEmpty ? null : ext.trim(),
-
         'email': email.trim(),
-
         'password': password,
-
         'password_confirmation': passwordConfirmation,
-
         'device_name': 'Flutter Android',
-
         'profile_photo': await MultipartFile.fromFile(
           profilePhoto.path,
           filename: profilePhoto.name,
         ),
-
         'form_5': await MultipartFile.fromFile(
           form5.path,
           filename: form5.name,
@@ -206,7 +199,11 @@ class RegistrationService {
       final response = await _api.dio.post(
         ApiEndpoints.register,
         data: formData,
-        options: Options(contentType: 'multipart/form-data'),
+        options: Options(
+          contentType: 'multipart/form-data',
+          sendTimeout: const Duration(seconds: 45),
+          receiveTimeout: const Duration(seconds: 45),
+        ),
       );
 
       final responseMap = _asMap(response.data);
@@ -219,7 +216,6 @@ class RegistrationService {
       }
 
       final data = _asMap(responseMap['data']) ?? <String, dynamic>{};
-
       final token = data['token']?.toString();
 
       if (token != null && token.isNotEmpty) {
@@ -281,15 +277,13 @@ class RegistrationService {
           nonce != null &&
           nonce.isNotEmpty &&
           validDirection) {
-        final challengeDirection = direction!;
-
         return LivenessChallengeResult(
           success: true,
           networkUnavailable: false,
           message: 'Liveness challenge issued.',
           challenge: LivenessChallenge(
             nonce: nonce,
-            direction: challengeDirection,
+            direction: direction!,
             sessionId: sessionId,
             expiresAt: data?['expires_at'] is num
                 ? (data!['expires_at'] as num).toInt()
@@ -356,20 +350,15 @@ class RegistrationService {
       }
 
       final data = _asMap(responseMap['data']) ?? <String, dynamic>{};
-
       final success = responseMap['success'] == true;
 
-      final result = LivenessFrameResult(
+      return LivenessFrameResult(
         success: success,
-
         code: responseMap['code']?.toString(),
-
         message:
             responseMap['message']?.toString() ??
             (success ? 'Live frame analyzed.' : 'Unable to analyze frame.'),
-
         faceDetected: _boolValue(data['face_detected']),
-
         yaw: _doubleValue(data['yaw']),
         faceCenterX: _doubleValue(data['face_center_x']),
         faceCenterY: _doubleValue(data['face_center_y']),
@@ -377,25 +366,11 @@ class RegistrationService {
             ? true
             : _boolValue(data['face_in_comfortable_zone']),
         eyeOpenness: _doubleValue(data['eye_openness']),
-
         mouthWidth: _doubleValue(data['mouth_width']),
-
         blurScore: _doubleValue(data['blur_score']),
-
         detectionScore: _doubleValue(data['detection_score']),
-
         data: data,
       );
-
-      debugPrint(
-        'LIVENESS FRAME: '
-        'face=${result.faceDetected} '
-        'yaw=${result.yaw} '
-        'eye=${result.eyeOpenness} '
-        'mouth=${result.mouthWidth}',
-      );
-
-      return result;
     } on DioException catch (e) {
       return LivenessFrameResult(
         success: false,
@@ -413,7 +388,7 @@ class RegistrationService {
   }
 
   // ===========================================================================
-  // FINAL VERIFICATION
+  // FINAL BIOMETRIC VERIFICATION (INCLUDES NONCE AND SESSION ID)
   // ===========================================================================
 
   Future<BiometricVerificationResult> verifyRegistrationFace({
@@ -430,8 +405,6 @@ class RegistrationService {
           centerFrame.path,
           filename: 'center.jpg',
         ),
-
-
         'turned_frame': await MultipartFile.fromFile(
           turnedFrame.path,
           filename: 'turned.jpg',
@@ -457,26 +430,15 @@ class RegistrationService {
         );
       }
 
-      debugPrint('FINAL BIOMETRIC RESPONSE: $responseMap');
-
       return BiometricVerificationResult(
         success: responseMap['success'] == true,
-
         code: responseMap['code']?.toString(),
-
         message:
             responseMap['message']?.toString() ??
             'Biometric verification completed.',
-
         data: _asMap(responseMap['data']),
       );
     } on DioException catch (e) {
-      debugPrint(
-        'FINAL VERIFY HTTP ERROR: '
-        '${e.response?.statusCode} '
-        '${e.response?.data}',
-      );
-
       return BiometricVerificationResult(
         success: false,
         code: _extractCode(e),
@@ -500,47 +462,30 @@ class RegistrationService {
     if (value is Map) {
       return Map<String, dynamic>.from(value);
     }
-
     return null;
   }
 
   bool _boolValue(dynamic value) {
-    if (value is bool) {
-      return value;
-    }
-
-    if (value is num) {
-      return value != 0;
-    }
-
+    if (value is bool) return value;
+    if (value is num) return value != 0;
     if (value is String) {
       final normalized = value.trim().toLowerCase();
-
       return normalized == 'true' || normalized == '1';
     }
-
     return false;
   }
 
   double? _doubleValue(dynamic value) {
-    if (value is num) {
-      return value.toDouble();
-    }
-
-    if (value is String) {
-      return double.tryParse(value);
-    }
-
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value);
     return null;
   }
 
   String? _extractCode(DioException exception) {
     final raw = exception.response?.data;
-
     if (raw is Map) {
       return raw['code']?.toString();
     }
-
     return null;
   }
 

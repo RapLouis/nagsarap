@@ -25,6 +25,9 @@ class ApiEndpoints {
 
   static const String verifyRegistrationFace = '/api/v1/register/verify-face';
 
+  // Added getter alias for live face biometrics registration
+  static const String registerLiveFaceBiometrics = '/api/v1/register/verify-face';
+
   static const String registrationLivenessChallenge =
       '/api/v1/register/liveness-challenge';
 
