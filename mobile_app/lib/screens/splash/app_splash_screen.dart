@@ -195,7 +195,7 @@ class _AppSplashScreenState extends State<AppSplashScreen>
 
               // Clean Single System Title
               const Text(
-                'ATTEND  System',
+                'AtTeNd',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 22,

@@ -47,7 +47,9 @@ class _AttendanceFaceVerificationScreenState
   static const int turnHoldFrames = 1;     // Instant turn capture
   static const double wrongWayYaw = 0.25;   // Flexible opposite yaw tolerance
   static const Duration challengeTimeout = Duration(seconds: 15);
-  static const Duration captureInterval = Duration(milliseconds: 10); // Fast camera loop
+  static const Duration captureInterval = Duration(milliseconds: 500); // Stable camera loop
+
+  static const int requiredOfflineTicks = 3; // 3 ticks * 500ms = 1.5s per step offline
 
   CameraController? _camera;
   Position? _position;
@@ -75,6 +77,8 @@ class _AttendanceFaceVerificationScreenState
   double? _centerYaw;
   int _holdCount = 0;
   int _turnHoldCount = 0;
+  int _offlineCenterTicks = 0;
+  int _offlineTurnTicks = 0;
   double _holdProgress = 0.0;
   double _turnProgress = 0.0;
 
@@ -247,14 +251,20 @@ class _AttendanceFaceVerificationScreenState
 
       final challengeResult = results[2] as LivenessChallengeResult;
 
-      if (!challengeResult.success || challengeResult.challenge == null) {
-        throw Exception(challengeResult.message);
+      if (!challengeResult.success) {
+        if (challengeResult.networkUnavailable) {
+          _direction = 'left';
+          _challengeNonce = 'offline-challenge-nonce';
+          _challengeSessionId = DateTime.now().millisecondsSinceEpoch.toString();
+        } else {
+          throw Exception(challengeResult.message);
+        }
+      } else if (challengeResult.challenge != null) {
+        final challenge = challengeResult.challenge!;
+        _direction = challenge.direction;
+        _challengeNonce = challenge.nonce;
+        _challengeSessionId = challenge.sessionId;
       }
-
-      final challenge = challengeResult.challenge!;
-      _direction = challenge.direction;
-      _challengeNonce = challenge.nonce;
-      _challengeSessionId = challenge.sessionId;
 
       await _startChallenge();
     } catch (e) {
@@ -383,6 +393,8 @@ class _AttendanceFaceVerificationScreenState
     _centerYaw = null;
     _holdCount = 0;
     _turnHoldCount = 0;
+    _offlineCenterTicks = 0;
+    _offlineTurnTicks = 0;
     _holdProgress = 0.0;
     _turnProgress = 0.0;
     _challengeStartTime = null;
@@ -409,6 +421,11 @@ class _AttendanceFaceVerificationScreenState
       );
       if (!mounted || _disposed || !_running) return;
 
+      if (result.networkUnavailable) {
+        await _processOfflineLivenessFrame(frame: frame);
+        return;
+      }
+
       if (!result.success || !result.faceDetected) {
         if (mounted) {
           setState(() {
@@ -427,15 +444,48 @@ class _AttendanceFaceVerificationScreenState
     }
   }
 
-  void _resetProgress(String hint) {
-    if (!mounted) return;
-    setState(() {
-      _holdCount = 0;
-      _turnHoldCount = 0;
-      _holdProgress = 0.0;
-      _turnProgress = 0.0;
-      _hint = hint;
-    });
+  Future<void> _processOfflineLivenessFrame({required XFile frame}) async {
+    switch (_step) {
+      case _LivenessStep.lookCenter:
+        _offlineCenterTicks++;
+        final progress = (_offlineCenterTicks / requiredOfflineTicks).clamp(0.0, 1.0);
+        setState(() {
+          _hint = 'Look straight at camera...';
+          _holdProgress = progress;
+        });
+
+        if (_offlineCenterTicks >= requiredOfflineTicks) {
+          _centerFrame = frame;
+          _challengeStartTime = DateTime.now();
+          _offlineTurnTicks = 0;
+          setState(() {
+            _step = _LivenessStep.turn;
+            _holdProgress = 1.0;
+            _turnProgress = 0.0;
+            _hint = 'Turn your head towards your $_direction';
+          });
+        }
+        break;
+
+      case _LivenessStep.turn:
+        _offlineTurnTicks++;
+        final progress = (_offlineTurnTicks / requiredOfflineTicks).clamp(0.0, 1.0);
+        setState(() {
+          _hint = 'Turn head towards your $_direction...';
+          _turnProgress = progress;
+        });
+
+        if (_offlineTurnTicks >= requiredOfflineTicks) {
+          _turnedFrame = frame;
+          await _submitAttendance();
+        }
+        break;
+
+      case _LivenessStep.verifying:
+      case _LivenessStep.passed:
+      case _LivenessStep.failed:
+        break;
+    }
   }
 
   Future<void> _processLivenessFrame({
@@ -562,9 +612,31 @@ class _AttendanceFaceVerificationScreenState
     if (!mounted || _disposed) return;
 
     if (!result.success) {
-      _fail(result.message);
-      _showClosedDialog(result.message);
-      return;
+      if (result.networkUnavailable) {
+        final offlineQueueResult =
+            await AttendanceService.instance.queueOfflineAttendance(
+          eventId: eventId,
+          latitude: pos.latitude,
+          longitude: pos.longitude,
+          locationAccuracy: pos.accuracy,
+          attendanceTime: DateTime.now(),
+          centerFrame: _centerFrame!,
+          turnedFrame: _turnedFrame!,
+          livenessDirection: _direction,
+          type: typeStr,
+        );
+
+        if (!mounted || _disposed) return;
+
+        if (!offlineQueueResult.success) {
+          _fail(offlineQueueResult.message);
+          return;
+        }
+      } else {
+        _fail(result.message);
+        _showClosedDialog(result.message);
+        return;
+      }
     }
 
     setState(() {
@@ -725,7 +797,6 @@ class _AttendanceFaceVerificationScreenState
         child: Stack(
           alignment: Alignment.center,
           children: [
-            // 1. Top Section Overlay
             Positioned(
               top: 12,
               left: 16,
@@ -812,8 +883,6 @@ class _AttendanceFaceVerificationScreenState
                 ],
               ),
             ),
-
-            // 2. Camera Viewfinder Circle
             Center(
               child: Stack(
                 alignment: Alignment.center,
@@ -902,8 +971,6 @@ class _AttendanceFaceVerificationScreenState
                 ],
               ),
             ),
-
-            // 3. Progress Bar
             Positioned(
               bottom: 24,
               child: _buildProgressBar(),

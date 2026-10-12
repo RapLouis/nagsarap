@@ -339,83 +339,40 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isEventWindowActive(EventItem event) {
     final now = DateTime.now();
 
-    DateTime? parseTime(String? timeStr) {
-      if (timeStr == null || timeStr.trim().isEmpty) return null;
-      final clean = timeStr.trim();
-      const formats = ['HH:mm:ss', 'HH:mm', 'h:mm a', 'hh:mm a'];
-      for (final format in formats) {
-        try {
-          final parsed = DateFormat(format, 'en_US').parseLoose(clean);
-          return DateTime(
-            now.year,
-            now.month,
-            now.day,
-            parsed.hour,
-            parsed.minute,
-            parsed.second,
-          );
-        } catch (_) {}
-      }
-      return null;
-    }
+    final timeInStr = _getTimeInWindow(event);
+    final timeOutStr = _getTimeOutWindow(event);
 
-    final rawTimeInStart = _extractEventProperty(event, [
-      'time_in_start',
-      'timeInStart',
-      'time_in_start_time',
-      'timeInStartTime',
-      'startTime',
-      'start_time',
-    ]) ?? event.startTime;
+    final timeInParts = timeInStr.split('–').map((s) => s.trim()).toList();
+    final timeOutParts = timeOutStr.split('–').map((s) => s.trim()).toList();
 
-    final rawTimeInEnd = _extractEventProperty(event, [
-      'time_in_end',
-      'timeInEnd',
-      'time_in_end_time',
-      'timeInEndTime',
-    ]);
+    final inStart = timeInParts.isNotEmpty ? _parseTimeToDateTime(timeInParts[0]) : null;
+    final inEnd = timeInParts.length > 1 ? _parseTimeToDateTime(timeInParts[1]) : null;
 
-    final rawTimeOutStart = _extractEventProperty(event, [
-      'time_out_start',
-      'timeOutStart',
-      'time_out_start_time',
-      'timeOutStartTime',
-    ]);
-
-    final rawTimeOutEnd = _extractEventProperty(event, [
-      'time_out_end',
-      'timeOutEnd',
-      'time_out_end_time',
-      'timeOutEndTime',
-      'endTime',
-      'end_time',
-    ]) ?? event.endTime;
-
-    final inStart = parseTime(rawTimeInStart);
-    final inEnd = parseTime(rawTimeInEnd) ?? (inStart != null ? DateTime(now.year, now.month, now.day, 12, 0) : null);
-
-    final outStart = parseTime(rawTimeOutStart) ?? (inEnd ?? inStart);
-    final outEnd = parseTime(rawTimeOutEnd) ?? parseTime(event.endTime);
+    final outStart = timeOutParts.isNotEmpty ? _parseTimeToDateTime(timeOutParts[0]) : null;
+    final outEnd = timeOutParts.length > 1 ? _parseTimeToDateTime(timeOutParts[1]) : null;
 
     final count = _getAttendanceCountForEvent(event);
     if (count >= 2) return false;
 
     if (count == 0 && inStart != null) {
+      final startBound = inStart.subtract(const Duration(minutes: 15));
       final endBound = inEnd ?? outStart ?? inStart.add(const Duration(hours: 4));
-      if (now.isAfter(inStart.subtract(const Duration(minutes: 15))) && now.isBefore(endBound)) {
+      if (now.isAfter(startBound) && now.isBefore(endBound)) {
         return true;
       }
     }
 
     if (count == 1 && outStart != null) {
+      final startBound = outStart.subtract(const Duration(minutes: 15));
       final endBound = outEnd ?? outStart.add(const Duration(hours: 6));
-      if (now.isAfter(outStart.subtract(const Duration(minutes: 15))) && now.isBefore(endBound)) {
+      if (now.isAfter(startBound) && now.isBefore(endBound)) {
         return true;
       }
     }
 
     if (inStart != null && outEnd != null) {
-      if (now.isAfter(inStart.subtract(const Duration(minutes: 15))) && now.isBefore(outEnd.add(const Duration(minutes: 15)))) {
+      if (now.isAfter(inStart.subtract(const Duration(minutes: 15))) &&
+          now.isBefore(outEnd.add(const Duration(minutes: 15)))) {
         return true;
       }
     }
@@ -866,14 +823,56 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return clean;
   }
 
+  DateTime? _parseTimeToDateTime(String timeStr) {
+    final clean = timeStr.trim();
+    if (clean.isEmpty || clean.toLowerCase() == 'tba') return null;
+    final now = DateTime.now();
+    const formats = ['HH:mm:ss', 'HH:mm', 'h:mm a', 'hh:mm a'];
+    for (final format in formats) {
+      try {
+        final parsed = DateFormat(format, 'en_US').parseLoose(clean);
+        return DateTime(now.year, now.month, now.day, parsed.hour, parsed.minute, parsed.second);
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  String _formatDateTime12Hour(DateTime dt) {
+    return DateFormat('h:mm a').format(dt);
+  }
+
   String _getTimeInWindow(EventItem event) {
+    final combinedWindow = _extractEventProperty(event, [
+      'time_in_window',
+      'timeInWindow',
+      'time_in_range',
+      'time_in_slot',
+      'time_in_text',
+      'timeInText',
+    ]);
+
+    if (combinedWindow != null && combinedWindow.contains(RegExp(r'[-–]'))) {
+      final parts = combinedWindow.split(RegExp(r'[-–]'));
+      if (parts.length >= 2) {
+        final s = _formatTime12Hour(parts[0].trim());
+        final e = _formatTime12Hour(parts[1].trim());
+        if (s.isNotEmpty && e.isNotEmpty) return '$s – $e';
+      }
+    }
+
     final rawStart = _extractEventProperty(event, [
       'time_in_start',
       'timeInStart',
       'time_in_start_time',
       'timeInStartTime',
-      'startTime',
-      'start_time',
+      'time_in_window_start',
+      'timeInWindowStart',
+      'time_in_from',
+      'timeInFrom',
+      'time_in_open',
+      'timeInOpen',
+      'timein_start',
+      'in_start',
     ]) ?? event.startTime;
 
     final rawEnd = _extractEventProperty(event, [
@@ -881,104 +880,190 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       'timeInEnd',
       'time_in_end_time',
       'timeInEndTime',
+      'time_in_window_end',
+      'timeInWindowEnd',
+      'time_in_to',
+      'timeInTo',
+      'time_in_close',
+      'timeInClose',
+      'timein_end',
+      'in_end',
     ]);
 
     final startStr = _formatTime12Hour(rawStart);
-    final endStr = rawEnd != null ? _formatTime12Hour(rawEnd) : '12:00 PM';
 
-    return '$startStr – $endStr';
-  }
+    if (rawEnd != null && rawEnd.isNotEmpty) {
+      final endStr = _formatTime12Hour(rawEnd);
+      return '$startStr – $endStr';
+    }
 
-  String _getTimeOutWindow(EventItem event) {
-    final rawStart = _extractEventProperty(event, [
+    final rawOutStart = _extractEventProperty(event, [
       'time_out_start',
       'timeOutStart',
       'time_out_start_time',
       'timeOutStartTime',
+      'time_out_window_start',
+      'timeOutWindowStart',
+      'time_out_from',
+      'timeOutFrom',
+      'time_out_open',
+      'timeOutOpen',
+      'timeout_start',
+      'out_start',
     ]);
+
+    if (rawOutStart != null && rawOutStart.isNotEmpty) {
+      final endStr = _formatTime12Hour(rawOutStart);
+      return '$startStr – $endStr';
+    }
+
+    final dtStart = _parseTimeToDateTime(rawStart);
+    final dtEnd = _parseTimeToDateTime(event.endTime);
+
+    if (dtStart != null && dtEnd != null && dtEnd.isAfter(dtStart)) {
+      final midDiff = dtEnd.difference(dtStart).inSeconds ~/ 2;
+      final dtMid = dtStart.add(Duration(seconds: midDiff));
+      return '$startStr – ${_formatDateTime12Hour(dtMid)}';
+    }
+
+    return '$startStr – ${_formatTime12Hour(event.endTime)}';
+  }
+
+  String _getTimeOutWindow(EventItem event) {
+    final combinedWindow = _extractEventProperty(event, [
+      'time_out_window',
+      'timeOutWindow',
+      'time_out_range',
+      'time_out_slot',
+      'time_out_text',
+      'timeOutText',
+    ]);
+
+    if (combinedWindow != null && combinedWindow.contains(RegExp(r'[-–]'))) {
+      final parts = combinedWindow.split(RegExp(r'[-–]'));
+      if (parts.length >= 2) {
+        final s = _formatTime12Hour(parts[0].trim());
+        final e = _formatTime12Hour(parts[1].trim());
+        if (s.isNotEmpty && e.isNotEmpty) return '$s – $e';
+      }
+    }
 
     final rawEnd = _extractEventProperty(event, [
       'time_out_end',
       'timeOutEnd',
       'time_out_end_time',
       'timeOutEndTime',
-      'endTime',
-      'end_time',
+      'time_out_window_end',
+      'timeOutWindowEnd',
+      'time_out_to',
+      'timeOutTo',
+      'time_out_close',
+      'timeOutClose',
+      'timeout_end',
+      'out_end',
     ]) ?? event.endTime;
 
-    final startStr = rawStart != null ? _formatTime12Hour(rawStart) : '1:00 PM';
+    final rawStart = _extractEventProperty(event, [
+      'time_out_start',
+      'timeOutStart',
+      'time_out_start_time',
+      'timeOutStartTime',
+      'time_out_window_start',
+      'timeOutWindowStart',
+      'time_out_from',
+      'timeOutFrom',
+      'time_out_open',
+      'timeOutOpen',
+      'timeout_start',
+      'out_start',
+    ]);
+
     final endStr = _formatTime12Hour(rawEnd);
 
-    return '$startStr – $endStr';
+    if (rawStart != null && rawStart.isNotEmpty) {
+      final startStr = _formatTime12Hour(rawStart);
+      return '$startStr – $endStr';
+    }
+
+    final rawInEnd = _extractEventProperty(event, [
+      'time_in_end',
+      'timeInEnd',
+      'time_in_end_time',
+      'timeInEndTime',
+      'time_in_window_end',
+      'timeInWindowEnd',
+      'time_in_to',
+      'timeInTo',
+      'time_in_close',
+      'timeInClose',
+      'timein_end',
+      'in_end',
+    ]);
+
+    if (rawInEnd != null && rawInEnd.isNotEmpty) {
+      final startStr = _formatTime12Hour(rawInEnd);
+      return '$startStr – $endStr';
+    }
+
+    final dtStart = _parseTimeToDateTime(event.startTime);
+    final dtEnd = _parseTimeToDateTime(rawEnd);
+
+    if (dtStart != null && dtEnd != null && dtEnd.isAfter(dtStart)) {
+      final midDiff = dtEnd.difference(dtStart).inSeconds ~/ 2;
+      final dtMid = dtStart.add(Duration(seconds: midDiff));
+      return '${_formatDateTime12Hour(dtMid)} – $endStr';
+    }
+
+    return '${_formatTime12Hour(event.startTime)} – $endStr';
   }
 
   String _getDisplayWindow(EventItem event) {
     return _getTimeInWindow(event);
   }
 
-  String? _extractEventProperty(EventItem event, List<String> keys) {
-    try {
-      final dynamic dyn = event;
-      Map? map;
-      try {
-        final json = dyn.toJson();
-        if (json is Map) map = json;
-      } catch (_) {}
-      try {
-        if (map == null && dyn.rawJson is Map) map = dyn.rawJson;
-      } catch (_) {}
-      try {
-        if (map == null && dyn.json is Map) map = dyn.json;
-      } catch (_) {}
+  String? _findInMap(Map map, List<String> targetKeys) {
+    final cleanTargets = targetKeys.map((k) => k.toLowerCase().replaceAll('_', '')).toList();
 
-      if (map != null) {
-        for (final key in keys) {
-          if (map.containsKey(key) && map[key] != null) {
-            final val = map[key].toString().trim();
-            if (val.isNotEmpty && val.toLowerCase() != 'null') {
-              return val;
-            }
+    for (final entry in map.entries) {
+      final keyStr = entry.key.toString().toLowerCase().replaceAll('_', '');
+      if (cleanTargets.contains(keyStr) && entry.value != null) {
+        final val = entry.value.toString().trim();
+        if (val.isNotEmpty && val.toLowerCase() != 'null') {
+          return val;
+        }
+      }
+    }
+
+    for (final value in map.values) {
+      if (value is Map) {
+        final found = _findInMap(value, targetKeys);
+        if (found != null) return found;
+      } else if (value is List) {
+        for (final item in value) {
+          if (item is Map) {
+            final found = _findInMap(item, targetKeys);
+            if (found != null) return found;
           }
         }
       }
-    } catch (_) {}
+    }
 
-    final dynamic dyn = event;
-    for (final key in keys) {
-      try {
-        if (key == 'timeInStart') {
-          final val = dyn.timeInStart;
-          if (val != null) return val.toString();
+    return null;
+  }
+
+  String? _extractEventProperty(EventItem event, List<String> keys) {
+    final foundInRaw = _findInMap(event.raw, keys);
+    if (foundInRaw != null) return foundInRaw;
+
+    final cleanTargets = keys.map((k) => k.toLowerCase().replaceAll('_', '')).toList();
+    for (final entry in event.raw.entries) {
+      final keyClean = entry.key.toString().toLowerCase().replaceAll('_', '');
+      if (cleanTargets.contains(keyClean) && entry.value != null) {
+        final val = entry.value.toString().trim();
+        if (val.isNotEmpty && val.toLowerCase() != 'null') {
+          return val;
         }
-        if (key == 'time_in_start') {
-          final val = dyn.time_in_start;
-          if (val != null) return val.toString();
-        }
-        if (key == 'timeInEnd') {
-          final val = dyn.timeInEnd;
-          if (val != null) return val.toString();
-        }
-        if (key == 'time_in_end') {
-          final val = dyn.time_in_end;
-          if (val != null) return val.toString();
-        }
-        if (key == 'timeOutStart') {
-          final val = dyn.timeOutStart;
-          if (val != null) return val.toString();
-        }
-        if (key == 'time_out_start') {
-          final val = dyn.time_out_start;
-          if (val != null) return val.toString();
-        }
-        if (key == 'timeOutEnd') {
-          final val = dyn.timeOutEnd;
-          if (val != null) return val.toString();
-        }
-        if (key == 'time_out_end') {
-          final val = dyn.time_out_end;
-          if (val != null) return val.toString();
-        }
-      } catch (_) {}
+      }
     }
 
     return null;

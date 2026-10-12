@@ -16,6 +16,7 @@ class PendingAttendanceRecord {
     required this.centerFramePath,
     required this.turnedFramePath,
     required this.livenessDirection,
+    this.sessionType = 'time_in',
   });
 
   final String uuid;
@@ -29,6 +30,7 @@ class PendingAttendanceRecord {
   final String centerFramePath;
   final String turnedFramePath;
   final String livenessDirection;
+  final String sessionType;
 
   factory PendingAttendanceRecord.fromJson(Map<String, dynamic> json) {
     return PendingAttendanceRecord(
@@ -43,6 +45,9 @@ class PendingAttendanceRecord {
       livenessDirection: json['liveness_direction']?.toString() == 'right'
           ? 'right'
           : 'left',
+      sessionType: json['session_type']?.toString() == 'time_out'
+          ? 'time_out'
+          : 'time_in',
     );
   }
 
@@ -57,13 +62,9 @@ class PendingAttendanceRecord {
       'center_frame_path': centerFramePath,
       'turned_frame_path': turnedFramePath,
       'liveness_direction': livenessDirection,
+      'session_type': sessionType,
     };
   }
-
-  List<String> get allCandidatePaths => <String>[
-    centerFramePath,
-    turnedFramePath,
-  ];
 
   bool get allFilesExist {
     if (centerFramePath.isEmpty || turnedFramePath.isEmpty) {
@@ -95,6 +96,7 @@ class OfflineStorageService {
   static const String _rootFolderName = 'ccis_attendance_offline';
   static const String _pendingFolderName = 'pending';
   static const String _eventsFileName = 'events.json';
+  static const String _historyFileName = 'history.json';
 
   Future<Directory> _rootDirectory() async {
     final documents = await getApplicationDocumentsDirectory();
@@ -155,6 +157,43 @@ class OfflineStorageService {
     }
   }
 
+  Future<void> cacheHistory(List<Map<String, dynamic>> history) async {
+    final root = await _rootDirectory();
+    final file = File('${root.path}/$_historyFileName');
+
+    final payload = <String, dynamic>{
+      'cached_at': DateTime.now().toUtc().toIso8601String(),
+      'history': history,
+    };
+
+    await file.writeAsString(jsonEncode(payload), flush: true);
+  }
+
+  Future<List<Map<String, dynamic>>> loadCachedHistory() async {
+    try {
+      final root = await _rootDirectory();
+      final file = File('${root.path}/$_historyFileName');
+
+      if (!await file.exists()) return <Map<String, dynamic>>[];
+
+      final raw = await file.readAsString();
+      if (raw.trim().isEmpty) return <Map<String, dynamic>>[];
+
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return <Map<String, dynamic>>[];
+
+      final rawHistory = Map<String, dynamic>.from(decoded)['history'];
+      if (rawHistory is! List) return <Map<String, dynamic>>[];
+
+      return rawHistory
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
+    } catch (_) {
+      return <Map<String, dynamic>>[];
+    }
+  }
+
   Future<bool> hasPendingForEvent(int eventId) async {
     final records = await getPendingAttendances();
     return records.any((record) => record.eventId == eventId);
@@ -169,6 +208,7 @@ class OfflineStorageService {
     required XFile centerFrame,
     required XFile turnedFrame,
     required String livenessDirection,
+    String sessionType = 'time_in',
   }) async {
     final pending = await _pendingDirectory();
     final uuid = _generateUuidV4();
@@ -199,6 +239,7 @@ class OfflineStorageService {
         centerFramePath: centerPath,
         turnedFramePath: turnPath,
         livenessDirection: livenessDirection == 'right' ? 'right' : 'left',
+        sessionType: sessionType,
       );
 
       final metadata = File('${recordDirectory.path}/metadata.json');
@@ -243,12 +284,6 @@ class OfflineStorageService {
 
   Future<int> pendingCount() async => (await getPendingAttendances()).length;
 
-  Future<int> getPendingCount() => pendingCount();
-
-  Future<void> deletePending(PendingAttendanceRecord record) {
-    return deletePendingByUuid(record.uuid);
-  }
-
   Future<void> deletePendingByUuid(String uuid) async {
     final pending = await _pendingDirectory();
     final directory = Directory('${pending.path}/$uuid');
@@ -256,6 +291,10 @@ class OfflineStorageService {
     if (await directory.exists()) {
       await directory.delete(recursive: true);
     }
+  }
+
+  Future<void> deletePending(PendingAttendanceRecord record) {
+    return deletePendingByUuid(record.uuid);
   }
 
   String _generateUuidV4() {

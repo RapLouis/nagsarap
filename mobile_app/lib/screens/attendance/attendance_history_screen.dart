@@ -37,7 +37,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
     final result = await AttendanceHistoryService.instance.getHistory();
     if (!mounted) return;
 
-    if (!result.success) {
+    if (!result.success && _records.isEmpty) {
       setState(() {
         _loading = false;
         _error = result.message;

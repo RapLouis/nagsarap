@@ -3,8 +3,8 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
-import '../models/liveness_challenge.dart';
 import '../core/api_endpoints.dart';
+import '../models/liveness_challenge.dart';
 import 'api_service.dart';
 import 'offline_storage_service.dart';
 
@@ -267,6 +267,7 @@ class AttendanceService {
         centerFrame: centerFrame,
         turnedFrame: turnedFrame,
         livenessDirection: livenessDirection,
+        sessionType: type,
       );
 
       return AttendanceResult(
@@ -311,6 +312,8 @@ class AttendanceService {
         'longitude': record.longitude,
         'location_accuracy': record.locationAccuracy,
         'liveness_direction': record.livenessDirection,
+        'session_type': record.sessionType,
+        'type': record.sessionType,
         'center_frame': await MultipartFile.fromFile(
           record.centerFramePath,
           filename: 'offline-center.jpg',
