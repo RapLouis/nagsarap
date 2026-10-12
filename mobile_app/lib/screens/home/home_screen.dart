@@ -336,6 +336,93 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _hasTimeOutForEvent(EventItem event) =>
       _getAttendanceCountForEvent(event) >= 2;
 
+  bool _isEventWindowActive(EventItem event) {
+    final now = DateTime.now();
+
+    DateTime? parseTime(String? timeStr) {
+      if (timeStr == null || timeStr.trim().isEmpty) return null;
+      final clean = timeStr.trim();
+      const formats = ['HH:mm:ss', 'HH:mm', 'h:mm a', 'hh:mm a'];
+      for (final format in formats) {
+        try {
+          final parsed = DateFormat(format, 'en_US').parseLoose(clean);
+          return DateTime(
+            now.year,
+            now.month,
+            now.day,
+            parsed.hour,
+            parsed.minute,
+            parsed.second,
+          );
+        } catch (_) {}
+      }
+      return null;
+    }
+
+    final rawTimeInStart = _extractEventProperty(event, [
+      'time_in_start',
+      'timeInStart',
+      'time_in_start_time',
+      'timeInStartTime',
+      'startTime',
+      'start_time',
+    ]) ?? event.startTime;
+
+    final rawTimeInEnd = _extractEventProperty(event, [
+      'time_in_end',
+      'timeInEnd',
+      'time_in_end_time',
+      'timeInEndTime',
+    ]);
+
+    final rawTimeOutStart = _extractEventProperty(event, [
+      'time_out_start',
+      'timeOutStart',
+      'time_out_start_time',
+      'timeOutStartTime',
+    ]);
+
+    final rawTimeOutEnd = _extractEventProperty(event, [
+      'time_out_end',
+      'timeOutEnd',
+      'time_out_end_time',
+      'timeOutEndTime',
+      'endTime',
+      'end_time',
+    ]) ?? event.endTime;
+
+    final inStart = parseTime(rawTimeInStart);
+    final inEnd = parseTime(rawTimeInEnd) ?? (inStart != null ? DateTime(now.year, now.month, now.day, 12, 0) : null);
+
+    final outStart = parseTime(rawTimeOutStart) ?? (inEnd ?? inStart);
+    final outEnd = parseTime(rawTimeOutEnd) ?? parseTime(event.endTime);
+
+    final count = _getAttendanceCountForEvent(event);
+    if (count >= 2) return false;
+
+    if (count == 0 && inStart != null) {
+      final endBound = inEnd ?? outStart ?? inStart.add(const Duration(hours: 4));
+      if (now.isAfter(inStart.subtract(const Duration(minutes: 15))) && now.isBefore(endBound)) {
+        return true;
+      }
+    }
+
+    if (count == 1 && outStart != null) {
+      final endBound = outEnd ?? outStart.add(const Duration(hours: 6));
+      if (now.isAfter(outStart.subtract(const Duration(minutes: 15))) && now.isBefore(endBound)) {
+        return true;
+      }
+    }
+
+    if (inStart != null && outEnd != null) {
+      if (now.isAfter(inStart.subtract(const Duration(minutes: 15))) && now.isBefore(outEnd.add(const Duration(minutes: 15)))) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   Future<void> _openHistory() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(builder: (_) => const AttendanceHistoryScreen()),
@@ -505,10 +592,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final count = _getAttendanceCountForEvent(event);
     final isCompleted = count >= 2;
     final isTimeInDone = count == 1;
+    final isWindowActive = _isEventWindowActive(event);
     final isDark = themeController.isDarkMode;
 
-    final timeInWin = _getTimeInWindow(event);
-    final timeOutWin = _getTimeOutWindow(event);
+    final timeInWindow = _getTimeInWindow(event);
+    final timeOutWindow = _getTimeOutWindow(event);
     final venueLocation = event.venue.isNotEmpty ? event.venue : 'Main Campus';
 
     showModalBottomSheet<void>(
@@ -650,13 +738,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 _modalInfoRow(
                   Icons.login_rounded,
                   'Time-In Window',
-                  timeInWin,
+                  timeInWindow,
                 ),
                 const SizedBox(height: 12),
                 _modalInfoRow(
                   Icons.logout_rounded,
                   'Time-Out Window',
-                  timeOutWin,
+                  timeOutWindow,
                 ),
                 const SizedBox(height: 12),
                 _modalInfoRow(
@@ -665,32 +753,65 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   venueLocation,
                 ),
                 const SizedBox(height: 24),
-                SizedBox(
-                  width: double.infinity,
-                  height: 50,
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      _openAttendanceScannerForEvent(event);
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: isDark ? gold : navy,
-                      foregroundColor: isDark ? navy : Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
+                if (isWindowActive && !isCompleted)
+                  SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _openAttendanceScannerForEvent(event);
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: isDark ? gold : navy,
+                        foregroundColor: isDark ? navy : Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        elevation: 0,
                       ),
-                      elevation: 0,
+                      icon: const Icon(Icons.qr_code_scanner_rounded, size: 20),
+                      label: Text(
+                        isTimeInDone ? 'Scan Time-Out' : 'Scan Face Attendance',
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
                     ),
-                    icon: const Icon(Icons.qr_code_scanner_rounded, size: 20),
-                    label: Text(
-                      isTimeInDone ? 'Scan Time-Out' : 'Scan Face Attendance',
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                      ),
+                  )
+                else
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+                    decoration: BoxDecoration(
+                      color: isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          isCompleted ? Icons.check_circle_rounded : Icons.lock_clock_rounded,
+                          size: 20,
+                          color: isCompleted ? const Color(0xFF16A34A) : muted,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          isCompleted
+                              ? 'Attendance Completed'
+                              : 'Attendance Window Closed',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: isCompleted
+                                ? const Color(0xFF16A34A)
+                                : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ),
               ],
             ),
           ),
@@ -731,62 +852,136 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  DateTime? _parseTimeStr(String timeStr) {
+  String _formatTime12Hour(String timeStr) {
     final clean = timeStr.trim();
-    if (clean.isEmpty) return null;
+    if (clean.isEmpty || clean.toLowerCase() == 'tba') return 'TBA';
 
     const formats = ['HH:mm:ss', 'HH:mm', 'h:mm a', 'hh:mm a'];
     for (final format in formats) {
       try {
         final parsed = DateFormat(format, 'en_US').parseLoose(clean);
-        final now = DateTime.now();
-        return DateTime(
-          now.year,
-          now.month,
-          now.day,
-          parsed.hour,
-          parsed.minute,
-          parsed.second,
-        );
+        return DateFormat('h:mm a').format(parsed);
       } catch (_) {}
     }
-    return null;
+    return clean;
   }
 
   String _getTimeInWindow(EventItem event) {
-    final start = _parseTimeStr(event.startTime);
-    final end = _parseTimeStr(event.endTime);
+    final rawStart = _extractEventProperty(event, [
+      'time_in_start',
+      'timeInStart',
+      'time_in_start_time',
+      'timeInStartTime',
+      'startTime',
+      'start_time',
+    ]) ?? event.startTime;
 
-    if (start == null || end == null) {
-      return event.startTime.isNotEmpty ? event.startTime : 'TBA';
-    }
+    final rawEnd = _extractEventProperty(event, [
+      'time_in_end',
+      'timeInEnd',
+      'time_in_end_time',
+      'timeInEndTime',
+    ]);
 
-    final midpoint = start.add(end.difference(start) ~/ 2);
+    final startStr = _formatTime12Hour(rawStart);
+    final endStr = rawEnd != null ? _formatTime12Hour(rawEnd) : '12:00 PM';
 
-    final outFmt = DateFormat('h:mm a');
-    return '${outFmt.format(start)} – ${outFmt.format(midpoint)}';
+    return '$startStr – $endStr';
   }
 
   String _getTimeOutWindow(EventItem event) {
-    final start = _parseTimeStr(event.startTime);
-    final end = _parseTimeStr(event.endTime);
+    final rawStart = _extractEventProperty(event, [
+      'time_out_start',
+      'timeOutStart',
+      'time_out_start_time',
+      'timeOutStartTime',
+    ]);
 
-    if (start == null || end == null) {
-      return event.endTime.isNotEmpty ? event.endTime : 'TBA';
-    }
+    final rawEnd = _extractEventProperty(event, [
+      'time_out_end',
+      'timeOutEnd',
+      'time_out_end_time',
+      'timeOutEndTime',
+      'endTime',
+      'end_time',
+    ]) ?? event.endTime;
 
-    final midpoint = start.add(end.difference(start) ~/ 2);
+    final startStr = rawStart != null ? _formatTime12Hour(rawStart) : '1:00 PM';
+    final endStr = _formatTime12Hour(rawEnd);
 
-    final outFmt = DateFormat('h:mm a');
-    return '${outFmt.format(midpoint)} – ${outFmt.format(end)}';
+    return '$startStr – $endStr';
   }
 
   String _getDisplayWindow(EventItem event) {
-    final count = _getAttendanceCountForEvent(event);
-    if (count >= 1) {
-      return 'Time-Out: ${_getTimeOutWindow(event)}';
+    return _getTimeInWindow(event);
+  }
+
+  String? _extractEventProperty(EventItem event, List<String> keys) {
+    try {
+      final dynamic dyn = event;
+      Map? map;
+      try {
+        final json = dyn.toJson();
+        if (json is Map) map = json;
+      } catch (_) {}
+      try {
+        if (map == null && dyn.rawJson is Map) map = dyn.rawJson;
+      } catch (_) {}
+      try {
+        if (map == null && dyn.json is Map) map = dyn.json;
+      } catch (_) {}
+
+      if (map != null) {
+        for (final key in keys) {
+          if (map.containsKey(key) && map[key] != null) {
+            final val = map[key].toString().trim();
+            if (val.isNotEmpty && val.toLowerCase() != 'null') {
+              return val;
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
+    final dynamic dyn = event;
+    for (final key in keys) {
+      try {
+        if (key == 'timeInStart') {
+          final val = dyn.timeInStart;
+          if (val != null) return val.toString();
+        }
+        if (key == 'time_in_start') {
+          final val = dyn.time_in_start;
+          if (val != null) return val.toString();
+        }
+        if (key == 'timeInEnd') {
+          final val = dyn.timeInEnd;
+          if (val != null) return val.toString();
+        }
+        if (key == 'time_in_end') {
+          final val = dyn.time_in_end;
+          if (val != null) return val.toString();
+        }
+        if (key == 'timeOutStart') {
+          final val = dyn.timeOutStart;
+          if (val != null) return val.toString();
+        }
+        if (key == 'time_out_start') {
+          final val = dyn.time_out_start;
+          if (val != null) return val.toString();
+        }
+        if (key == 'timeOutEnd') {
+          final val = dyn.timeOutEnd;
+          if (val != null) return val.toString();
+        }
+        if (key == 'time_out_end') {
+          final val = dyn.time_out_end;
+          if (val != null) return val.toString();
+        }
+      } catch (_) {}
     }
-    return 'Time-In: ${_getTimeInWindow(event)}';
+
+    return null;
   }
 
   @override
@@ -819,7 +1014,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     height: 52,
                     child: ClipOval(
                       child: Image.asset(
-                        'lib/screens/images/logo.png',
+                        'lib/screens/images/logo.jpeg',
                         fit: BoxFit.cover,
                       ),
                     ),
@@ -1256,7 +1451,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Widget _buildEventCard(EventItem event, {bool today = false}) {
     final isDark = themeController.isDarkMode;
-    final displayWindow = _getDisplayWindow(event);
+
+    final timeInWindow = _getTimeInWindow(event);
+    final timeOutWindow = _getTimeOutWindow(event);
+
     final count = _getAttendanceCountForEvent(event);
     final isCompleted = count >= 2;
 
@@ -1337,13 +1535,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 Row(
                   children: [
                     const Icon(
-                      Icons.access_time_rounded,
+                      Icons.login_rounded,
                       size: 14,
                       color: muted,
                     ),
                     const SizedBox(width: 6),
                     Text(
-                      displayWindow,
+                      'Time-In: $timeInWindow',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: muted,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.logout_rounded,
+                      size: 14,
+                      color: muted,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Time-Out: $timeOutWindow',
                       style: const TextStyle(
                         fontSize: 12,
                         color: muted,

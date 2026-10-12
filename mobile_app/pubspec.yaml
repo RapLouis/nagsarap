@@ -1,5 +1,5 @@
 name: attend
-description: "Attend -  Attendance System mobile application."
+description: "Attend - CCIS Attendance System mobile application."
 publish_to: 'none'
 
 version: 1.0.0+1
@@ -57,11 +57,12 @@ dev_dependencies:
   flutter_native_splash: ^2.4.1
 
 flutter_launcher_icons:
-  android: true
+  android: "launcher_icon"
   ios: true
-  image_path: "lib/screens/images/logo.png"
+  image_path: "lib/screens/images/logo.jpeg"
   adaptive_icon_background: "#080878"
-  adaptive_icon_foreground: "lib/screens/images/logo.png"
+  adaptive_icon_foreground: "lib/screens/images/logo.jpeg"
+  min_sdk_android: 21
 
 flutter_native_splash:
   color: "#080878"
@@ -70,4 +71,4 @@ flutter:
   uses-material-design: true
 
   assets:
-    - lib/screens/images/logo.png
+    - lib/screens/images/logo.jpeg

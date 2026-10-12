@@ -71,37 +71,7 @@ class _AuthGateState extends State<AuthGate> {
     if (loading) {
       return const Scaffold(
         backgroundColor: AppColors.navy,
-        body: SafeArea(
-          child: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                SizedBox(
-                  width: 58,
-                  height: 58,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 4,
-                    color: AppColors.gold,
-                  ),
-                ),
-                SizedBox(height: 22),
-                Text(
-                  'Smart Attendance System',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                SizedBox(height: 6),
-                Text(
-                  'Restoring your session...',
-                  style: TextStyle(color: Colors.white70, fontSize: 12),
-                ),
-              ],
-            ),
-          ),
-        ),
+        body: SizedBox.expand(),
       );
     }
 

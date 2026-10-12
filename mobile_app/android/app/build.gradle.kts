@@ -7,7 +7,7 @@ plugins {
 android {
     namespace = "edu.mmsu.ccis.ccis_attendance"
 
-    // Required by the current Flutter plugins.
+
     compileSdk = 37
 
     ndkVersion = flutter.ndkVersion
@@ -21,7 +21,7 @@ android {
         applicationId = "edu.mmsu.ccis.ccis_attendance"
 
         minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        targetSdk = 37
 
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -29,8 +29,6 @@ android {
 
     buildTypes {
         release {
-            // Development only.
-            // We will replace this with a release keystore before publishing.
             signingConfig = signingConfigs.getByName("debug")
         }
     }

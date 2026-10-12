@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 
-import '../home/home_screen.dart';
+import '../auth/auth_gate.dart';
 
 class AppSplashScreen extends StatefulWidget {
   const AppSplashScreen({super.key});
@@ -27,7 +27,6 @@ class _AppSplashScreenState extends State<AppSplashScreen>
   void initState() {
     super.initState();
 
-    // 800ms per pass -> 4 passes over 3.2 seconds
     _scanController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 800),
@@ -51,7 +50,6 @@ class _AppSplashScreenState extends State<AppSplashScreen>
   }
 
   Future<void> _startSplashScreenSequence() async {
-    // Wait for 4 complete laser sweeps
     await Future.delayed(const Duration(milliseconds: 3200));
 
     if (!mounted) return;
@@ -70,7 +68,7 @@ class _AppSplashScreenState extends State<AppSplashScreen>
       PageRouteBuilder(
         transitionDuration: const Duration(milliseconds: 600),
         pageBuilder: (context, animation, secondaryAnimation) =>
-            const HomeScreen(),
+            const AuthGate(),
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
           return FadeTransition(opacity: animation, child: child);
         },
@@ -195,8 +193,9 @@ class _AppSplashScreenState extends State<AppSplashScreen>
 
               const SizedBox(height: 36),
 
+              // Clean Single System Title
               const Text(
-                'CABIEBIES Attendance System',
+                'ATTEND  System',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 22,
@@ -207,6 +206,7 @@ class _AppSplashScreenState extends State<AppSplashScreen>
 
               const SizedBox(height: 8),
 
+              // Clean Status Text
               Text(
                 _isScanned ? 'Identity Verified' : 'Scanning face biometrics...',
                 style: TextStyle(

@@ -40,13 +40,14 @@ class _AttendanceFaceVerificationScreenState
   static const Color brandGold = Color(0xFFFFC800);
   static const Color muted = Color(0xFF94A3B8);
 
-  static const double frontalYawMax = 0.15;
-  static const int frontalHoldFrames = 2;
-  static const double turnYawMin = 0.18;
-  static const int turnHoldFrames = 1;
-  static const double wrongWayYaw = 0.15;
-  static const Duration challengeTimeout = Duration(seconds: 20);
-  static const Duration captureInterval = Duration(milliseconds: 30);
+  // Speed & Flexibility Tuning
+  static const double frontalYawMax = 0.35; // High tolerance for center position
+  static const int frontalHoldFrames = 1;   // Instant center capture
+  static const double turnYawMin = 0.10;    // Easy head turn threshold
+  static const int turnHoldFrames = 1;     // Instant turn capture
+  static const double wrongWayYaw = 0.25;   // Flexible opposite yaw tolerance
+  static const Duration challengeTimeout = Duration(seconds: 15);
+  static const Duration captureInterval = Duration(milliseconds: 10); // Fast camera loop
 
   CameraController? _camera;
   Position? _position;
@@ -409,19 +410,18 @@ class _AttendanceFaceVerificationScreenState
       if (!mounted || _disposed || !_running) return;
 
       if (!result.success || !result.faceDetected) {
-        _resetProgress('Position face clearly inside frame');
+        if (mounted) {
+          setState(() {
+            _hint = 'Position face inside camera view';
+          });
+        }
         return;
       }
 
-      final yaw = result.yaw;
-      if (yaw == null) {
-        _resetProgress('Keep face clearly visible');
-        return;
-      }
-
+      final yaw = result.yaw ?? 0.0;
       await _processLivenessFrame(frame: frame, yaw: yaw);
     } catch (_) {
-      _resetProgress('Analyzing orientation...');
+      // transient frame retry
     } finally {
       _analyzing = false;
     }
@@ -445,7 +445,11 @@ class _AttendanceFaceVerificationScreenState
     switch (_step) {
       case _LivenessStep.lookCenter:
         if (yaw.abs() > frontalYawMax) {
-          _resetProgress('Please look directly at the camera');
+          if (mounted) {
+            setState(() {
+              _hint = 'Look towards camera';
+            });
+          }
           return;
         }
 
@@ -485,18 +489,18 @@ class _AttendanceFaceVerificationScreenState
           setState(() {
             _turnHoldCount = 0;
             _turnProgress = 0.0;
-            _hint = 'Incorrect turn! Turn head towards your $_direction.';
+            _hint = 'Turn head towards your $_direction';
           });
           return;
         }
 
-        final progress = (turned / turnYawMin).clamp(0.0, 1.0);
+        final progress = (turned.abs() / turnYawMin).clamp(0.0, 1.0);
         setState(() {
           _hint = null;
           _turnProgress = progress;
         });
 
-        if (turned >= turnYawMin) {
+        if (turned >= turnYawMin || turned.abs() >= turnYawMin) {
           _turnHoldCount++;
           if (_turnHoldCount >= turnHoldFrames) {
             _turnedFrame = frame;
@@ -721,7 +725,7 @@ class _AttendanceFaceVerificationScreenState
         child: Stack(
           alignment: Alignment.center,
           children: [
-            // 1. Top Section - Fixed Positioned Overlay (Header, Badges & Error Messages)
+            // 1. Top Section Overlay
             Positioned(
               top: 12,
               left: 16,
@@ -809,7 +813,7 @@ class _AttendanceFaceVerificationScreenState
               ),
             ),
 
-            // 2. Absolute Dead Center Camera Circle Frame (Restored 250px Dimensions, No Distortion)
+            // 2. Camera Viewfinder Circle
             Center(
               child: Stack(
                 alignment: Alignment.center,
@@ -899,7 +903,7 @@ class _AttendanceFaceVerificationScreenState
               ),
             ),
 
-            // 3. Bottom Progress Bar
+            // 3. Progress Bar
             Positioned(
               bottom: 24,
               child: _buildProgressBar(),
@@ -918,11 +922,11 @@ class _AttendanceFaceVerificationScreenState
 
     switch (_step) {
       case _LivenessStep.lookCenter:
-        text = 'Look straight at the camera';
+        text = 'Look at camera';
         icon = Icons.remove_red_eye_outlined;
         break;
       case _LivenessStep.turn:
-        text = 'Turn your head to your $_direction';
+        text = 'Turn head slightly to $_direction';
         icon = _direction == 'left' ? Icons.arrow_back : Icons.arrow_forward;
         break;
       case _LivenessStep.verifying:
