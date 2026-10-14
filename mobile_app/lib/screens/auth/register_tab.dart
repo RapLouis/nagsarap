@@ -1,5 +1,9 @@
+import 'dart:io';
+
 import 'package:file_selector/file_selector.dart' as fs;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 
 import '../../core/app_colors.dart';
@@ -69,6 +73,37 @@ class _RegisterTabState extends State<RegisterTab> {
   }
 
   // --------------------------------------------------------------------------
+  // UN-MIRROR FRONT CAMERA PHOTO
+  // --------------------------------------------------------------------------
+
+  Future<XFile> _fixMirroredPhoto(XFile file) async {
+    try {
+      final bytes = await file.readAsBytes();
+      img.Image? decodedImage = img.decodeImage(bytes);
+
+      if (decodedImage == null) return file;
+
+      // Correct metadata rotation before flipping
+      decodedImage = img.bakeOrientation(decodedImage);
+
+      // Un-mirror by flipping horizontally
+      final flippedImage = img.flipHorizontal(decodedImage);
+      final fixedBytes = img.encodeJpg(flippedImage, quality: 85);
+
+      final tempDir = Directory.systemTemp;
+      final targetPath =
+          '${tempDir.path}/profile_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final fixedFile = File(targetPath);
+      await fixedFile.writeAsBytes(fixedBytes);
+
+      return XFile(fixedFile.path);
+    } catch (e) {
+      debugPrint('Error un-mirroring photo: $e');
+      return file;
+    }
+  }
+
+  // --------------------------------------------------------------------------
   // PICK + FAST VALIDATE PROFILE PHOTO
   // --------------------------------------------------------------------------
 
@@ -77,17 +112,101 @@ class _RegisterTabState extends State<RegisterTab> {
       return;
     }
 
+    final ImageSource? selectedSource = await showModalBottomSheet<ImageSource>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (BuildContext ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 36,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 16),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade400,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const Text(
+                  'Select Profile Picture Source',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.navy,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                ListTile(
+                  leading: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.gold.withValues(alpha: 0.15),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.photo_library_rounded,
+                      color: AppColors.gold,
+                    ),
+                  ),
+                  title: const Text(
+                    'Choose from Photo Library',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+                ),
+                const SizedBox(height: 8),
+                ListTile(
+                  leading: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.navy.withValues(alpha: 0.15),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.camera_alt_rounded,
+                      color: AppColors.navy,
+                    ),
+                  ),
+                  title: const Text(
+                    'Take Photo directly',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  onTap: () => Navigator.pop(ctx, ImageSource.camera),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (selectedSource == null) {
+      return;
+    }
+
     try {
-      // Optimized for ultra-fast upload & AI scan speed
-      final XFile? image = await imagePicker.pickImage(
-        source: ImageSource.gallery,
-        imageQuality: 70,
+      XFile? image = await imagePicker.pickImage(
+        source: selectedSource,
+        preferredCameraDevice: CameraDevice.front,
+        imageQuality: 85,
         maxWidth: 1024,
         maxHeight: 1024,
       );
 
       if (image == null) {
         return;
+      }
+
+      // Automatically un-mirror photo captured with front camera
+      if (selectedSource == ImageSource.camera) {
+        image = await _fixMirroredPhoto(image);
       }
 
       if (!mounted) {
@@ -374,7 +493,6 @@ class _RegisterTabState extends State<RegisterTab> {
     final studentName =
         '${firstNameController.text.trim()} ${surnameController.text.trim()}';
 
-    // Proceed to live face verification with Liveness steps
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => RegistrationFaceVerificationScreen(
