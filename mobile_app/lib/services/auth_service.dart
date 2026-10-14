@@ -65,6 +65,10 @@ class AuthService {
       final response = await _api.dio.post(
         ApiEndpoints.login,
         data: {'student_number': studentNumber.trim(), 'password': password},
+        options: Options(
+          sendTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 15),
+        ),
       );
 
       final root = _asMap(response.data);
@@ -169,7 +173,13 @@ class AuthService {
     }
 
     try {
-      final response = await _api.dio.get(ApiEndpoints.me);
+      final response = await _api.dio.get(
+        ApiEndpoints.me,
+        options: Options(
+          sendTimeout: const Duration(seconds: 10),
+          receiveTimeout: const Duration(seconds: 10),
+        ),
+      );
 
       if (response.statusCode == 401) {
         await _clearLocalSession();
@@ -370,7 +380,13 @@ class AuthService {
 
   Future<void> logout() async {
     try {
-      await _api.dio.post(ApiEndpoints.logout);
+      await _api.dio.post(
+        ApiEndpoints.logout,
+        options: Options(
+          sendTimeout: const Duration(seconds: 10),
+          receiveTimeout: const Duration(seconds: 10),
+        ),
+      );
     } catch (_) {
       // Local logout must still complete even while offline.
     } finally {

@@ -29,15 +29,12 @@ class _RegistrationFaceVerificationScreenState
   CameraController? _camera;
   bool _cameraReady = false;
   bool _disposed = false;
-  bool _analyzing = false;
+  bool _isProcessing = false;
 
   RegistrationLivenessStep _step = RegistrationLivenessStep.lookCenter;
   
   LivenessChallenge? _challenge;
   String _direction = 'left';
-
-  int _centerFramesCaptured = 0;
-  int _turnFramesCaptured = 0;
 
   double _holdProgress = 0.0;
   double _turnProgress = 0.0;
@@ -55,14 +52,13 @@ class _RegistrationFaceVerificationScreenState
     super.initState();
     _pulseController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1200),
+      duration: const Duration(milliseconds: 1000),
     )..repeat(reverse: true);
 
     _initLivenessChallengeAndCamera();
   }
 
   Future<void> _initLivenessChallengeAndCamera() async {
-    // 1. Fetch official liveness challenge (nonce + session_id) from API
     final challengeResult =
         await RegistrationService.instance.requestLivenessChallenge();
 
@@ -73,7 +69,6 @@ class _RegistrationFaceVerificationScreenState
       _direction = _challenge!.direction;
     }
 
-    // 2. Initialize Front Camera
     try {
       final cameras = await availableCameras();
       if (cameras.isEmpty) {
@@ -87,7 +82,7 @@ class _RegistrationFaceVerificationScreenState
 
       final controller = CameraController(
         selected,
-        ResolutionPreset.medium,
+        ResolutionPreset.low,
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.jpeg,
       );
@@ -104,7 +99,8 @@ class _RegistrationFaceVerificationScreenState
         _cameraReady = true;
       });
 
-      _runLivenessLoop();
+      // Run automated robust snapshot capture sequence
+      await _runAutomatedCapture();
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -115,90 +111,68 @@ class _RegistrationFaceVerificationScreenState
     }
   }
 
-  Future<void> _runLivenessLoop() async {
-    while (mounted &&
-        !_disposed &&
-        _step != RegistrationLivenessStep.verifying &&
-        _step != RegistrationLivenessStep.passed &&
-        _step != RegistrationLivenessStep.failed) {
-      if (!_analyzing && _cameraReady && _camera != null) {
-        await _captureAndAnalyzeFrame();
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-    }
-  }
+  // --------------------------------------------------------------------------
+  // ROBUST AUTOMATED SNAPSHOT SEQUENCE
+  // --------------------------------------------------------------------------
 
-  Future<void> _captureAndAnalyzeFrame() async {
-    if (_analyzing ||
-        _disposed ||
-        _camera == null ||
-        !_camera!.value.isInitialized) {
+  Future<void> _runAutomatedCapture() async {
+    if (_isProcessing || _camera == null || !_camera!.value.isInitialized || _disposed) {
       return;
     }
 
-    _analyzing = true;
+    _isProcessing = true;
 
     try {
-      final frame = await _camera!.takePicture();
+      // Step 1: Center Frame Capture
+      setState(() {
+        _step = RegistrationLivenessStep.lookCenter;
+        _holdProgress = 0.5;
+        _hint = 'Hold still, capturing center face...';
+      });
+
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
       if (!mounted || _disposed) return;
 
-      final analysis = await RegistrationService.instance
-          .analyzeLivenessFrame(frame: frame);
+      _centerFrame = await _camera!.takePicture();
+      setState(() {
+        _holdProgress = 1.0;
+      });
 
-      if (_step == RegistrationLivenessStep.lookCenter) {
-        final yaw = (analysis.yaw ?? 0.0).abs();
+      // Step 2: Turn Frame Capture
+      setState(() {
+        _step = RegistrationLivenessStep.turn;
+        _turnProgress = 0.5;
+        _hint = 'Now turn your head towards $_direction...';
+      });
 
-        if (analysis.faceDetected && yaw < 18) {
-          _centerFramesCaptured++;
-        } else {
-          _centerFramesCaptured++;
-        }
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      if (!mounted || _disposed) return;
 
+      _turnedFrame = await _camera!.takePicture();
+      setState(() {
+        _turnProgress = 1.0;
+      });
+
+      // Step 3: Submit Biometrics
+      await _submitBiometrics();
+    } catch (e) {
+      debugPrint('Registration capture error: $e');
+      if (mounted && !_disposed) {
         setState(() {
-          _holdProgress = (_centerFramesCaptured / 2).clamp(0.0, 1.0);
-          _hint = 'Looking straight at the camera...';
+          _step = RegistrationLivenessStep.failed;
+          _error = 'Camera capture failed. Please retry.';
         });
-
-        if (_centerFramesCaptured >= 2) {
-          _centerFrame = frame;
-          setState(() {
-            _step = RegistrationLivenessStep.turn;
-            _hint = 'Turn your head clearly to your $_direction';
-          });
-        }
-      } else if (_step == RegistrationLivenessStep.turn) {
-        final yaw = analysis.yaw ?? 0.0;
-        bool turned = yaw.abs() > 5 || analysis.faceDetected;
-
-        if (turned) {
-          _turnFramesCaptured++;
-          setState(() {
-            _turnProgress = (_turnFramesCaptured / 2).clamp(0.0, 1.0);
-            _hint = 'Head turn detected! Finishing registration...';
-          });
-
-          if (_turnFramesCaptured >= 2) {
-            _turnedFrame = frame;
-            await _submitBiometrics();
-          }
-        }
-      }
-    } catch (_) {
-      if (_step == RegistrationLivenessStep.turn) {
-        _turnFramesCaptured++;
-        if (_turnFramesCaptured >= 2) {
-          await _submitBiometrics();
-        }
       }
     } finally {
-      _analyzing = false;
+      _isProcessing = false;
     }
   }
 
   Future<void> _submitBiometrics() async {
     setState(() {
       _step = RegistrationLivenessStep.verifying;
-      _hint = null;
+      _hint = 'Registering face biometrics...';
+      _error = null;
     });
 
     try {
@@ -214,7 +188,19 @@ class _RegistrationFaceVerificationScreenState
           sessionId: sessionId,
         );
 
+        // If backend returns a head turn angle warning, auto-retry smoothly instead of failing user
         if (!result.success) {
+          final msg = result.message.toLowerCase();
+          if (msg.contains('turn') || msg.contains('angle') || msg.contains('liveness')) {
+            setState(() {
+              _hint = 'Retrying angle adjustment...';
+            });
+            await Future.delayed(const Duration(milliseconds: 800));
+            if (mounted && !_disposed) {
+              await _runAutomatedCapture();
+            }
+            return;
+          }
           throw Exception(result.message);
         }
       }
@@ -403,13 +389,28 @@ class _RegistrationFaceVerificationScreenState
                       child: _cameraReady &&
                               _camera != null &&
                               _camera!.value.isInitialized
-                          ? FittedBox(
-                              fit: BoxFit.cover,
-                              child: SizedBox(
-                                width: 250,
-                                height: 250 * _camera!.value.aspectRatio,
-                                child: CameraPreview(_camera!),
-                              ),
+                          ? LayoutBuilder(
+                              builder: (context, constraints) {
+                                final previewRatio = _camera!.value.aspectRatio;
+                                return SizedBox(
+                                  width: constraints.maxWidth,
+                                  height: constraints.maxHeight,
+                                  child: ClipRect(
+                                    child: OverflowBox(
+                                      alignment: Alignment.center,
+                                      child: FittedBox(
+                                        fit: BoxFit.cover,
+                                        child: SizedBox(
+                                          width: constraints.maxWidth,
+                                          height: constraints.maxWidth *
+                                              previewRatio,
+                                          child: CameraPreview(_camera!),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
                             )
                           : const Center(
                               child: CircularProgressIndicator(
@@ -457,6 +458,30 @@ class _RegistrationFaceVerificationScreenState
                 ),
               ),
             _buildProgressBar(),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _isProcessing
+                  ? null
+                  : () {
+                      setState(() {
+                        _isProcessing = false;
+                        _error = null;
+                      });
+                      _runAutomatedCapture();
+                    },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.gold,
+                foregroundColor: AppColors.navy,
+                padding: const EdgeInsets.symmetric(horizontal: 36, vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(24),
+                ),
+              ),
+              child: const Text(
+                'Retry / Capture Now',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+              ),
+            ),
             const SizedBox(height: 30),
           ],
         ),

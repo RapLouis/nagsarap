@@ -32,6 +32,7 @@ dependencies:
   # Camera/images
   camera: ^0.12.1
   image_picker: ^1.2.3
+  image: ^4.5.2
 
   # Form 5
   file_selector: ^1.1.0

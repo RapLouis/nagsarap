@@ -73,28 +73,29 @@ class _RegisterTabState extends State<RegisterTab> {
   }
 
   // --------------------------------------------------------------------------
-  // UN-MIRROR FRONT CAMERA PHOTO
+  // UN-MIRROR FRONT CAMERA PHOTO USING ISOLATE (COMPUTE)
   // --------------------------------------------------------------------------
+
+  static Uint8List _flipImageBytes(Uint8List bytes) {
+    img.Image? decodedImage = img.decodeImage(bytes);
+    if (decodedImage == null) return bytes;
+
+    // Bake EXIF orientation and flip horizontally to remove selfie mirror effect
+    decodedImage = img.bakeOrientation(decodedImage);
+    final flippedImage = img.flipHorizontal(decodedImage);
+    return Uint8List.fromList(img.encodeJpg(flippedImage, quality: 85));
+  }
 
   Future<XFile> _fixMirroredPhoto(XFile file) async {
     try {
       final bytes = await file.readAsBytes();
-      img.Image? decodedImage = img.decodeImage(bytes);
-
-      if (decodedImage == null) return file;
-
-      // Correct metadata rotation before flipping
-      decodedImage = img.bakeOrientation(decodedImage);
-
-      // Un-mirror by flipping horizontally
-      final flippedImage = img.flipHorizontal(decodedImage);
-      final fixedBytes = img.encodeJpg(flippedImage, quality: 85);
+      final processedBytes = await compute(_flipImageBytes, bytes);
 
       final tempDir = Directory.systemTemp;
       final targetPath =
           '${tempDir.path}/profile_${DateTime.now().millisecondsSinceEpoch}.jpg';
       final fixedFile = File(targetPath);
-      await fixedFile.writeAsBytes(fixedBytes);
+      await fixedFile.writeAsBytes(processedBytes);
 
       return XFile(fixedFile.path);
     } catch (e) {
@@ -195,7 +196,7 @@ class _RegisterTabState extends State<RegisterTab> {
       XFile? image = await imagePicker.pickImage(
         source: selectedSource,
         preferredCameraDevice: CameraDevice.front,
-        imageQuality: 85,
+        imageQuality: 80,
         maxWidth: 1024,
         maxHeight: 1024,
       );
@@ -204,7 +205,7 @@ class _RegisterTabState extends State<RegisterTab> {
         return;
       }
 
-      // Automatically un-mirror photo captured with front camera
+      // Un-mirror photos taken with front camera
       if (selectedSource == ImageSource.camera) {
         image = await _fixMirroredPhoto(image);
       }
