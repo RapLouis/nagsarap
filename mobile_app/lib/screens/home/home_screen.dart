@@ -38,7 +38,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   static const Color navy = Color(0xFF080878);
   static const Color gold = Color(0xFFFFC800);
-  static const Color muted = Color(0xFF94A3B8);
+  static const Color muted = Color(0xFF64748B);
 
   bool _loading = true;
   bool _dashboardBusy = false;
@@ -194,7 +194,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _profilePhoto != null ? MemoryImage(_profilePhoto!) : null,
       child: _profilePhoto == null
           ? Icon(
-              Icons.person_rounded,
+              Icons.badge_rounded,
               color: const Color(0xFF64748B),
               size: radius * 1.2,
             )
@@ -433,7 +433,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         SnackBar(
           content: const Row(
             children: [
-              Icon(Icons.info_outline_rounded, color: Colors.white, size: 20),
+              Icon(Icons.info_outline_rounded, color: Colors.white, size: 18),
               SizedBox(width: 10),
               Text('There is no event scheduled for today.'),
             ],
@@ -441,7 +441,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           backgroundColor: navy,
           behavior: SnackBarBehavior.floating,
           shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
       );
       return;
@@ -455,7 +455,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         backgroundColor: Theme.of(context).cardColor,
         showDragHandle: true,
         shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
         ),
         builder: (BuildContext sheetContext) {
           final isDark = themeController.isDarkMode;
@@ -470,15 +470,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   Text(
                     'Select Event',
                     style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w800,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
                       color: isDark ? Colors.white : navy,
                     ),
                   ),
                   const SizedBox(height: 4),
                   const Text(
                     'Choose an event to record attendance.',
-                    style: TextStyle(color: muted, fontSize: 13),
+                    style: TextStyle(color: muted, fontSize: 12.5),
                   ),
                   const SizedBox(height: 16),
                   for (final event in today)
@@ -488,7 +488,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         color: isDark
                             ? const Color(0xFF1E293B)
                             : const Color(0xFFF8FAFC),
-                        borderRadius: BorderRadius.circular(16),
+                        borderRadius: BorderRadius.circular(10),
                         border: Border.all(
                           color: isDark
                               ? const Color(0xFF334155)
@@ -497,37 +497,38 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       ),
                       child: ListTile(
                         contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 4,
+                          horizontal: 14,
+                          vertical: 2,
                         ),
                         leading: Container(
-                          width: 40,
-                          height: 40,
+                          width: 36,
+                          height: 36,
                           decoration: BoxDecoration(
-                            color: gold.withValues(alpha: 0.2),
-                            shape: BoxShape.circle,
+                            color: gold.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(8),
                           ),
                           child: const Icon(
                             Icons.event_available_rounded,
                             color: gold,
-                            size: 20,
+                            size: 18,
                           ),
                         ),
                         title: Text(
                           event.name,
                           style: TextStyle(
-                            fontWeight: FontWeight.w700,
-                            fontSize: 14.5,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
                             color: isDark ? Colors.white : navy,
                           ),
                         ),
                         subtitle: Text(
                           _getDisplayWindow(event),
-                          style: const TextStyle(fontSize: 12, color: muted),
+                          style: const TextStyle(fontSize: 11.5, color: muted),
                         ),
-                        trailing: Icon(
-                          Icons.chevron_right_rounded,
-                          color: isDark ? Colors.white54 : Colors.grey,
+                        trailing: const Icon(
+                          Icons.arrow_forward_ios_rounded,
+                          color: muted,
+                          size: 14,
                         ),
                         onTap: () => Navigator.pop(sheetContext, event),
                       ),
@@ -562,10 +563,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       backgroundColor: Colors.transparent,
       builder: (ctx) {
         return Container(
-          padding: const EdgeInsets.fromLTRB(22, 12, 22, 28),
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
           decoration: BoxDecoration(
             color: isDark ? const Color(0xFF1E293B) : Colors.white,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
           ),
           child: SafeArea(
             child: Column(
@@ -574,7 +575,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               children: [
                 Center(
                   child: Container(
-                    width: 38,
+                    width: 32,
                     height: 4,
                     decoration: BoxDecoration(
                       color: isDark
@@ -584,7 +585,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     ),
                   ),
                 ),
-                const SizedBox(height: 18),
+                const SizedBox(height: 16),
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -592,8 +593,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       child: Text(
                         event.name,
                         style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w800,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
                           color: isDark ? Colors.white : navy,
                         ),
                       ),
@@ -603,35 +604,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       icon: Icon(
                         Icons.close_rounded,
                         color: isDark ? Colors.white70 : muted,
+                        size: 20,
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 12),
                 if (event.description.isNotEmpty) ...[
                   Text(
                     'Event Details',
                     style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                      color: isDark ? Colors.white : navy,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: isDark ? Colors.white70 : navy,
                     ),
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 4),
                   Text(
                     event.description,
                     style: TextStyle(
-                      fontSize: 13,
-                      height: 1.4,
+                      fontSize: 12.5,
+                      height: 1.35,
                       color: isDark ? const Color(0xFFCBD5E1) : Colors.black87,
                     ),
                   ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 12),
                 ],
                 Container(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
+                    horizontal: 10,
+                    vertical: 6,
                   ),
                   decoration: BoxDecoration(
                     color: isCompleted
@@ -641,30 +643,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             : (isDark
                                 ? const Color(0xFF334155)
                                 : const Color(0xFFEEF2FF))),
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(8),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(
                         isCompleted
-                            ? Icons.check_circle_rounded
+                            ? Icons.verified_rounded
                             : (isTimeInDone
-                                ? Icons.hourglass_top_rounded
-                                : Icons.event_available_rounded),
-                        size: 16,
+                                ? Icons.pending_actions_rounded
+                                : Icons.schedule_rounded),
+                        size: 14,
                         color: isCompleted
                             ? const Color(0xFF15803D)
                             : (isTimeInDone
                                 ? const Color(0xFF92400E)
                                 : (isDark ? gold : navy)),
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
                       Text(
-                        'Attendance Progress ($count/2)',
+                        'Attendance Status ($count/2)',
                         style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w800,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
                           color: isCompleted
                               ? const Color(0xFF15803D)
                               : (isTimeInDone
@@ -675,45 +677,45 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     ],
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 14),
                 Divider(
                   color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
                 _modalInfoRow(
-                  Icons.person_outline_rounded,
+                  Icons.badge_rounded,
                   'Student Name',
                   _fullName,
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
                 _modalInfoRow(
-                  Icons.calendar_today_rounded,
+                  Icons.event_available_rounded,
                   'Date',
                   _formatDate(event),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
                 _modalInfoRow(
                   Icons.login_rounded,
                   'Time-In Window',
                   timeInWindow,
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
                 _modalInfoRow(
                   Icons.logout_rounded,
                   'Time-Out Window',
                   timeOutWindow,
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
                 _modalInfoRow(
-                  Icons.location_on_outlined,
-                  'Recording Location / Venue',
+                  Icons.place_rounded,
+                  'Venue',
                   venueLocation,
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 20),
                 if (isWindowActive && !isCompleted)
                   SizedBox(
                     width: double.infinity,
-                    height: 50,
+                    height: 44,
                     child: ElevatedButton.icon(
                       onPressed: () {
                         Navigator.pop(ctx);
@@ -723,16 +725,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         backgroundColor: isDark ? gold : navy,
                         foregroundColor: isDark ? navy : Colors.white,
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
+                          borderRadius: BorderRadius.circular(10),
                         ),
                         elevation: 0,
                       ),
-                      icon: const Icon(Icons.qr_code_scanner_rounded, size: 20),
+                      icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
                       label: Text(
-                        isTimeInDone ? 'Scan Time-Out' : 'Scan Face Attendance',
+                        isTimeInDone ? 'Scan Time-Out QR' : 'Scan Face Attendance',
                         style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.bold,
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     ),
@@ -740,27 +742,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 else
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
                     decoration: BoxDecoration(
                       color: isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9),
-                      borderRadius: BorderRadius.circular(16),
+                      borderRadius: BorderRadius.circular(10),
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Icon(
-                          isCompleted ? Icons.check_circle_rounded : Icons.lock_clock_rounded,
-                          size: 20,
+                          isCompleted ? Icons.task_alt_rounded : Icons.lock_rounded,
+                          size: 16,
                           color: isCompleted ? const Color(0xFF16A34A) : muted,
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 6),
                         Text(
                           isCompleted
-                              ? 'Attendance Completed'
+                              ? 'Attendance Completed Successfully'
                               : 'Attendance Window Closed',
                           style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
                             color: isCompleted
                                 ? const Color(0xFF16A34A)
                                 : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
@@ -783,8 +785,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(icon, size: 18, color: gold),
-        const SizedBox(width: 12),
+        Icon(icon, size: 16, color: gold),
+        const SizedBox(width: 10),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -793,12 +795,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 label,
                 style: const TextStyle(fontSize: 11, color: muted),
               ),
-              const SizedBox(height: 2),
+              const SizedBox(height: 1),
               Text(
                 value,
                 style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
                   color: isDark ? Colors.white : navy,
                 ),
               ),
@@ -1075,19 +1077,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final dateString = DateFormat('EEE, MMM d').format(DateTime.now());
 
     return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      backgroundColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
       appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(74),
+        preferredSize: const Size.fromHeight(68),
         child: Container(
           decoration: BoxDecoration(
             color: isDark ? const Color(0xFF1E293B) : navy,
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x1A080878),
-                blurRadius: 10,
-                offset: Offset(0, 4),
+            border: Border(
+              bottom: BorderSide(
+                color: isDark ? const Color(0xFF334155) : Colors.transparent,
               ),
-            ],
+            ),
           ),
           child: SafeArea(
             child: Padding(
@@ -1097,10 +1097,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   SizedBox(
                     width: 52,
                     height: 52,
-                    child: ClipOval(
-                      child: Image.asset(
-                        'lib/screens/images/logo.jpeg',
-                        fit: BoxFit.cover,
+                    child: Container(
+                      decoration: const BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: Transform.scale(
+                        scale: 1.45,
+                        child: Image.asset(
+                          'lib/screens/images/logo.jpeg',
+                          fit: BoxFit.cover,
+                        ),
                       ),
                     ),
                   ),
@@ -1115,29 +1123,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 15.5,
-                          fontWeight: FontWeight.w800,
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
                       if (_studentNumber.isNotEmpty) ...[
-                        const SizedBox(height: 2),
+                        const SizedBox(height: 1),
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Container(
-                              width: 5,
-                              height: 5,
+                              width: 4,
+                              height: 4,
                               decoration: const BoxDecoration(
                                 color: gold,
                                 shape: BoxShape.circle,
                               ),
                             ),
-                            const SizedBox(width: 5),
+                            const SizedBox(width: 4),
                             Text(
                               _studentNumber,
                               style: const TextStyle(
-                                color: Color(0xFFC0C0E8),
-                                fontSize: 11.5,
+                                color: Color(0xFFCBD5E1),
+                                fontSize: 11,
                                 fontWeight: FontWeight.w500,
                               ),
                             ),
@@ -1148,15 +1156,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ),
                   const SizedBox(width: 10),
                   InkWell(
-                    borderRadius: BorderRadius.circular(30),
+                    borderRadius: BorderRadius.circular(20),
                     onTap: _openProfile,
                     child: Container(
-                      padding: const EdgeInsets.all(2),
+                      padding: const EdgeInsets.all(1.5),
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        border: Border.all(color: gold, width: 2),
+                        border: Border.all(color: gold, width: 1.5),
                       ),
-                      child: _profileAvatar(radius: 18),
+                      child: _profileAvatar(radius: 16),
                     ),
                   ),
                 ],
@@ -1174,20 +1182,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               )
             : ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(16, 18, 16, 120),
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
                 children: [
                   if (_pendingOfflineCount > 0 || _syncingOffline) ...[
                     _buildPendingOfflineCard(),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 14),
                   ],
                   _buildHeaderSection(dateString),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 14),
                   _buildMetricsRow(),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                   _buildHistoryCard(),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 20),
                   _buildEventsSectionHeader(),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                   if (_error != null)
                     _buildErrorWidget()
                   else if (_todayEvents.isEmpty)
@@ -1195,7 +1203,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   else
                     ..._todayEvents.map((evt) => _buildEventCard(evt, today: true)),
                   if (_upcomingEvents.isNotEmpty) ...[
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 20),
                     _buildUpcomingSection(),
                   ],
                 ],
@@ -1229,42 +1237,45 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             Text(
               "Today's Activity",
               style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w800,
-                letterSpacing: -0.5,
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.3,
                 color: isDark ? Colors.white : navy,
               ),
             ),
-            const SizedBox(height: 2),
+            const SizedBox(height: 1),
             Text(
-              'Overview of your schedule & check-ins',
+              'Overview of schedule & check-ins',
               style: TextStyle(
-                fontSize: 12.5,
+                fontSize: 12,
                 color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
               ),
             ),
           ],
         ),
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(
-            color: isDark
-                ? const Color(0xFF1E293B)
-                : const Color(0xFF080878).withValues(alpha: 0.06),
-            borderRadius: BorderRadius.circular(20),
+            color: isDark ? const Color(0xFF1E293B) : Colors.white,
+            borderRadius: BorderRadius.circular(8),
             border: Border.all(
-              color: isDark
-                  ? const Color(0xFF334155)
-                  : const Color(0xFF080878).withValues(alpha: 0.12),
+              color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
             ),
           ),
-          child: Text(
-            dateString,
-            style: TextStyle(
-              fontSize: 11.5,
-              fontWeight: FontWeight.w700,
-              color: isDark ? gold : navy,
-            ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.calendar_today_rounded, size: 12, color: isDark ? gold : navy),
+              const SizedBox(width: 5),
+              Text(
+                dateString,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: isDark ? gold : navy,
+                ),
+              ),
+            ],
           ),
         ),
       ],
@@ -1280,20 +1291,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           child: _metricBox(
             title: 'Today',
             count: '${_todayEvents.length}',
-            subtitle: 'Scheduled events',
-            icon: Icons.event_available_rounded,
+            subtitle: 'Scheduled',
+            icon: Icons.today_rounded,
             iconColor: const Color(0xFF3B82F6),
             isDark: isDark,
             onTap: () => _showSummaryDetails('Today'),
           ),
         ),
-        const SizedBox(width: 12),
+        const SizedBox(width: 10),
         Expanded(
           child: _metricBox(
             title: 'Upcoming',
             count: '${_upcomingEvents.length}',
             subtitle: 'Future events',
-            icon: Icons.event_note_rounded,
+            icon: Icons.upcoming_rounded,
             iconColor: const Color(0xFFF59E0B),
             isDark: isDark,
             onTap: () => _showSummaryDetails('Upcoming'),
@@ -1315,26 +1326,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return Container(
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF1E293B) : Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
         ),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x06000000),
-            blurRadius: 10,
-            offset: Offset(0, 3),
-          ),
-        ],
       ),
       child: Material(
         color: Colors.transparent,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(12),
           child: Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(14),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1342,33 +1346,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Container(
-                      padding: const EdgeInsets.all(8),
+                      padding: const EdgeInsets.all(7),
                       decoration: BoxDecoration(
-                        color: iconColor.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(10),
+                        color: iconColor.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
                       ),
-                      child: Icon(icon, color: iconColor, size: 20),
+                      child: Icon(icon, color: iconColor, size: 18),
                     ),
                     Text(
                       count,
                       style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w800,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
                         color: isDark ? Colors.white : navy,
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
                 Text(
                   title,
                   style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
                     color: isDark ? Colors.white : const Color(0xFF1E293B),
                   ),
                 ),
-                const SizedBox(height: 2),
+                const SizedBox(height: 1),
                 Text(
                   subtitle,
                   style: const TextStyle(
@@ -1391,57 +1395,50 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     return InkWell(
       onTap: _openHistory,
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(12),
       child: Container(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           color: isDark ? const Color(0xFF1E293B) : Colors.white,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
           ),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x06000000),
-              blurRadius: 10,
-              offset: Offset(0, 3),
-            ),
-          ],
         ),
         child: Row(
           children: [
             Container(
-              padding: const EdgeInsets.all(10),
+              padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: gold.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(12),
+                color: gold.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
               ),
               child: const Icon(
-                Icons.history_rounded,
+                Icons.history_toggle_off_rounded,
                 color: gold,
-                size: 22,
+                size: 20,
               ),
             ),
-            const SizedBox(width: 14),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Attendance History',
+                    'Attendance History Logs',
                     style: TextStyle(
-                      fontSize: 14.5,
-                      fontWeight: FontWeight.w700,
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w600,
                       color: isDark ? Colors.white : navy,
                     ),
                   ),
-                  const SizedBox(height: 2),
+                  const SizedBox(height: 1),
                   Text(
                     hasRecords
                         ? '$_attendanceCount recorded • Latest: $_latestAttendanceStatus'
-                        : 'No attendance records yet',
+                        : 'No attendance records logged yet',
                     style: const TextStyle(
-                      fontSize: 11.5,
+                      fontSize: 11,
                       color: muted,
                       fontWeight: FontWeight.w500,
                     ),
@@ -1449,9 +1446,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ],
               ),
             ),
-            Icon(
-              Icons.chevron_right_rounded,
-              color: isDark ? Colors.white54 : const Color(0xFF94A3B8),
+            const Icon(
+              Icons.arrow_forward_ios_rounded,
+              color: muted,
+              size: 14,
             ),
           ],
         ),
@@ -1465,27 +1463,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(
-          "Today's Events",
-          style: TextStyle(
-            fontSize: 16.5,
-            fontWeight: FontWeight.w800,
-            color: isDark ? Colors.white : navy,
-            letterSpacing: -0.3,
-          ),
+        Row(
+          children: [
+            Icon(Icons.event_note_rounded, size: 16, color: isDark ? gold : navy),
+            const SizedBox(width: 6),
+            Text(
+              "Today's Events",
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: isDark ? Colors.white : navy,
+                letterSpacing: -0.2,
+              ),
+            ),
+          ],
         ),
         if (_todayEvents.isNotEmpty)
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
             decoration: BoxDecoration(
-              color: const Color(0xFF10B981).withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(12),
+              color: const Color(0xFF10B981).withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(6),
             ),
             child: Text(
               '${_todayEvents.length} Active',
               style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
+                fontSize: 10.5,
+                fontWeight: FontWeight.w600,
                 color: Color(0xFF10B981),
               ),
             ),
@@ -1503,32 +1507,42 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(
-              'Upcoming Events',
-              style: TextStyle(
-                fontSize: 16.5,
-                fontWeight: FontWeight.w800,
-                color: isDark ? Colors.white : navy,
-                letterSpacing: -0.3,
-              ),
+            Row(
+              children: [
+                Icon(Icons.upcoming_rounded, size: 16, color: isDark ? gold : navy),
+                const SizedBox(width: 6),
+                Text(
+                  'Upcoming Events',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: isDark ? Colors.white : navy,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+              ],
             ),
             TextButton(
               onPressed: _openCalendar,
+              style: TextButton.styleFrom(
+                foregroundColor: gold,
+                padding: EdgeInsets.zero,
+                minimumSize: const Size(50, 30),
+              ),
               child: const Text(
                 'View Calendar',
                 style: TextStyle(
-                  color: gold,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 12,
                 ),
               ),
             ),
           ],
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 8),
         for (final event in _upcomingEvents.take(3)) ...[
           _buildEventCard(event),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
         ],
       ],
     );
@@ -1544,10 +1558,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final isCompleted = count >= 2;
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF1E293B) : Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: isCompleted
               ? const Color(0xFF86EFAC)
@@ -1555,22 +1568,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ? const Color(0xFFFDE68A)
                   : (isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0))),
         ),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x06000000),
-            blurRadius: 10,
-            offset: Offset(0, 3),
-          ),
-        ],
       ),
       child: Material(
         color: Colors.transparent,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
         child: InkWell(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(12),
           onTap: () => _showEventDetailModal(event),
           child: Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(14),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1581,8 +1587,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       child: Text(
                         event.name,
                         style: TextStyle(
-                          fontSize: 15.5,
-                          fontWeight: FontWeight.w800,
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w700,
                           color: isDark ? Colors.white : navy,
                         ),
                       ),
@@ -1590,22 +1596,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     const SizedBox(width: 8),
                     Container(
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
+                        horizontal: 7,
+                        vertical: 3,
                       ),
                       decoration: BoxDecoration(
                         color: isCompleted
                             ? const Color(0xFFDCFCE7)
                             : (count == 1
                                 ? const Color(0xFFFEF3C7)
-                                : navy.withValues(alpha: isDark ? 0.3 : 0.08)),
-                        borderRadius: BorderRadius.circular(8),
+                                : navy.withValues(alpha: isDark ? 0.2 : 0.06)),
+                        borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
                         '$count/2',
                         style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w800,
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w700,
                           color: isCompleted
                               ? const Color(0xFF15803D)
                               : (count == 1
@@ -1616,53 +1622,53 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     ),
                   ],
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 8),
                 Row(
                   children: [
                     const Icon(
                       Icons.login_rounded,
-                      size: 14,
-                      color: muted,
+                      size: 13,
+                      color: Color(0xFF16A34A),
                     ),
                     const SizedBox(width: 6),
                     Text(
                       'Time-In: $timeInWindow',
                       style: const TextStyle(
-                        fontSize: 12,
+                        fontSize: 11.5,
                         color: muted,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 3),
                 Row(
                   children: [
                     const Icon(
                       Icons.logout_rounded,
-                      size: 14,
-                      color: muted,
+                      size: 13,
+                      color: Color(0xFFDC2626),
                     ),
                     const SizedBox(width: 6),
                     Text(
                       'Time-Out: $timeOutWindow',
                       style: const TextStyle(
-                        fontSize: 12,
+                        fontSize: 11.5,
                         color: muted,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                   ],
                 ),
                 if (event.venue.isNotEmpty &&
                     event.venue != 'Unspecified Venue') ...[
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 5),
                   Row(
                     children: [
                       const Icon(
-                        Icons.location_on_outlined,
-                        size: 14,
-                        color: muted,
+                        Icons.place_rounded,
+                        size: 13,
+                        color: Color(0xFF3B82F6),
                       ),
                       const SizedBox(width: 6),
                       Expanded(
@@ -1671,7 +1677,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
-                            fontSize: 12,
+                            fontSize: 11.5,
                             color: muted,
                             fontWeight: FontWeight.w500,
                           ),
@@ -1693,45 +1699,38 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: const Color(0xFFFFFBEB),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: gold.withValues(alpha: 0.6)),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x08000000),
-            blurRadius: 10,
-            offset: Offset(0, 4),
-          ),
-        ],
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: gold.withValues(alpha: 0.5)),
       ),
       child: Row(
         children: [
           Container(
-            width: 44,
-            height: 44,
+            width: 36,
+            height: 36,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: gold.withValues(alpha: 0.25),
-              borderRadius: BorderRadius.circular(14),
+              color: gold.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(8),
             ),
             child: syncing
                 ? const SizedBox(
-                    width: 22,
-                    height: 22,
+                    width: 18,
+                    height: 18,
                     child: CircularProgressIndicator(
-                      strokeWidth: 2.5,
+                      strokeWidth: 2,
                       color: navy,
                     ),
                   )
                 : const Icon(
-                    Icons.cloud_upload_outlined,
+                    Icons.cloud_sync_rounded,
                     color: navy,
-                    size: 24,
+                    size: 20,
                   ),
           ),
-          const SizedBox(width: 14),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1742,19 +1741,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       : 'Pending offline attendance',
                   style: const TextStyle(
                     color: navy,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
-                const SizedBox(height: 3),
+                const SizedBox(height: 2),
                 Text(
                   syncing
                       ? 'Verifying saved records with server.'
                       : '$_pendingOfflineCount record${_pendingOfflineCount == 1 ? '' : 's'} waiting for sync.',
                   style: const TextStyle(
                     color: Color(0xFF786200),
-                    fontSize: 11.5,
-                    height: 1.35,
+                    fontSize: 11,
                   ),
                 ),
               ],
@@ -1764,7 +1762,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             IconButton(
               tooltip: 'Sync now',
               onPressed: () => _loadDashboard(showMainLoader: false),
-              icon: const Icon(Icons.sync_rounded, color: navy),
+              icon: const Icon(Icons.sync_rounded, color: navy, size: 20),
             ),
         ],
       ),
@@ -1775,10 +1773,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final isDark = themeController.isDarkMode;
 
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 20),
+      padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF1E293B) : Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
         ),
@@ -1786,24 +1784,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       child: Column(
         children: [
           Icon(
-            Icons.event_available_rounded,
-            size: 40,
+            Icons.event_busy_rounded,
+            size: 32,
             color: isDark ? gold : navy,
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
           Text(
             'No events scheduled today',
             style: TextStyle(
-              fontSize: 14.5,
-              fontWeight: FontWeight.w700,
+              fontSize: 13.5,
+              fontWeight: FontWeight.w600,
               color: isDark ? Colors.white : Colors.black87,
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 2),
           const Text(
             'Check back later or view upcoming events in Calendar.',
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 12, color: muted),
+            style: TextStyle(fontSize: 11.5, color: muted),
           ),
         ],
       ),
@@ -1814,28 +1812,35 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final isDark = themeController.isDarkMode;
 
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF1E293B) : Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+        ),
       ),
       child: Column(
         children: [
-          const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 36),
-          const SizedBox(height: 8),
+          const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 30),
+          const SizedBox(height: 6),
           Text(
             _error ?? 'Error loading events.',
             textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 12.5, color: muted),
+            style: const TextStyle(fontSize: 12, color: muted),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           ElevatedButton(
             onPressed: () => _loadDashboard(),
             style: ElevatedButton.styleFrom(
               backgroundColor: isDark ? gold : navy,
               foregroundColor: isDark ? navy : Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
             ),
-            child: const Text('Retry'),
+            child: const Text('Retry', style: TextStyle(fontSize: 12)),
           ),
         ],
       ),
@@ -1856,12 +1861,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return Dialog(
           backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(24),
+            borderRadius: BorderRadius.circular(16),
           ),
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 480),
+            constraints: const BoxConstraints(maxHeight: 440),
             child: Padding(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.all(16),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1869,27 +1874,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   Row(
                     children: [
                       Container(
-                        width: 40,
-                        height: 40,
+                        width: 32,
+                        height: 32,
                         decoration: BoxDecoration(
-                          color: accent.withValues(alpha: 0.12),
-                          shape: BoxShape.circle,
+                          color: accent.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(8),
                         ),
                         child: Icon(
                           label == 'Today'
                               ? Icons.today_rounded
                               : Icons.upcoming_rounded,
                           color: accent,
-                          size: 20,
+                          size: 16,
                         ),
                       ),
-                      const SizedBox(width: 12),
+                      const SizedBox(width: 10),
                       Expanded(
                         child: Text(
                           '$label Events',
                           style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w800,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
                             color: isDark ? Colors.white : navy,
                           ),
                         ),
@@ -1899,17 +1904,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         icon: Icon(
                           Icons.close_rounded,
                           color: isDark ? Colors.white70 : muted,
+                          size: 18,
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 12),
                   Expanded(
                     child: events.isEmpty
                         ? const Center(
                             child: Text(
                               'No events scheduled.',
-                              style: TextStyle(color: muted),
+                              style: TextStyle(color: muted, fontSize: 12),
                             ),
                           )
                         : ListView.separated(
@@ -1919,12 +1925,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             itemBuilder: (_, index) {
                               final event = events[index];
                               return Container(
-                                padding: const EdgeInsets.all(12),
+                                padding: const EdgeInsets.all(10),
                                 decoration: BoxDecoration(
                                   color: isDark
                                       ? const Color(0xFF0F172A)
                                       : const Color(0xFFF8FAFC),
-                                  borderRadius: BorderRadius.circular(14),
+                                  borderRadius: BorderRadius.circular(10),
                                   border: Border.all(
                                     color: isDark
                                         ? const Color(0xFF334155)
@@ -1937,16 +1943,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                     Text(
                                       event.name,
                                       style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 13,
                                         color: isDark ? Colors.white : navy,
                                       ),
                                     ),
-                                    const SizedBox(height: 4),
+                                    const SizedBox(height: 2),
                                     Text(
                                       '${_formatDate(event)} • ${_getDisplayWindow(event)}',
                                       style: const TextStyle(
-                                        fontSize: 11.5,
+                                        fontSize: 11,
                                         color: muted,
                                       ),
                                     ),
