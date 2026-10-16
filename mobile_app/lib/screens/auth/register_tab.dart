@@ -80,7 +80,6 @@ class _RegisterTabState extends State<RegisterTab> {
     img.Image? decodedImage = img.decodeImage(bytes);
     if (decodedImage == null) return bytes;
 
-    // Bake EXIF orientation and flip horizontally to remove selfie mirror effect
     decodedImage = img.bakeOrientation(decodedImage);
     final flippedImage = img.flipHorizontal(decodedImage);
     return Uint8List.fromList(img.encodeJpg(flippedImage, quality: 85));
@@ -205,7 +204,6 @@ class _RegisterTabState extends State<RegisterTab> {
         return;
       }
 
-      // Un-mirror photos taken with front camera
       if (selectedSource == ImageSource.camera) {
         image = await _fixMirroredPhoto(image);
       }

@@ -134,7 +134,7 @@ class _LoginTabState extends State<LoginTab> {
   }
 
   // --------------------------------------------------------------------------
-  // CUSTOM ROUNDED INPUT FIELD BUILDER (MATCHING REGISTER TAB & WEB UI)
+  // CUSTOM ROUNDED INPUT FIELD BUILDER
   // --------------------------------------------------------------------------
 
   Widget _buildRoundedInputField({
@@ -225,10 +225,6 @@ class _LoginTabState extends State<LoginTab> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // --------------------------------------------------------------------
-          // STUDENT ID
-          // --------------------------------------------------------------------
-
           _buildRoundedInputField(
             label: 'Student ID',
             hint: '12-345678',
@@ -244,10 +240,6 @@ class _LoginTabState extends State<LoginTab> {
           ),
 
           const SizedBox(height: 20),
-
-          // --------------------------------------------------------------------
-          // PASSWORD
-          // --------------------------------------------------------------------
 
           _buildRoundedInputField(
             label: 'Password',
@@ -277,10 +269,6 @@ class _LoginTabState extends State<LoginTab> {
           ),
 
           const SizedBox(height: 12),
-
-          // --------------------------------------------------------------------
-          // REMEMBER ME & FORGOT PASSWORD
-          // --------------------------------------------------------------------
 
           Row(
             children: [
@@ -330,10 +318,6 @@ class _LoginTabState extends State<LoginTab> {
           ),
 
           const SizedBox(height: 24),
-
-          // --------------------------------------------------------------------
-          // LOG IN BUTTON
-          // --------------------------------------------------------------------
 
           SizedBox(
             width: double.infinity,

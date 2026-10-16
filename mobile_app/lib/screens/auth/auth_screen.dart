@@ -37,18 +37,35 @@ class _AuthScreenState extends State<AuthScreen> {
               ),
               child: Column(
                 children: [
+                  // ----------------------------------------------------------
+                  // LOGO CONTAINER WITH SOLID WHITE BG & SCALED LOGO ASSET
+                  // ----------------------------------------------------------
                   Container(
                     width: 84,
                     height: 84,
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.10),
+                      color: Colors.white, // Solid white background
                       shape: BoxShape.circle,
                       border: Border.all(
-                        color: AppColors.gold.withValues(alpha: 0.75),
-                        width: 2,
+                        color: AppColors.gold,
+                        width: 2.5,
+                      ),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x33000000),
+                          blurRadius: 12,
+                          offset: Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: Transform.scale(
+                      scale: 1.45, // Scales up the number 4 graphic nicely
+                      child: Image.asset(
+                        'lib/screens/images/logo.jpeg',
+                        fit: BoxFit.cover,
                       ),
                     ),
-                    // Reserved for the future brand logo. Intentionally blank.
                   ),
                   const SizedBox(height: 14),
                   const Text(
