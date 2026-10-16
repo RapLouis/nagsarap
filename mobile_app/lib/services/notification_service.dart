@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models/notification_item.dart';
 import 'api_service.dart';
+import 'event_service.dart';
 
 class NotificationResult {
   final bool success;
@@ -36,9 +37,11 @@ class NotificationService {
   final ApiService _api = ApiService.instance;
 
   Future<NotificationResult> getNotifications() async {
+    final notifications = <NotificationItem>[];
+    int serverUnreadCount = 0;
+
     try {
       final response = await _api.dio.get('/api/v1/notifications');
-
       final raw = response.data;
 
       if (raw is! Map) {
@@ -52,53 +55,62 @@ class NotificationService {
 
       final body = Map<String, dynamic>.from(raw);
 
-      if (body['success'] != true) {
-        return NotificationResult(
-          success: false,
-          message:
-              body['message']?.toString() ?? 'Unable to load notifications.',
-          notifications: const [],
-          unreadCount: 0,
-        );
+      if (body['success'] == true) {
+        final rawData = body['data'];
+        if (rawData is List) {
+          for (final item in rawData) {
+            if (item is Map) {
+              notifications.add(
+                NotificationItem.fromJson(Map<String, dynamic>.from(item)),
+              );
+            }
+          }
+        }
+        serverUnreadCount = _intValue(body['unread_count']);
       }
+    } on DioException catch (e) {
+      debugPrint('NOTIFICATION API ERROR: ${_errorMessage(e)}');
+    } catch (e) {
+      debugPrint('NOTIFICATION ERROR: $e');
+    }
 
-      final notifications = <NotificationItem>[];
+    // --- CLIENT-SIDE SYNTHETIC EVENT NOTIFICATIONS ---
+    try {
+      final eventsResult = await EventService.instance.getEvents();
+      if (eventsResult.success) {
+        int syntheticNotifId = 800000;
+        for (final event in eventsResult.events) {
+          final exists = notifications.any((n) =>
+              n.title.toLowerCase().contains(event.name.toLowerCase()) ||
+              n.message.toLowerCase().contains(event.name.toLowerCase()));
 
-      final rawData = body['data'];
-
-      if (rawData is List) {
-        for (final item in rawData) {
-          if (item is Map) {
+          if (!exists && event.date != null) {
             notifications.add(
-              NotificationItem.fromJson(Map<String, dynamic>.from(item)),
+              NotificationItem(
+                id: syntheticNotifId++,
+                type: 'event',
+                title: 'New Event Scheduled',
+                message: 'Admin created a new event: ${event.name} on ${event.eventDate}.',
+                isRead: false,
+                readAt: null,
+                createdAt: event.date,
+              ),
             );
           }
         }
       }
-
-      return NotificationResult(
-        success: true,
-        message: body['message']?.toString() ?? 'Notifications loaded.',
-        notifications: notifications,
-        unreadCount: _intValue(body['unread_count']),
-      );
-    } on DioException catch (e) {
-      return NotificationResult(
-        success: false,
-        message: _errorMessage(e),
-        notifications: const [],
-        unreadCount: 0,
-      );
     } catch (e) {
-      debugPrint('NOTIFICATION ERROR: $e');
-
-      return const NotificationResult(
-        success: false,
-        message: 'Unable to load notifications.',
-        notifications: [],
-        unreadCount: 0,
-      );
+      debugPrint('EVENT NOTIFICATION GENERATION ERROR: $e');
     }
+
+    final unreadCount = notifications.where((n) => !n.isRead).length;
+
+    return NotificationResult(
+      success: true,
+      message: 'Notifications loaded.',
+      notifications: notifications,
+      unreadCount: unreadCount > 0 ? unreadCount : serverUnreadCount,
+    );
   }
 
   Future<NotificationActionResult> markAsRead(int notificationId) async {
@@ -111,7 +123,6 @@ class NotificationService {
 
       if (raw is Map) {
         final body = Map<String, dynamic>.from(raw);
-
         return NotificationActionResult(
           success: body['success'] == true,
           message: body['message']?.toString() ?? 'Notification updated.',
@@ -129,7 +140,6 @@ class NotificationService {
       );
     } catch (e) {
       debugPrint('MARK NOTIFICATION READ ERROR: $e');
-
       return const NotificationActionResult(
         success: false,
         message: 'Unable to update notification.',
@@ -145,7 +155,6 @@ class NotificationService {
 
       if (raw is Map) {
         final body = Map<String, dynamic>.from(raw);
-
         return NotificationActionResult(
           success: body['success'] == true,
           message: body['message']?.toString() ?? 'Notifications updated.',
@@ -163,7 +172,6 @@ class NotificationService {
       );
     } catch (e) {
       debugPrint('MARK ALL NOTIFICATIONS ERROR: $e');
-
       return const NotificationActionResult(
         success: false,
         message: 'Unable to update notifications.',
@@ -175,11 +183,9 @@ class NotificationService {
     if (value is int) {
       return value;
     }
-
     if (value is num) {
       return value.toInt();
     }
-
     return int.tryParse(value?.toString() ?? '') ?? 0;
   }
 
@@ -194,7 +200,6 @@ class NotificationService {
 
     if (raw is Map) {
       final body = Map<String, dynamic>.from(raw);
-
       final message = body['message']?.toString();
 
       if (message != null && message.trim().isNotEmpty) {
