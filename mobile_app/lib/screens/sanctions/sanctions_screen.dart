@@ -43,17 +43,16 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
     try {
       final result = await SanctionService.instance.getSanctions();
 
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
 
       if (result.success) {
         final sorted = List<SanctionItem>.from(result.sanctions);
 
+        // Sort descending: Latest/newest missed events on top
         sorted.sort((a, b) {
           final first = a.issuedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
           final second = b.issuedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-          return first.compareTo(second);
+          return second.compareTo(first);
         });
 
         setState(() {
@@ -70,11 +69,7 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
       }
     } catch (e) {
       debugPrint('SANCTIONS SCREEN ERROR: $e');
-
-      if (!mounted) {
-        return;
-      }
-
+      if (!mounted) return;
       setState(() {
         _loading = false;
         _sanctions = const [];
@@ -144,10 +139,7 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
       padding: const EdgeInsets.fromLTRB(14, 20, 14, 110),
       itemCount: _sanctions.length + 1,
       itemBuilder: (BuildContext context, int index) {
-        if (index == 0) {
-          return _buildTableHeader();
-        }
-
+        if (index == 0) return _buildTableHeader();
         final sanction = _sanctions[index - 1];
         return _buildTableRow(sanction, index - 1);
       },
@@ -209,7 +201,6 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
   Widget _buildTableRow(SanctionItem sanction, int index) {
     final isDark = themeController.isDarkMode;
     final resolved = sanction.isResolved;
-
     final statusColor = resolved ? resolvedColor : pendingColor;
 
     final dateText = sanction.issuedAt == null
@@ -217,14 +208,7 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
         : DateFormat('MMM d, yyyy').format(sanction.issuedAt!.toLocal());
 
     String title = sanction.title.trim();
-    if (title.isEmpty) {
-      title = 'Attendance issue';
-    }
-
-    String reason = sanction.reason.trim();
-    if (reason.isEmpty) {
-      reason = 'Attendance was not recorded for the scheduled activity.';
-    }
+    if (title.isEmpty) title = 'Attendance issue';
 
     final rowColor = isDark
         ? (index.isEven ? const Color(0xFF0F172A) : const Color(0xFF1E293B))
@@ -260,31 +244,15 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
           Expanded(
             child: Padding(
               padding: const EdgeInsets.only(right: 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: isDark ? Colors.white : navy,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    reason,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: muted,
-                      fontSize: 10.5,
-                      height: 1.25,
-                    ),
-                  ),
-                ],
+              child: Text(
+                title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: isDark ? Colors.white : navy,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
             ),
           ),
