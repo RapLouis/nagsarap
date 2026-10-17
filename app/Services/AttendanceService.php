@@ -8,6 +8,7 @@ use App\Models\Event;
 use App\Models\User;
 use Carbon\Carbon;
 use Carbon\CarbonInterface;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -16,7 +17,8 @@ class AttendanceService
 {
     public function __construct(
         private readonly GeofenceService $geofenceService,
-        private readonly BiometricService $biometrics
+        private readonly BiometricService $biometrics,
+        private readonly SlotResolver $slots
     ) {
     }
 
@@ -34,7 +36,9 @@ class AttendanceService
         ?string $attendanceUuid = null,
         mixed $attendanceTime = null,
         string $source = 'mobile_online',
-        bool $isOfflineSync = false
+        bool $isOfflineSync = false,
+        ?int $slotIndex = null,
+        ?string $type = null
     ): Attendance {
         $student = $user->student;
 
@@ -72,14 +76,24 @@ class AttendanceService
             )
             : now();
 
+        if (!$isOfflineSync && !$event->is_active) {
+            throw new AttendanceException(
+                'EVENT_NOT_ACTIVE',
+                'This event is not currently active.',
+                422
+            );
+        }
+
         /*
-         * Make sure the attendance timestamp belongs to an
-         * actual attendance schedule.
+         * Work out WHICH slot and WHICH window (in/out) this submission is
+         * for. Newer clients send slot_index + type; older clients omit them
+         * and the window is inferred from the timestamp.
          */
-        $this->assertEventWindow(
+        $resolved = $this->slots->resolveOrInfer(
             $event,
             $attendanceAt,
-            $isOfflineSync
+            $slotIndex,
+            $type
         );
 
         /*
@@ -94,9 +108,6 @@ class AttendanceService
 
         /*
          * Offline synchronization may retry the same UUID.
-         *
-         * If the UUID already exists, return the existing attendance
-         * instead of creating a duplicate.
          */
         if ($attendanceUuid) {
             $existing = Attendance::where(
@@ -108,6 +119,15 @@ class AttendanceService
                 return $existing->load('event');
             }
         }
+
+        /*
+         * Cheap slot-aware duplicate check before the expensive face work.
+         */
+        $this->slots->guard(
+            $student->student_id,
+            $event->event_id,
+            $resolved
+        );
 
         /*
          * Extract the face embedding from the final camera frame.
@@ -162,96 +182,79 @@ class AttendanceService
             );
         }
 
-        $status = $this->statusFor(
-            $event,
-            $attendanceAt
-        );
+        $status = $resolved['status'] ?? $this->statusFor($event, $attendanceAt);
 
         /*
-         * Database transaction protects against duplicate
-         * attendance submissions arriving at the same time.
+         * Slot-aware persistence. The record is identified by
+         * (event_date, slot_index, type), so a Time-In never blocks a
+         * Time-Out and one slot never blocks another. The transaction
+         * re-checks under a lock; the unique index is the final safety net
+         * against two requests arriving at the same moment.
          */
-        return DB::transaction(
-            function () use (
-                $student,
-                $event,
-                $attendanceUuid,
-                $attendanceAt,
-                $status,
-                $source,
-                $similarity,
-                $latitude,
-                $longitude,
-                $locationAccuracy,
-                $geo
-            ) {
-                $duplicate = Attendance::where(
-                    'student_id',
-                    $student->student_id
-                )
-                    ->where(
-                        'event_id',
-                        $event->event_id
-                    )
-                    ->lockForUpdate()
-                    ->first();
-
-                if ($duplicate) {
-                    throw new AttendanceException(
-                        'ALREADY_CHECKED_IN',
-                        'Attendance has already been recorded for this event.',
-                        409,
-                        [
-                            'attendance' => $duplicate,
-                        ]
+        try {
+            return DB::transaction(
+                function () use (
+                    $student,
+                    $event,
+                    $attendanceUuid,
+                    $attendanceAt,
+                    $status,
+                    $source,
+                    $similarity,
+                    $latitude,
+                    $longitude,
+                    $locationAccuracy,
+                    $geo,
+                    $resolved
+                ) {
+                    $this->slots->guard(
+                        $student->student_id,
+                        $event->event_id,
+                        $resolved,
+                        true
                     );
+
+                    $now = now();
+
+                    return Attendance::create([
+                        'attendance_uuid' => $attendanceUuid
+                            ?: (string) Str::uuid(),
+                        'student_id' => $student->student_id,
+                        'event_id' => $event->event_id,
+                        'event_date' => $resolved['date'],
+                        'slot_index' => $resolved['index'],
+                        'type' => $resolved['type'],
+                        'logged_at' => $now,
+                        'attendance_time' => $attendanceAt,
+                        'sync_time' => $now,
+                        'status' => $status,
+                        'sync_status' => 'synced',
+                        'source' => $source,
+                        'confidence_score' => round($similarity, 4),
+                        'liveness_passed' => true,
+                        'liveness_method' => 'insightface_pose_rotation',
+                        'latitude' => $latitude,
+                        'longitude' => $longitude,
+                        'location_accuracy' => $locationAccuracy,
+                        'distance_from_event' => $geo['distance'],
+                        'location_verified_at' => $now,
+                    ]);
                 }
-
-                $now = now();
-
-                return Attendance::create([
-                    'attendance_uuid' => $attendanceUuid
-                        ?: (string) Str::uuid(),
-
-                    'student_id' => $student->student_id,
-
-                    'event_id' => $event->event_id,
-
-                    'logged_at' => $now,
-
-                    'attendance_time' => $attendanceAt,
-
-                    'sync_time' => $now,
-
-                    'status' => $status,
-
-                    'sync_status' => 'synced',
-
-                    'source' => $source,
-
-                    'confidence_score' => round(
-                        $similarity,
-                        4
-                    ),
-
-                    'liveness_passed' => true,
-
-                    'liveness_method' =>
-                        'insightface_pose_rotation',
-
-                    'latitude' => $latitude,
-
-                    'longitude' => $longitude,
-
-                    'location_accuracy' => $locationAccuracy,
-
-                    'distance_from_event' =>
-                        $geo['distance'],
-
-                    'location_verified_at' => $now,
-                ]);
+            );
+        } catch (QueryException $e) {
+            // SQLSTATE 23xxx: unique index hit by a concurrent duplicate request.
+            if (str_starts_with((string) $e->getCode(), '23')) {
+                throw new AttendanceException(
+                    'ALREADY_CHECKED_IN',
+                    $resolved['type'] === 'out'
+                        ? 'You have already checked out for this time slot.'
+                        : 'You have already checked in for this time slot.',
+                    409
+                );
             }
-        );
+
+            throw $e;
+        }
     }
 
     /**
@@ -286,9 +289,6 @@ class AttendanceService
         float $longitude,
         ?float $accuracy
     ): array {
-        /*
-         * Event does not require geofencing.
-         */
         if (!$event->is_geofenced) {
             return [
                 'inside' => true,
@@ -297,9 +297,6 @@ class AttendanceService
             ];
         }
 
-        /*
-         * Geofenced event must have coordinates.
-         */
         if (
             $event->latitude === null
             || $event->longitude === null
@@ -311,9 +308,6 @@ class AttendanceService
             );
         }
 
-        /*
-         * Reject inaccurate phone GPS readings.
-         */
         $maximumAccuracy = (float) config(
             'services.geofence.max_accuracy_meters',
             100
@@ -338,9 +332,6 @@ class AttendanceService
             );
         }
 
-        /*
-         * Polygon geofence.
-         */
         if (
             $event->geofence_type === 'polygon'
             && is_array($event->geofence_polygon)
@@ -371,9 +362,6 @@ class AttendanceService
             ];
         }
 
-        /*
-         * Circular geofence.
-         */
         $result = $this->geofenceService->check(
             $latitude,
             $longitude,
@@ -401,118 +389,22 @@ class AttendanceService
     }
 
     /**
-     * Check whether attendance timestamp falls inside
-     * one of the event's configured schedules.
-     */
-    private function assertEventWindow(
-        Event $event,
-        CarbonInterface $at,
-        bool $offline
-    ): void {
-        /*
-         * Online attendance requires the event to be active.
-         *
-         * Offline attendance is allowed to synchronize later.
-         */
-        if (
-            !$offline
-            && !$event->is_active
-        ) {
-            throw new AttendanceException(
-                'EVENT_NOT_ACTIVE',
-                'This event is not currently active.',
-                422
-            );
-        }
-
-        $event->loadMissing('days');
-
-        $matched = false;
-
-        foreach ($event->days as $day) {
-            $date = Carbon::parse(
-                $day->event_date,
-                config('app.timezone')
-            )->format('Y-m-d');
-
-            foreach (
-                ($day->slots ?? []) as $slot
-            ) {
-                $startTime =
-                    $slot['time_in_start'] ?? null;
-
-                $endTime =
-                    $slot['time_in_end']
-                    ?? $slot['time_out_end']
-                    ?? $slot['time_out_start']
-                    ?? $startTime;
-
-                if (!$startTime) {
-                    continue;
-                }
-
-                $start = Carbon::parse(
-                    "{$date} {$startTime}",
-                    config('app.timezone')
-                );
-
-                $end = Carbon::parse(
-                    "{$date} {$endTime}",
-                    config('app.timezone')
-                );
-
-                /*
-                 * Handles schedules crossing midnight.
-                 */
-                if (
-                    $end->lessThanOrEqualTo($start)
-                ) {
-                    $end->addDay();
-                }
-
-                if (
-                    $at->betweenIncluded(
-                        $start,
-                        $end
-                    )
-                ) {
-                    $matched = true;
-                    break 2;
-                }
-            }
-        }
-
-        if (!$matched) {
-            throw new AttendanceException(
-                'EVENT_OUTSIDE_WINDOW',
-                'Attendance is not open for this event at the supplied time.',
-                422,
-                [
-                    'attendance_time' =>
-                        $at->toIso8601String(),
-                ]
-            );
-        }
-    }
-
-    /**
-     * Determine present/late status.
+     * Determine present/late status across multiple time slots.
      */
     private function statusFor(
         Event $event,
         CarbonInterface $at
     ): string {
         $event->loadMissing('days');
+        $appTz = config('app.timezone');
 
         foreach ($event->days as $day) {
             $date = Carbon::parse(
                 $day->event_date,
-                config('app.timezone')
+                $appTz
             )->format('Y-m-d');
 
-            foreach (
-                ($day->slots ?? []) as $slot
-            ) {
+            foreach (($day->slots ?? []) as $slot) {
                 if (
                     empty(
                         $slot['time_in_start']
@@ -523,18 +415,16 @@ class AttendanceService
 
                 $start = Carbon::parse(
                     "{$date} {$slot['time_in_start']}",
-                    config('app.timezone')
+                    $appTz
                 );
 
                 $endTime =
                     $slot['time_in_end']
-                    ?? $slot['time_out_end']
-                    ?? $slot['time_out_start']
                     ?? $slot['time_in_start'];
 
                 $end = Carbon::parse(
                     "{$date} {$endTime}",
-                    config('app.timezone')
+                    $appTz
                 );
 
                 if (

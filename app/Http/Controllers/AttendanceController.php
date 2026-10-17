@@ -2,21 +2,25 @@
 
 namespace App\Http\Controllers;
 
+use App\Exceptions\AttendanceException;
 use App\Models\Attendance;
 use App\Models\Event;
 use App\Services\BiometricService;
+use App\Services\SlotResolver;
+use Carbon\Carbon;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
-use Carbon\Carbon;
 
 class AttendanceController extends Controller
 {
     /**
-     * Mark web attendance with exactly two frames:
-     * straight-on + requested left/right turn.
+     * Mark web attendance for ONE slot window (Time-In or Time-Out) with two
+     * frames: straight-on + requested left/right turn.
      */
-    public function markAttendance(Request $request, BiometricService $bio)
+    public function markAttendance(Request $request, BiometricService $bio, SlotResolver $slots)
     {
         $user = Auth::user();
         $student = $user?->student;
@@ -27,9 +31,11 @@ class AttendanceController extends Controller
             ]);
         }
 
-        // 1. Validate request including GPS coordinates from the browser
+        // 1. Validate request (now includes WHICH slot and WHICH window)
         $validated = $request->validate([
             'event_id' => ['required', 'integer', 'exists:events,event_id'],
+            'slot_index' => ['required', 'integer', 'min:0', 'max:99'],
+            'type' => ['required', 'in:in,out'],
             'live_camera_frame' => ['required', 'image', 'mimes:jpeg,png,jpg', 'max:5048'],
             'turn_peak_frame' => ['required', 'image', 'mimes:jpeg,png,jpg', 'max:5048'],
             'direction' => ['required', 'in:left,right'],
@@ -41,51 +47,30 @@ class AttendanceController extends Controller
 
         if (!$event->is_active) {
             return back()->withErrors([
-                'attendance' => 'Attendance check-in for this event is currently closed.',
+                'attendance' => 'Attendance for this event is currently closed.',
             ]);
         }
 
-        // 1.5. Strict Time Slot Window Validation with application timezone alignment
-        $appTimezone = config('app.timezone', 'UTC');
-        $now = Carbon::now($appTimezone);
-        $today = $now->toDateString();
-        
-        $eventDay = $event->days()->whereDate('event_date', $today)->first();
+        $now = Carbon::now(config('app.timezone', 'UTC'));
 
-        if (!$eventDay || empty($eventDay->slots)) {
-            return back()->withErrors([
-                'attendance' => 'No active schedule or time slots configured for today.',
-            ]);
+        // 2. Slot + window validation. The server is the authority: it looks up the
+        //    requested slot for today and checks that its Time-In / Time-Out window
+        //    is open right now. Unlimited slots are supported.
+        try {
+            $resolved = $slots->resolve(
+                $event,
+                $now,
+                (int) $validated['slot_index'],
+                $validated['type']
+            );
+
+            // 3. Cheap slot-aware duplicate check BEFORE the expensive AI work.
+            $slots->guard($student->student_id, $event->event_id, $resolved);
+        } catch (AttendanceException $e) {
+            return back()->withErrors(['attendance' => $e->getMessage()]);
         }
 
-        $allowedTimeWindow = false;
-        foreach ($eventDay->slots as $slot) {
-            // Check Time-In Window (supports start and optional cutoff/end time)
-            if (!empty($slot['time_in_start'])) {
-                $start = Carbon::parse($today . ' ' . $slot['time_in_start'], $appTimezone);
-                $cutoff = !empty($slot['time_in_end']) ? Carbon::parse($today . ' ' . $slot['time_in_end'], $appTimezone) : null;
-
-                if ($cutoff) {
-                    if ($now->between($start, $cutoff)) {
-                        $allowedTimeWindow = true;
-                        break;
-                    }
-                } else {
-                    if ($now->greaterThanOrEqualTo($start)) {
-                        $allowedTimeWindow = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (!$allowedTimeWindow) {
-            return back()->withErrors([
-                'attendance' => 'Attendance is currently closed. You can only check in during the designated time slot windows.',
-            ]);
-        }
-
-        // 2. Strict Geofence Pre-Check (Validates location BEFORE running AI face verification)
+        // 4. Geofence (validated before AI face verification) - applies to every submission
         if ($event->is_geofenced && $event->latitude && $event->longitude) {
             $distance = $this->calculateDistance(
                 (float) $validated['latitude'],
@@ -96,23 +81,14 @@ class AttendanceController extends Controller
 
             if ($distance > $event->radius_meters) {
                 $remaining = round($distance - $event->radius_meters);
+
                 return back()->withErrors([
                     'attendance' => "You are outside the event area. Move about {$remaining}m closer to check in.",
                 ]);
             }
         }
 
-        $alreadyCheckedIn = Attendance::where('student_id', $student->student_id)
-            ->where('event_id', $event->event_id)
-            ->exists();
-
-        if ($alreadyCheckedIn) {
-            return back()->withErrors([
-                'attendance' => 'You have already checked in for this event.',
-            ]);
-        }
-
-        // 3. Perform Biometric & Liveness Verification
+        // 5. Biometric & liveness verification - runs for every Time-In AND Time-Out
         try {
             $liveness = $bio->verifyLiveness(
                 $validated['direction'],
@@ -139,11 +115,7 @@ class AttendanceController extends Controller
             ]);
         }
 
-        $similarity = BiometricService::cosineSimilarity(
-            $liveEmbedding,
-            $student->face_embedding,
-        );
-
+        $similarity = BiometricService::cosineSimilarity($liveEmbedding, $student->face_embedding);
         $threshold = (float) config('face_verification.profile_match_threshold', 0.50);
 
         if ($similarity < $threshold) {
@@ -152,31 +124,59 @@ class AttendanceController extends Controller
             ]);
         }
 
-        // 4. Save Attendance Record
-        Attendance::create([
-            'attendance_uuid' => (string) Str::uuid(),
-            'student_id' => $student->student_id,
-            'event_id' => $event->event_id,
-            'logged_at' => now(),
-            'attendance_time' => now(),
-            'sync_time' => now(),
-            'status' => 'present',
-            'sync_status' => 'synced',
-            'source' => 'web_online',
-            'confidence_score' => round($similarity, 4),
-            'liveness_passed' => true,
-            'liveness_method' => 'insightface_pose_rotation',
-        ]);
+        // 6. Save the record. Re-check inside a transaction (race between two taps);
+        //    the unique index is the final safety net.
+        try {
+            DB::transaction(function () use ($slots, $student, $event, $resolved, $similarity, $validated, $now) {
+                $slots->guard($student->student_id, $event->event_id, $resolved, true);
 
-        return back()->with('success', 'Attendance marked successfully!');
+                Attendance::create([
+                    'attendance_uuid' => (string) Str::uuid(),
+                    'student_id' => $student->student_id,
+                    'event_id' => $event->event_id,
+                    'event_date' => $resolved['date'],
+                    'slot_index' => $resolved['index'],
+                    'type' => $resolved['type'],
+                    'logged_at' => now(),
+                    'attendance_time' => $now,
+                    'sync_time' => now(),
+                    'status' => $resolved['status'],
+                    'sync_status' => 'synced',
+                    'source' => 'web_online',
+                    'confidence_score' => round($similarity, 4),
+                    'liveness_passed' => true,
+                    'liveness_method' => 'insightface_pose_rotation',
+                    'latitude' => $validated['latitude'],
+                    'longitude' => $validated['longitude'],
+                ]);
+            });
+        } catch (AttendanceException $e) {
+            return back()->withErrors(['attendance' => $e->getMessage()]);
+        } catch (QueryException $e) {
+            // SQLSTATE 23xxx = integrity constraint (unique index hit by a concurrent request)
+            if (str_starts_with((string) $e->getCode(), '23')) {
+                return back()->withErrors([
+                    'attendance' => $resolved['type'] === 'out'
+                        ? 'You have already checked out for this time slot.'
+                        : 'You have already checked in for this time slot.',
+                ]);
+            }
+
+            throw $e;
+        }
+
+        return back()->with(
+            'success',
+            $resolved['type'] === 'out' ? 'Checked out successfully!' : 'Checked in successfully!'
+        );
     }
 
     /**
-     * Helper to calculate distance in meters between two lat/lng coordinates (Haversine formula).
+     * Distance in meters between two lat/lng points (Haversine).
      */
     private function calculateDistance(float $lat1, float $lon1, float $lat2, float $lon2): float
     {
-        $earthRadius = 6371000; // meters
+        $earthRadius = 6371000;
 
         $dLat = deg2rad($lat2 - $lat1);
         $dLon = deg2rad($lon2 - $lon1);
@@ -185,8 +185,6 @@ class AttendanceController extends Controller
             cos(deg2rad($lat1)) * cos(deg2rad($lat2)) *
             sin($dLon / 2) * sin($dLon / 2);
 
-        $c = 2 * atan2(sqrt($a), sqrt(1 - $a));
-
-        return $earthRadius * $c;
+        return $earthRadius * 2 * atan2(sqrt($a), sqrt(1 - $a));
     }
 }

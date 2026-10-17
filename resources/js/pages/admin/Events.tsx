@@ -27,6 +27,10 @@ import {
     ArrowRight,
     ArrowLeft,
     FileText,
+    Copy,
+    Building2,
+    CheckSquare,
+    Square,
 } from 'lucide-react';
 import { 
     TimeSlot, 
@@ -51,11 +55,22 @@ type EventItem = {
     longitude: number | null;
     radius_meters: number;
     geofence_polygon: Point[] | null;
+    target_scope: 'all' | 'section';
+    target_sections: string[] | null;
     event_date: string;
     event_end_date: string | null;
     schedules: ScheduleItem[] | null;
     approval_status: 'approved' | 'pending' | 'declined';
     is_active: boolean;
+    attendance_count?: number;
+    target_headcount?: number;
+};
+
+type VenueItem = {
+    location: string;
+    latitude: number | null;
+    longitude: number | null;
+    radius_meters: number;
 };
 
 type PageLink = { url: string | null; label: string; active: boolean };
@@ -66,6 +81,8 @@ type Props = {
         links: PageLink[];
     };
     counts?: Record<TabKey, number>;
+    venues?: VenueItem[];
+    availableSections?: string[];
     filters: { search?: string; tab?: TabKey };
 };
 
@@ -80,6 +97,8 @@ const TABS: { key: TabKey; label: string; activeColor: string }[] = [
 export default function Events({
     events,
     counts = { ongoing: 0, upcoming: 0, completed: 0, pending: 0, declined: 0 },
+    venues = [],
+    availableSections = [],
     filters,
 }: Props) {
     const [search, setSearch] = useState(filters.search || '');
@@ -124,6 +143,8 @@ export default function Events({
         longitude: 120.5928 as number | null,
         radius_meters: 100,
         geofence_polygon: null as Point[] | null,
+        target_scope: 'all' as 'all' | 'section',
+        target_sections: [] as string[],
         event_date: '',
         event_end_date: '' as string | null,
         schedules: [] as ScheduleItem[],
@@ -218,14 +239,15 @@ export default function Events({
         };
     }, [search]);
 
-    const geocodeVenueName = async () => {
-        if (!data.location || data.location.trim() === '') return;
+    const geocodeVenueName = async (queryLocation?: string) => {
+        const targetLocation = queryLocation || data.location;
+        if (!targetLocation || targetLocation.trim() === '') return;
 
         setIsSearchingLocation(true);
         setGeocodeConfirmation(null);
         try {
             const response = await fetch(
-                `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(data.location)}`,
+                `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(targetLocation)}`,
             );
             const results = await response.json();
 
@@ -249,6 +271,7 @@ export default function Events({
 
                 setData((prev) => ({
                     ...prev,
+                    location: targetLocation,
                     latitude: newLat,
                     longitude: newLng,
                     geofence_polygon: newHexagon,
@@ -264,6 +287,17 @@ export default function Events({
         } finally {
             setIsSearchingLocation(false);
         }
+    };
+
+    const handleApplyVenuePreset = (venue: VenueItem) => {
+        setData((prev) => ({
+            ...prev,
+            location: venue.location,
+            latitude: venue.latitude !== null ? Number(venue.latitude) : prev.latitude,
+            longitude: venue.longitude !== null ? Number(venue.longitude) : prev.longitude,
+            radius_meters: venue.radius_meters ? Number(venue.radius_meters) : prev.radius_meters,
+        }));
+        setGeocodeConfirmation(venue.location);
     };
 
     const handleTabChange = (tabKey: TabKey) => {
@@ -306,48 +340,56 @@ export default function Events({
             is_active: true,
             event_end_date: '',
             schedules: [],
+            target_scope: 'all',
+            target_sections: [],
         }));
 
         setIsFormOpen(true);
     };
 
-    const openEditModal = (eventItem: EventItem) => {
+    const openEditModal = (eventItem: EventItem, isClone = false) => {
         isEditingLoad.current = true;
-        setEditingEvent(eventItem);
+        const clonedEvent = structuredClone(eventItem);
+
+        if (isClone) {
+            setEditingEvent(null);
+        } else {
+            setEditingEvent(clonedEvent);
+        }
         clearErrors();
         setCurrentStep(1);
         setGeocodeConfirmation(null);
         setTimeValidationError(null);
 
-        const hasMultiDay = Boolean(eventItem.event_end_date && eventItem.event_end_date !== eventItem.event_date);
+        const hasMultiDay = Boolean(clonedEvent.event_end_date && clonedEvent.event_end_date !== clonedEvent.event_date);
         setIsMultiDay(hasMultiDay);
 
-        const savedLat = eventItem.latitude !== null && eventItem.latitude !== undefined ? Number(eventItem.latitude) : 18.1972;
-        const savedLng = eventItem.longitude !== null && eventItem.longitude !== undefined ? Number(eventItem.longitude) : 120.5928;
+        const savedLat = clonedEvent.latitude !== null && clonedEvent.latitude !== undefined ? Number(clonedEvent.latitude) : 18.1972;
+        const savedLng = clonedEvent.longitude !== null && clonedEvent.longitude !== undefined ? Number(clonedEvent.longitude) : 120.5928;
 
-        const hasExistingSchedules = eventItem.schedules && eventItem.schedules.length > 0;
+        const hasExistingSchedules = clonedEvent.schedules && clonedEvent.schedules.length > 0;
 
         const mappedSchedules = hasExistingSchedules
-            ? eventItem.schedules!.map((sch) => ({
-                  date: sch.date,
-                  slots: sch.slots && sch.slots.length > 0 ? sch.slots : [{
-                      time_in_start: '08:00',
-                      time_in_end: '',
-                      time_out_start: '17:00',
-                      time_out_end: '',
-                  }],
-              }))
-            : getEventDays(eventItem.event_date, eventItem.event_end_date).map((day) => ({
-                  date: day,
-                  slots: [
-                      {
-                          time_in_start: '08:00',
-                          time_in_end: '',
-                          time_out_start: '17:00',
-                          time_out_end: '',
-                      },
-                  ],
-              }));
+            ? clonedEvent.schedules!.map((sch) => ({
+                date: sch.date,
+                slots: sch.slots && sch.slots.length > 0 ? sch.slots : [{
+                    time_in_start: '08:00',
+                    time_in_end: '',
+                    time_out_start: '17:00',
+                    time_out_end: '',
+                }],
+            }))
+            : getEventDays(clonedEvent.event_date, clonedEvent.event_end_date).map((day) => ({
+                date: day,
+                slots: [
+                    {
+                        time_in_start: '08:00',
+                        time_in_end: '',
+                        time_out_start: '17:00',
+                        time_out_end: '',
+                    },
+                ],
+            }));
 
         const containsMultipleSlots = mappedSchedules.some(s => s.slots && s.slots.length > 1);
         if (containsMultipleSlots || (hasMultiDay && mappedSchedules.length > 1)) {
@@ -357,20 +399,22 @@ export default function Events({
         }
 
         setData({
-            title: eventItem.title,
-            description: eventItem.description || '',
-            location: eventItem.location || '',
-            is_geofenced: Boolean(eventItem.is_geofenced),
-            geofence_type: eventItem.geofence_type || 'radius',
+            title: isClone ? `${clonedEvent.title} (Copy)` : clonedEvent.title,
+            description: clonedEvent.description || '',
+            location: clonedEvent.location || '',
+            is_geofenced: Boolean(clonedEvent.is_geofenced),
+            geofence_type: clonedEvent.geofence_type || 'radius',
             latitude: savedLat,
             longitude: savedLng,
-            radius_meters: Number(eventItem.radius_meters) || 100,
-            geofence_polygon: eventItem.geofence_polygon && eventItem.geofence_polygon.length >= 3 ? eventItem.geofence_polygon : null,
-            event_date: eventItem.event_date,
-            event_end_date: eventItem.event_end_date || '',
-            schedules: mappedSchedules,
-            approval_status: eventItem.approval_status || 'approved',
-            is_active: Boolean(eventItem.is_active),
+            radius_meters: Number(clonedEvent.radius_meters) || 100,
+            geofence_polygon: clonedEvent.geofence_polygon && clonedEvent.geofence_polygon.length >= 3 ? clonedEvent.geofence_polygon : null,
+            target_scope: clonedEvent.target_scope || 'all',
+            target_sections: clonedEvent.target_sections || [],
+            event_date: isClone ? '' : clonedEvent.event_date,
+            event_end_date: isClone ? '' : (clonedEvent.event_end_date || ''),
+            schedules: isClone ? [] : mappedSchedules,
+            approval_status: clonedEvent.approval_status || 'approved',
+            is_active: Boolean(clonedEvent.is_active),
         });
 
         setIsFormOpen(true);
@@ -452,7 +496,7 @@ export default function Events({
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                     <div>
                         <h2 className="text-2xl font-bold text-gray-800">Events Management</h2>
-                        <p className="text-sm text-gray-500">Configure attendance windows and hybrid venue geofencing boundaries</p>
+                        <p className="text-sm text-gray-500">Configure attendance windows, hybrid venue geofencing boundaries, and participant scopes</p>
                     </div>
 
                     <button
@@ -523,7 +567,8 @@ export default function Events({
                         <thead className="bg-gray-50 text-xs font-semibold uppercase text-gray-500">
                             <tr>
                                 <th className="px-6 py-4">Event Details</th>
-                                <th className="px-6 py-4">Geofence Type</th>
+                                <th className="px-6 py-4">Target Audience</th>
+                                <th className="px-6 py-4">Venue & Geofence</th>
                                 <th className="px-6 py-4">Time-In Window</th>
                                 <th className="px-6 py-4">Time-Out Window</th>
                                 <th className="px-6 py-4">Status</th>
@@ -537,7 +582,8 @@ export default function Events({
                                     const isQuickActing = quickActionEventId === item.event_id;
                                     return (
                                         <tr key={item.event_id} className="hover:bg-gray-50/50 transition-colors">
-                                            <td className="px-6 py-4 max-w-[260px]">
+                                            {/* 1. Event Details */}
+                                            <td className="px-6 py-4 max-w-[240px]">
                                                 <Link href={`/admin/analytics/events/${item.event_id}`} className="block">
                                                     <div className="font-bold text-[#1B1F5C] truncate hover:underline text-base" title={item.title}>
                                                         {item.title}
@@ -558,11 +604,21 @@ export default function Events({
                                                 </Link>
                                             </td>
 
+                                            {/* 2. Target Audience */}
+                                            <td className="px-6 py-4">
+                                                <span className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-50/80 px-3 py-1.5 text-xs font-bold text-[#1B1F5C] border border-indigo-100">
+                                                    <span>
+                                                        {item.target_scope === 'all' ? 'All Students' : `${item.target_sections?.length || 0} Section(s)`}
+                                                    </span>
+                                                </span>
+                                            </td>
+
+                                            {/* 3. Venue & Geofence */}
                                             <td className="px-6 py-4">
                                                 <Link href={`/admin/analytics/events/${item.event_id}`} className="block">
                                                     <div className="flex items-center gap-1.5 font-semibold text-gray-700">
                                                         <MapPin className="h-4 w-4 text-gray-400 shrink-0" />
-                                                        <span className="truncate max-w-[160px]" title={item.location || 'Unspecified Venue'}>
+                                                        <span className="truncate max-w-[140px]" title={item.location || 'Unspecified Venue'}>
                                                             {item.location || 'Unspecified Venue'}
                                                         </span>
                                                     </div>
@@ -583,7 +639,7 @@ export default function Events({
                                                 </Link>
                                             </td>
 
-                                            {/* TIME-IN WINDOW (AM/PM Formatted) */}
+                                            {/* 4. Time-In Window */}
                                             <td className="px-6 py-4 text-gray-600">
                                                 <Link href={`/admin/analytics/events/${item.event_id}`} className="block space-y-1.5">
                                                     {item?.schedules?.[0]?.slots && item.schedules[0].slots.length > 0 ? (
@@ -602,10 +658,10 @@ export default function Events({
                                                 </Link>
                                             </td>
 
-                                            {/* TIME-OUT WINDOW (AM/PM Formatted) */}
+                                            {/* 5. Time-Out Window */}
                                             <td className="px-6 py-4 text-gray-600">
                                                 <Link href={`/admin/analytics/events/${item.event_id}`} className="block space-y-1.5">
-                                                    {item?.schedules?.[0]?.slots?.some(slot => slot?.time_out_start) ? (
+                                                    {item?.schedules?.[0]?.slots && item.schedules[0].slots.length > 0 ? (
                                                         item.schedules[0].slots.map((slot, index) => (
                                                             slot?.time_out_start ? (
                                                                 <div key={index} className="flex items-center gap-2 font-medium text-amber-700 text-xs">
@@ -618,11 +674,12 @@ export default function Events({
                                                             ) : null
                                                         ))
                                                     ) : (
-                                                        <span className="text-gray-300">Disabled</span>
+                                                        <span className="text-gray-300">N/A</span>
                                                     )}
                                                 </Link>
                                             </td>
 
+                                            {/* 6. Status */}
                                             <td className="px-6 py-4">
                                                 <Link href={`/admin/analytics/events/${item.event_id}`} className="block">
                                                     <span
@@ -636,11 +693,13 @@ export default function Events({
                                                 </Link>
                                             </td>
 
+                                            {/* 7. Actions */}
                                             <td className="px-6 py-4 text-right">
                                                 <div className="flex items-center justify-end gap-1.5">
                                                     {activeTab === 'pending' && (
                                                         <>
                                                             <button
+                                                                type="button"
                                                                 onClick={() => handleQuickStatusChange(item, 'approved')}
                                                                 disabled={isQuickActing}
                                                                 className="rounded-lg p-2 text-emerald-600 hover:bg-emerald-50 transition disabled:opacity-40"
@@ -649,6 +708,7 @@ export default function Events({
                                                                 {isQuickActing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-5 w-5" />}
                                                             </button>
                                                             <button
+                                                                type="button"
                                                                 onClick={() => handleQuickStatusChange(item, 'declined')}
                                                                 disabled={isQuickActing}
                                                                 className="rounded-lg p-2 text-rose-600 hover:bg-rose-50 transition disabled:opacity-40"
@@ -659,6 +719,15 @@ export default function Events({
                                                         </>
                                                     )}
                                                     <button
+                                                        type="button"
+                                                        onClick={() => openEditModal(item, true)}
+                                                        className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-blue-700 transition"
+                                                        title="Duplicate Event"
+                                                    >
+                                                        <Copy className="h-5 w-5" />
+                                                    </button>
+                                                    <button
+                                                        type="button"
                                                         onClick={() => openEditModal(item)}
                                                         className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition"
                                                         title="Edit Event"
@@ -666,6 +735,7 @@ export default function Events({
                                                         <Pencil className="h-5 w-5" />
                                                     </button>
                                                     <button
+                                                        type="button"
                                                         onClick={() => promptDelete(item)}
                                                         className="rounded-lg p-2 text-gray-400 hover:bg-rose-50 hover:text-rose-600 transition"
                                                         title="Delete Event"
@@ -679,7 +749,7 @@ export default function Events({
                                 })
                             ) : (
                                 <tr>
-                                    <td colSpan={6} className="px-6 py-16 text-center text-gray-400 space-y-3">
+                                    <td colSpan={7} className="px-6 py-16 text-center text-gray-400 space-y-3">
                                         <CalendarX className="h-10 w-10 mx-auto text-gray-300" />
                                         <p className="font-semibold text-sm">No {activeTab} events found.</p>
                                     </td>
@@ -725,7 +795,7 @@ export default function Events({
                                         {editingEvent ? 'Edit Event Details' : 'Create New Event'}
                                     </h3>
                                     <p className="text-xs text-gray-400">Step {currentStep} of 3: {
-                                        currentStep === 1 ? 'Event Basic Info & Schedule' :
+                                        currentStep === 1 ? 'Event Basic Info, Target Audience & Schedule' :
                                         currentStep === 2 ? 'Venue & Geofencing' : 'Review & Confirmation'
                                     }</p>
                                 </div>
@@ -755,8 +825,9 @@ export default function Events({
                         )}
 
                         <form id="event-form" onSubmit={handleFormSubmit} className="flex-1 overflow-y-auto px-6 py-4 space-y-5 text-sm">
+                            {/* STEP 1: BASIC INFO, TARGET AUDIENCE & SCHEDULE */}
                             {currentStep === 1 && (
-                                <div className="space-y-4 animate-fadeIn">
+                                <div className="space-y-5 animate-fadeIn">
                                     <div>
                                         <label htmlFor="event-title" className="block font-bold uppercase tracking-wider text-gray-500 text-xs">
                                             Event Title *
@@ -784,6 +855,105 @@ export default function Events({
                                             placeholder="Optional details..."
                                             className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white p-3.5 text-gray-800 text-sm font-medium focus:border-[#1B1F5C] focus:ring-[#1B1F5C]"
                                         />
+                                    </div>
+
+                                    {/* TARGET AUDIENCE SCOPING (Matched Font Style & 2-Column Grid) */}
+                                    <div className="space-y-2">
+                                        <label className="block font-bold uppercase tracking-wider text-gray-500 text-xs">
+                                            Participant Target Audience Scope
+                                        </label>
+
+                                        <div className="rounded-2xl border border-indigo-100 bg-indigo-50/30 p-4 space-y-3">
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setData('target_scope', 'all');
+                                                        setData('target_sections', []);
+                                                    }}
+                                                    className={`py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 ${
+                                                        data.target_scope === 'all'
+                                                            ? 'bg-[#1B1F5C] text-white shadow-xs'
+                                                            : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+                                                    }`}
+                                                >
+                                                    All Students (University-wide)
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setData('target_scope', 'section')}
+                                                    className={`py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 ${
+                                                        data.target_scope === 'section'
+                                                            ? 'bg-[#1B1F5C] text-white shadow-xs'
+                                                            : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+                                                    }`}
+                                                >
+                                                    Specific Course & Sections
+                                                </button>
+                                            </div>
+
+                                            {data.target_scope === 'section' && (
+                                                <div className="pt-2 space-y-2.5 animate-fadeIn">
+                                                    <div className="flex items-center justify-between">
+                                                        <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">
+                                                            Select Target Courses & Sections:
+                                                        </span>
+                                                        {availableSections.length > 0 && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => {
+                                                                    const allSelected = data.target_sections.length === availableSections.length;
+                                                                    setData('target_sections', allSelected ? [] : [...availableSections]);
+                                                                }}
+                                                                className="text-[11px] font-bold text-[#1B1F5C] hover:underline flex items-center gap-1"
+                                                            >
+                                                                {data.target_sections.length === availableSections.length ? (
+                                                                    <>
+                                                                        <Square className="h-3 w-3" /> Clear All
+                                                                    </>
+                                                                ) : (
+                                                                    <>
+                                                                        <CheckSquare className="h-3 w-3" /> Select All
+                                                                    </>
+                                                                )}
+                                                            </button>
+                                                        )}
+                                                    </div>
+
+                                                    {availableSections.length === 0 ? (
+                                                        <p className="text-xs text-amber-600 italic bg-amber-50 p-3 rounded-xl border border-amber-200">
+                                                            No student records with course/section found in Student Management yet. You can still publish as 'All Students'.
+                                                        </p>
+                                                    ) : (
+                                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+                                                            {availableSections.map((sectionStr) => {
+                                                                const isSelected = data.target_sections.includes(sectionStr);
+                                                                return (
+                                                                    <button
+                                                                        key={sectionStr}
+                                                                        type="button"
+                                                                        onClick={() => {
+                                                                            const updated = isSelected 
+                                                                                ? data.target_sections.filter(s => s !== sectionStr)
+                                                                                : [...data.target_sections, sectionStr];
+                                                                            setData('target_sections', updated);
+                                                                        }}
+                                                                        className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between text-left ${
+                                                                            isSelected 
+                                                                                ? 'bg-[#1B1F5C] text-white shadow-xs' 
+                                                                                : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50'
+                                                                        }`}
+                                                                    >
+                                                                        <span className="truncate pr-2">{sectionStr}</span>
+                                                                        {isSelected && <Check className="h-4 w-4 shrink-0" />}
+                                                                    </button>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
 
                                     <div className="rounded-2xl border border-gray-200 bg-gray-50/50 p-4 space-y-3">
@@ -875,7 +1045,7 @@ export default function Events({
                                                     <input
                                                         type="time"
                                                         required
-                                                        value={uniformSchedule.time_in_start}
+                                                        value={uniformSchedule.time_in_start ?? ''}
                                                         onChange={(e) => handleUniformChange('time_in_start', e.target.value)}
                                                         className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2 text-gray-800 text-sm font-medium"
                                                     />
@@ -884,7 +1054,7 @@ export default function Events({
                                                     <label className="block font-bold text-gray-600 text-xs">Time-In Cutoff</label>
                                                     <input
                                                         type="time"
-                                                        value={uniformSchedule.time_in_end}
+                                                        value={uniformSchedule.time_in_end ?? ''}
                                                         onChange={(e) => handleUniformChange('time_in_end', e.target.value)}
                                                         className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2 text-gray-800 text-sm font-medium"
                                                     />
@@ -896,7 +1066,7 @@ export default function Events({
                                                     <label className="block font-bold text-gray-600 text-xs">Time-Out Start</label>
                                                     <input
                                                         type="time"
-                                                        value={uniformSchedule.time_out_start}
+                                                        value={uniformSchedule.time_out_start ?? ''}
                                                         onChange={(e) => handleUniformChange('time_out_start', e.target.value)}
                                                         className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2 text-gray-800 text-sm font-medium"
                                                     />
@@ -905,7 +1075,7 @@ export default function Events({
                                                     <label className="block font-bold text-gray-600 text-xs">Time-Out Cutoff</label>
                                                     <input
                                                         type="time"
-                                                        value={uniformSchedule.time_out_end}
+                                                        value={uniformSchedule.time_out_end ?? ''}
                                                         onChange={(e) => handleUniformChange('time_out_end', e.target.value)}
                                                         className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2 text-gray-800 text-sm font-medium"
                                                     />
@@ -977,7 +1147,7 @@ export default function Events({
                                                                     <input
                                                                         type="time"
                                                                         required
-                                                                        value={slot.time_in_start}
+                                                                        value={slot.time_in_start ?? ''}
                                                                         onChange={(e) => {
                                                                             const updated = [...data.schedules];
                                                                             updated[dayIndex].slots[slotIndex].time_in_start = e.target.value;
@@ -991,7 +1161,7 @@ export default function Events({
                                                                     <label className="block font-bold text-gray-600 text-xs">Time-In Cutoff</label>
                                                                     <input
                                                                         type="time"
-                                                                        value={slot.time_in_end}
+                                                                        value={slot.time_in_end ?? ''}
                                                                         onChange={(e) => {
                                                                             const updated = [...data.schedules];
                                                                             updated[dayIndex].slots[slotIndex].time_in_end = e.target.value;
@@ -1008,7 +1178,7 @@ export default function Events({
                                                                     <label className="block font-bold text-gray-600 text-xs">Time-Out Start</label>
                                                                     <input
                                                                         type="time"
-                                                                        value={slot.time_out_start}
+                                                                        value={slot.time_out_start ?? ''}
                                                                         onChange={(e) => {
                                                                             const updated = [...data.schedules];
                                                                             updated[dayIndex].slots[slotIndex].time_out_start = e.target.value;
@@ -1022,7 +1192,7 @@ export default function Events({
                                                                     <label className="block font-bold text-gray-600 text-xs">Time-Out Cutoff</label>
                                                                     <input
                                                                         type="time"
-                                                                        value={slot.time_out_end}
+                                                                        value={slot.time_out_end ?? ''}
                                                                         onChange={(e) => {
                                                                             const updated = [...data.schedules];
                                                                             updated[dayIndex].slots[slotIndex].time_out_end = e.target.value;
@@ -1041,12 +1211,32 @@ export default function Events({
                                 </div>
                             )}
 
+                            {/* STEP 2: VENUE & GEOFENCING */}
                             {currentStep === 2 && (
                                 <div className="space-y-4 animate-fadeIn">
                                     <div>
-                                        <label htmlFor="event-location" className="block font-bold uppercase tracking-wider text-gray-500 text-xs">
-                                            Venue Name
-                                        </label>
+                                        <div className="flex items-center justify-between">
+                                            <label htmlFor="event-location" className="block font-bold uppercase tracking-wider text-gray-500 text-xs">
+                                                Venue Name
+                                            </label>
+                                            {venues.length > 0 && (
+                                                <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                                                    <Building2 className="h-3.5 w-3.5 text-gray-400" />
+                                                    <span className="text-[10px] font-bold text-gray-400 uppercase">Saved Venues:</span>
+                                                    {venues.map((venue, idx) => (
+                                                        <button
+                                                            key={idx}
+                                                            type="button"
+                                                            onClick={() => handleApplyVenuePreset(venue)}
+                                                            className="text-[11px] font-bold text-[#1B1F5C] bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded-lg transition"
+                                                        >
+                                                            {venue.location}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+
                                         <div className="mt-1.5 flex items-center gap-2">
                                             <input
                                                 id="event-location"
@@ -1067,7 +1257,7 @@ export default function Events({
                                             />
                                             <button
                                                 type="button"
-                                                onClick={geocodeVenueName}
+                                                onClick={() => geocodeVenueName()}
                                                 disabled={isSearchingLocation}
                                                 className="rounded-xl bg-blue-50 border border-blue-200 p-2.5 text-blue-700 hover:bg-blue-100 font-bold transition shrink-0"
                                                 title="Locate Venue on Map"
@@ -1163,6 +1353,7 @@ export default function Events({
                                 </div>
                             )}
 
+                            {/* STEP 3: REVIEW & CONFIRMATION */}
                             {currentStep === 3 && (
                                 <div className="space-y-4 animate-fadeIn">
                                     <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4 space-y-3">
@@ -1177,6 +1368,12 @@ export default function Events({
                                                 <p className="font-bold text-gray-800 mt-1">{data.title || 'Untitled Event'}</p>
                                             </div>
                                             <div>
+                                                <span className="text-gray-400 block font-bold uppercase tracking-wider text-xs">Target Audience</span>
+                                                <p className="font-bold text-indigo-900 mt-1">
+                                                    {data.target_scope === 'all' ? 'All Students (University-wide)' : `${data.target_sections.length} Section(s) Selected`}
+                                                </p>
+                                            </div>
+                                            <div>
                                                 <span className="text-gray-400 block font-bold uppercase tracking-wider text-xs">Date Span</span>
                                                 <p className="font-bold text-gray-800 mt-1">
                                                     {data.event_date ? formatDate(data.event_date) : 'Not set'}
@@ -1188,12 +1385,6 @@ export default function Events({
                                             <div>
                                                 <span className="text-gray-400 block font-bold uppercase tracking-wider text-xs">Venue</span>
                                                 <p className="font-bold text-gray-800 mt-1">{data.location || 'Unspecified Venue'}</p>
-                                            </div>
-                                            <div>
-                                                <span className="text-gray-400 block font-bold uppercase tracking-wider text-xs">Geofence</span>
-                                                <p className="font-bold text-gray-800 mt-1">
-                                                    {data.is_geofenced ? `Enforced (${data.geofence_type})` : 'Disabled'}
-                                                </p>
                                             </div>
                                         </div>
                                     </div>

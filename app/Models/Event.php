@@ -16,15 +16,21 @@ class Event extends Model
     protected $primaryKey = 'event_id';
 
     protected $fillable = [
-        'title','description','event_date','event_end_date','location','is_geofenced','geofence_type',
+        'user_id',
+        'title','description','event_date','target_scope','target_sections','event_end_date','location','is_geofenced','geofence_type',
         'latitude','longitude','radius_meters','geofence_polygon','is_active','approval_status',
     ];
 
     protected $casts = [
         'event_id' => 'integer', 'event_date' => 'date:Y-m-d', 'event_end_date' => 'date:Y-m-d',
         'is_active' => 'boolean', 'is_geofenced' => 'boolean', 'latitude' => 'float',
-        'longitude' => 'float', 'radius_meters' => 'integer', 'geofence_polygon' => 'array',
+        'longitude' => 'float', 'radius_meters' => 'integer', 'geofence_polygon' => 'array', 'target_sections' => 'array', 
     ];
+
+    public function user()
+    {
+        return $this->belongsTo(User::class, 'user_id', 'id');
+    }
 
     public function days(): HasMany { return $this->hasMany(EventDay::class, 'event_id', 'event_id'); }
     public function attendances(): HasMany { return $this->hasMany(Attendance::class, 'event_id', 'event_id'); }
@@ -63,35 +69,15 @@ class Event extends Model
         return $inside;
     }
 
-    public function getWindowStartAttribute(): Carbon
-    {
-        $earliest=null;
-        foreach (($this->relationLoaded('days')?$this->days:$this->days()->get()) as $day) foreach (($day->slots ?? []) as $slot) if (!empty($slot['time_in_start'])) {
-            $dt=Carbon::parse($day->event_date->format('Y-m-d').' '.$slot['time_in_start']); if (!$earliest || $dt->lt($earliest)) $earliest=$dt;
-        }
-        return ($earliest ?: now()->copy())->subHours(2);
-    }
-
-    public function getWindowEndAttribute(): Carbon
-    {
-        $latest=null;
-        foreach (($this->relationLoaded('days')?$this->days:$this->days()->get()) as $day) foreach (($day->slots ?? []) as $slot) {
-            $time=$slot['time_out_end'] ?? $slot['time_out_start'] ?? $slot['time_in_end'] ?? $slot['time_in_start'] ?? null;
-            if ($time) { $dt=Carbon::parse($day->event_date->format('Y-m-d').' '.$time); if (!$latest || $dt->gt($latest)) $latest=$dt; }
-        }
-        return ($latest ?: now()->copy())->addHours(2);
-    }
-
     public function scopeOngoing(Builder $query): Builder
     {
         $today = now()->toDateString();
         return $query->where('approval_status', 'approved')
             ->where('is_active', true)
             ->where(function ($q) use ($today) {
-                // Ongoing if today matches event_date / event_end_date range or any associated day date
                 $q->where(function ($sub) use ($today) {
                     $sub->whereDate('event_date', '<=', $today)
-                        ->whereDate('event_end_date', '>=', $today);
+                        ->where(fn($s) => $s->whereDate('event_end_date', '>=', $today)->orWhereNull('event_end_date'));
                 })->orWhereHas('days', function ($sub) use ($today) {
                     $sub->whereDate('event_date', $today);
                 });
@@ -115,8 +101,6 @@ class Event extends Model
         $today = now()->toDateString();
         return $query->where('approval_status', 'approved')
             ->where(function ($q) use ($today) {
-                // Completed only if event_end_date (or event_date) is strictly in the past
-                // AND it has no days in today or the future.
                 $q->where(function ($sub) use ($today) {
                     $sub->whereDate('event_end_date', '<', $today)
                         ->orWhere(function ($inner) use ($today) {
@@ -131,4 +115,18 @@ class Event extends Model
 
     public function scopePending(Builder $query): Builder { return $query->where('approval_status','pending'); }
     public function scopeDeclined(Builder $query): Builder { return $query->where('approval_status','declined'); }
+
+    public function scopeForStudents(Builder $query): Builder
+    {
+        return $query->where('approval_status', 'approved')->where('is_active', true);
+    }
+
+    public function scopeWithDaysBetween(Builder $query, string $from, string $to): Builder
+    {
+        $inRange = fn ($q) => $q->whereDate('event_date', '>=', $from)
+            ->whereDate('event_date', '<=', $to);
+
+        return $query->whereHas('days', $inRange)
+            ->with(['days' => fn ($q) => $inRange($q)->orderBy('event_date')]);
+    }
 }

@@ -1,8 +1,9 @@
 export type TimeSlot = {
-    time_in_start: string;
-    time_in_end: string;
-    time_out_start: string;
-    time_out_end: string;
+    time_in_start?: string | null;
+    time_in_end?: string | null;
+    time_out_start?: string | null;
+    time_out_end?: string | null;
+    late_after_minutes?: number;
 };
 
 export type ScheduleItem = {
@@ -39,7 +40,7 @@ export const validateTimeSlots = (
 
 /**
  * Checks if the current browser system time falls within any 
- * time-in or time-out slot configured for today's event schedule.
+ * time-in or time-out slot configured across multiple dynamic slots for today's event schedule.
  */
 export const isEventWindowOpen = (schedules: ScheduleItem[] | null | undefined): boolean => {
     if (!schedules || schedules.length === 0) return false;
@@ -57,31 +58,27 @@ export const isEventWindowOpen = (schedules: ScheduleItem[] | null | undefined):
     const currentMinutes = String(now.getMinutes()).padStart(2, '0');
     const currentTime = `${currentHours}:${currentMinutes}`;
 
+    // Dynamically checks all slots configured by the admin
     return todaySchedule.slots.some((slot) => {
-        const timeInStart = slot.time_in_start;
-        const timeInEnd = slot.time_in_end;
-        const timeOutStart = slot.time_out_start;
-        const timeOutEnd = slot.time_out_end;
+        let slotOpen = false;
 
-        let timeInOpen = false;
-        if (timeInStart) {
-            if (timeInEnd) {
-                timeInOpen = currentTime >= timeInStart && currentTime <= timeInEnd;
-            } else {
-                timeInOpen = currentTime >= timeInStart;
+        if (slot.time_in_start) {
+            const start = slot.time_in_start;
+            const end = slot.time_in_end || '23:59';
+            if (currentTime >= start && currentTime <= end) {
+                slotOpen = true;
             }
         }
 
-        let timeOutOpen = false;
-        if (timeOutStart) {
-            if (timeOutEnd) {
-                timeOutOpen = currentTime >= timeOutStart && currentTime <= timeOutEnd;
-            } else {
-                timeOutOpen = currentTime >= timeOutStart;
+        if (slot.time_out_start) {
+            const start = slot.time_out_start;
+            const end = slot.time_out_end || '23:59';
+            if (currentTime >= start && currentTime <= end) {
+                slotOpen = true;
             }
         }
 
-        return timeInOpen || timeOutOpen;
+        return slotOpen;
     });
 };
 

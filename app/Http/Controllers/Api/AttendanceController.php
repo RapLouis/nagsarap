@@ -79,6 +79,7 @@ class AttendanceController extends Controller
             ], 422);
         }
 
+        // 1. Strict Time Slot Window Alignment (Supports both Time-In and Time-Out)
         $appTimezone = config('app.timezone', 'Asia/Manila');
         $now = Carbon::now($appTimezone);
         $today = $now->toDateString();
@@ -141,6 +142,7 @@ class AttendanceController extends Controller
             ], 422);
         }
 
+        // 2. Geofence Check
         if ($event->is_geofenced && $event->latitude && $event->longitude) {
             $distance = $this->calculateDistance(
                 (float) $validated['latitude'],
@@ -159,6 +161,7 @@ class AttendanceController extends Controller
             }
         }
 
+        // 3. Challenge Consumption
         $challenge = $challenges->consume(
             $student->student_id,
             $validated['challenge_nonce'],
@@ -179,6 +182,7 @@ class AttendanceController extends Controller
 
         $direction = $challenge['direction'];
 
+        // 4. Biometric Liveness Verification
         try {
             $liveness = $bio->verifyLiveness(
                 $direction,
@@ -207,6 +211,7 @@ class AttendanceController extends Controller
             ], 422);
         }
 
+        // 5. Save Attendance Record
         try {
             $attendance = $service->record(
                 user: $user,
@@ -218,8 +223,6 @@ class AttendanceController extends Controller
                     ? (float) $validated['location_accuracy']
                     : null,
                 livenessPassed: true,
-                sessionType: $checkType,
-                type: $checkType,
                 source: 'mobile_online',
                 isOfflineSync: false
             );
@@ -273,24 +276,11 @@ class AttendanceController extends Controller
             'location_accuracy' => ['nullable', 'numeric', 'min:0', 'max:10000'],
             'center_frame' => ['required', 'image', 'mimes:jpeg,jpg,png', 'max:5048'],
             'turned_frame' => ['required', 'image', 'mimes:jpeg,jpg,png', 'max:5048'],
-            'type' => ['nullable', 'string', 'in:time_in,time_out'],
-            'session_type' => ['nullable', 'string', 'in:time_in,time_out'],
         ]);
 
         $user = $request->user();
-        $student = $user?->student;
-
-        if (!$student) {
-            return response()->json([
-                'success' => false,
-                'code' => 'STUDENT_REQUIRED',
-                'message' => 'Student record not found.',
-            ], 403);
-        }
-
         $event = Event::findOrFail($validated['event_id']);
         $direction = $validated['liveness_direction'];
-        $sessionType = $validated['type'] ?? $validated['session_type'] ?? 'time_in';
 
         try {
             $liveness = $bio->verifyLiveness(
@@ -327,8 +317,6 @@ class AttendanceController extends Controller
                 livenessPassed: true,
                 attendanceUuid: $validated['attendance_uuid'],
                 attendanceTime: $validated['attendance_time'],
-                sessionType: $sessionType,
-                type: $sessionType,
                 source: 'mobile_offline',
                 isOfflineSync: true
             );
@@ -339,12 +327,6 @@ class AttendanceController extends Controller
                 'message' => $e->getMessage(),
                 'data' => $e->data,
             ], $e->httpStatus);
-        } catch (\Throwable $e) {
-            return response()->json([
-                'success' => false,
-                'code' => 'ATTENDANCE_RECORD_ERROR',
-                'message' => $e->getMessage(),
-            ], 500);
         }
 
         $this->notify($request, $event, true, 'Offline attendance synchronized successfully.', $attendance->status);

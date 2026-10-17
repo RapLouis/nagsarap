@@ -1,18 +1,17 @@
-import { Head } from '@inertiajs/react';
+import { Head, router, Link } from '@inertiajs/react';
 import {
-    CheckCircle2,
+    Search,
+    Users,
+    Calendar,
     Clock3,
     FileCheck2,
-    Search,
-    ShieldCheck,
-    Users,
+    CheckCircle2,
+    Loader2,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
+import AdminLayout from '@/layouts/admin-layout';
 
-type ClearanceStatus =
-    | 'pending'
-    | 'cleared'
-    | 'review';
+type ClearanceStatus = 'pending' | 'review' | 'cleared';
 
 type ClearanceRecord = {
     id: number;
@@ -24,361 +23,297 @@ type ClearanceRecord = {
     updatedAt: string;
 };
 
-const demoRecords: ClearanceRecord[] = [
-    {
-        id: 1,
-        studentNumber: '24-123423',
-        name: 'Student Clearance',
-        program: 'BS Computer Science',
-        yearSection: '4-A',
-        status: 'pending',
-        updatedAt: 'Awaiting review',
-    },
-];
+type EventItem = {
+    event_id: number;
+    title: string;
+    event_date: string;
+};
 
-export default function Clearance() {
-    const [search, setSearch] = useState('');
-    const [status, setStatus] = useState<
-        ClearanceStatus | 'all'
-    >('all');
+type PageLink = { url: string | null; label: string; active: boolean };
 
-    const filteredRecords = useMemo(() => {
-        const normalizedSearch =
-            search.trim().toLowerCase();
+type Props = {
+    events?: EventItem[];
+    currentEventId?: number | null;
+    records?: {
+        data: ClearanceRecord[];
+        links: PageLink[];
+    };
+    counts?: {
+        pending: number;
+        review: number;
+        cleared: number;
+    };
+    filters?: {
+        search?: string;
+        event_id?: string | number;
+        status?: string;
+    };
+};
 
-        return demoRecords.filter((record) => {
-            const matchesSearch =
-                normalizedSearch.length === 0 ||
-                record.name
-                    .toLowerCase()
-                    .includes(normalizedSearch) ||
-                record.studentNumber
-                    .toLowerCase()
-                    .includes(normalizedSearch) ||
-                record.program
-                    .toLowerCase()
-                    .includes(normalizedSearch);
+export default function Clearance({
+    events = [],
+    currentEventId = null,
+    records = { data: [], links: [] },
+    counts = { pending: 0, review: 0, cleared: 0 },
+    filters = { search: '', event_id: '', status: 'all' },
+}: Props) {
+    const [search, setSearch] = useState(filters?.search || '');
+    const [selectedEventId, setSelectedEventId] = useState(currentEventId || filters?.event_id || '');
+    const [statusFilter, setStatusFilter] = useState(filters?.status || 'all');
+    const [isFiltering, setIsFiltering] = useState(false);
+    const [updatingId, setUpdatingId] = useState<number | null>(null);
 
-            const matchesStatus =
-                status === 'all' ||
-                record.status === status;
+    const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const isFirstRun = useRef(true);
 
-            return matchesSearch && matchesStatus;
-        });
-    }, [search, status]);
+    useEffect(() => {
+        if (isFirstRun.current) {
+            isFirstRun.current = false;
+            return;
+        }
 
-    const pendingCount = demoRecords.filter(
-        (record) => record.status === 'pending',
-    ).length;
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        setIsFiltering(true);
 
-    const clearedCount = demoRecords.filter(
-        (record) => record.status === 'cleared',
-    ).length;
+        debounceRef.current = setTimeout(() => {
+            router.get(
+                '/admin/clearance',
+                { search, event_id: selectedEventId, status: statusFilter },
+                {
+                    preserveState: true,
+                    replace: true,
+                    onFinish: () => setIsFiltering(false),
+                }
+            );
+        }, 350);
 
-    const reviewCount = demoRecords.filter(
-        (record) => record.status === 'review',
-    ).length;
+        return () => {
+            if (debounceRef.current) clearTimeout(debounceRef.current);
+        };
+    }, [search, selectedEventId, statusFilter]);
+
+    const handleStatusUpdate = (id: number, newStatus: ClearanceStatus) => {
+        setUpdatingId(id);
+        router.patch(
+            `/admin/clearance/${id}/status`,
+            { status: newStatus },
+            {
+                preserveScroll: true,
+                onFinish: () => setUpdatingId(null),
+            }
+        );
+    };
+
+    const recordList = records?.data || [];
+    const paginationLinks = records?.links || [];
 
     return (
         <>
-            <Head title="Student Clearance" />
+            <Head title="Absenteeism & Clearance" />
 
-            <div className="min-h-full space-y-6 p-6">
+            <div className="min-h-full space-y-6 p-4 sm:p-6 lg:p-8">
                 {/* HEADER */}
-                <div>
-                    <h1 className="text-2xl font-bold tracking-tight text-[#1B1F5C]">
-                        Student Clearance
-                    </h1>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-white p-6 rounded-3xl border border-gray-100 shadow-xs">
+                    <div>
+                        <h1 className="text-2xl font-black tracking-tight text-[#1B1F5C]">
+                            Absenteeism & Clearance Triage
+                        </h1>
+                        <p className="mt-1 text-xs text-gray-500">
+                            Monitor event absentees and resolve student clearance requests.
+                        </p>
+                    </div>
 
-                    <p className="mt-1 text-xs text-gray-500">
-                        Review and monitor student clearance
-                        requests.
-                    </p>
+                    <div className="flex items-center gap-2">
+                        <Calendar className="h-4 w-4 text-gray-400 shrink-0" />
+                        <select
+                            value={selectedEventId}
+                            onChange={(e) => setSelectedEventId(e.target.value)}
+                            className="rounded-xl border border-gray-200 bg-gray-50 px-3.5 py-2.5 text-xs font-bold text-[#1B1F5C] focus:border-[#1B1F5C] focus:ring-[#1B1F5C]"
+                        >
+                            {events.map((evt) => (
+                                <option key={evt.event_id} value={evt.event_id}>
+                                    {evt.title} ({evt.event_date})
+                                </option>
+                            ))}
+                        </select>
+                    </div>
                 </div>
 
-                {/* SUMMARY */}
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                    <SummaryCard
-                        title="Pending"
-                        value={pendingCount}
-                        description="Awaiting review"
-                        icon={Clock3}
-                    />
-
-                    <SummaryCard
-                        title="For Review"
-                        value={reviewCount}
-                        description="Requires attention"
-                        icon={FileCheck2}
-                    />
-
-                    <SummaryCard
-                        title="Cleared"
-                        value={clearedCount}
-                        description="Completed clearance"
-                        icon={CheckCircle2}
-                    />
+                {/* SUMMARY CARDS */}
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                    <SummaryCard title="Pending Absentees" value={counts.pending} description="Awaiting sanction resolution" icon={Clock3} />
+                    <SummaryCard title="For Review" value={counts.review} description="Under administrative review" icon={FileCheck2} />
+                    <SummaryCard title="Cleared" value={counts.cleared} description="Sanction cleared" icon={CheckCircle2} />
                 </div>
 
-                {/* CONTENT */}
-                <div className="rounded-2xl border border-gray-100 bg-white shadow-sm">
-                    <div className="border-b border-gray-100 p-5">
+                {/* TABLE CONTAINER */}
+                <div className="rounded-3xl border border-gray-100 bg-white shadow-xs overflow-hidden">
+                    <div className="border-b border-gray-100 p-5 sm:p-6">
                         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                             <div>
                                 <h2 className="text-sm font-bold text-[#1B1F5C]">
-                                    Clearance Requests
+                                    Absent Students Queue
                                 </h2>
-
                                 <p className="mt-1 text-xs text-gray-500">
-                                    Search and review student
-                                    clearance records.
+                                    Search absentees and update their clearance standings.
                                 </p>
                             </div>
 
-                            <div className="flex flex-col gap-2 sm:flex-row">
+                            <div className="flex flex-col gap-2.5 sm:flex-row">
                                 <div className="relative">
-                                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-
+                                    <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
                                     <input
                                         type="text"
                                         value={search}
-                                        onChange={(event) =>
-                                            setSearch(
-                                                event.target.value,
-                                            )
-                                        }
-                                        placeholder="Search student..."
-                                        className="w-full rounded-lg border border-gray-200 bg-gray-50 py-2 pl-9 pr-3 text-xs outline-none transition focus:border-[#1B1F5C] focus:ring-1 focus:ring-[#1B1F5C] sm:w-64"
+                                        onChange={(event) => setSearch(event.target.value)}
+                                        placeholder="Search student or ID..."
+                                        className="w-full rounded-xl border border-gray-200 bg-gray-50/50 py-2.5 pl-10 pr-9 text-xs font-medium outline-none transition focus:border-[#1B1F5C] focus:ring-1 focus:ring-[#1B1F5C] sm:w-64"
                                     />
+                                    {isFiltering && (
+                                        <Loader2 className="absolute right-3 top-3 h-4 w-4 text-gray-400 animate-spin" />
+                                    )}
                                 </div>
 
                                 <select
-                                    value={status}
-                                    onChange={(event) =>
-                                        setStatus(
-                                            event.target
-                                                .value as ClearanceStatus |
-                                                'all',
-                                        )
-                                    }
-                                    className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs font-medium text-gray-700 outline-none focus:border-[#1B1F5C] focus:ring-1 focus:ring-[#1B1F5C]"
+                                    value={statusFilter}
+                                    onChange={(event) => setStatusFilter(event.target.value)}
+                                    className="rounded-xl border border-gray-200 bg-gray-50/50 px-3.5 py-2.5 text-xs font-bold text-gray-700 outline-none focus:border-[#1B1F5C] focus:ring-1 focus:ring-[#1B1F5C]"
                                 >
-                                    <option value="all">
-                                        All Status
-                                    </option>
-                                    <option value="pending">
-                                        Pending
-                                    </option>
-                                    <option value="review">
-                                        For Review
-                                    </option>
-                                    <option value="cleared">
-                                        Cleared
-                                    </option>
+                                    <option value="all">All Status</option>
+                                    <option value="pending">Pending</option>
+                                    <option value="review">For Review</option>
+                                    <option value="cleared">Cleared</option>
                                 </select>
                             </div>
                         </div>
                     </div>
 
-                    {/* TABLE */}
                     <div className="overflow-x-auto">
                         <table className="w-full min-w-[760px] text-left">
                             <thead>
-                                <tr className="border-b border-gray-100 bg-gray-50/70">
-                                    <th className="px-5 py-3 text-[10px] font-bold uppercase tracking-wide text-gray-400">
-                                        Student
-                                    </th>
-
-                                    <th className="px-5 py-3 text-[10px] font-bold uppercase tracking-wide text-gray-400">
-                                        Program
-                                    </th>
-
-                                    <th className="px-5 py-3 text-[10px] font-bold uppercase tracking-wide text-gray-400">
-                                        Year / Section
-                                    </th>
-
-                                    <th className="px-5 py-3 text-[10px] font-bold uppercase tracking-wide text-gray-400">
-                                        Status
-                                    </th>
-
-                                    <th className="px-5 py-3 text-[10px] font-bold uppercase tracking-wide text-gray-400">
-                                        Updated
-                                    </th>
+                                <tr className="border-b border-gray-100 bg-gray-50/70 text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                                    <th className="px-6 py-4">Student</th>
+                                    <th className="px-6 py-4">Program</th>
+                                    <th className="px-6 py-4">Year / Section</th>
+                                    <th className="px-6 py-4">Status</th>
+                                    <th className="px-6 py-4 text-right">Actions</th>
                                 </tr>
                             </thead>
-
-                            <tbody>
-                                {filteredRecords.length === 0 ? (
+                            <tbody className="divide-y divide-gray-100 text-xs">
+                                {recordList.length === 0 ? (
                                     <tr>
-                                        <td
-                                            colSpan={5}
-                                            className="px-5 py-16 text-center"
-                                        >
-                                            <div className="flex flex-col items-center">
+                                        <td colSpan={5} className="px-6 py-16 text-center">
+                                            <div className="flex flex-col items-center space-y-2">
                                                 <Users className="h-10 w-10 text-gray-300" />
-
-                                                <p className="mt-3 text-sm font-semibold text-gray-600">
-                                                    No clearance records
-                                                    found
-                                                </p>
-
-                                                <p className="mt-1 text-xs text-gray-400">
-                                                    Try changing your
-                                                    search or filter.
-                                                </p>
+                                                <p className="font-bold text-gray-700 text-sm">No absentees found</p>
+                                                <p className="text-xs text-gray-400">All students attended this event or no records match filters.</p>
                                             </div>
                                         </td>
                                     </tr>
                                 ) : (
-                                    filteredRecords.map(
-                                        (record) => (
-                                            <tr
-                                                key={record.id}
-                                                className="border-b border-gray-50 last:border-0"
-                                            >
-                                                <td className="px-5 py-4">
+                                    recordList.map((record) => {
+                                        const isUpdating = updatingId === record.id;
+                                        return (
+                                            <tr key={record.id} className="hover:bg-gray-50/50 transition-colors">
+                                                <td className="px-6 py-4">
                                                     <div>
-                                                        <p className="text-xs font-semibold text-gray-800">
-                                                            {
-                                                                record.name
-                                                            }
-                                                        </p>
-
-                                                        <p className="mt-1 text-[11px] text-gray-400">
-                                                            {
-                                                                record.studentNumber
-                                                            }
-                                                        </p>
+                                                        <p className="font-bold text-gray-900">{record.name}</p>
+                                                        <p className="text-[11px] text-gray-400 font-mono mt-0.5">{record.studentNumber}</p>
                                                     </div>
                                                 </td>
-
-                                                <td className="px-5 py-4 text-xs text-gray-600">
-                                                    {
-                                                        record.program
-                                                    }
+                                                <td className="px-6 py-4 text-gray-600 font-medium">{record.program}</td>
+                                                <td className="px-6 py-4 text-gray-600 font-medium">{record.yearSection}</td>
+                                                <td className="px-6 py-4">
+                                                    <StatusBadge status={record.status} />
                                                 </td>
-
-                                                <td className="px-5 py-4 text-xs text-gray-600">
-                                                    {
-                                                        record.yearSection
-                                                    }
-                                                </td>
-
-                                                <td className="px-5 py-4">
-                                                    <StatusBadge
-                                                        status={
-                                                            record.status
-                                                        }
-                                                    />
-                                                </td>
-
-                                                <td className="px-5 py-4 text-xs text-gray-500">
-                                                    {
-                                                        record.updatedAt
-                                                    }
+                                                <td className="px-6 py-4 text-right">
+                                                    <div className="flex items-center justify-end gap-2">
+                                                        {record.status !== 'cleared' && (
+                                                            <button
+                                                                type="button"
+                                                                disabled={isUpdating}
+                                                                onClick={() => handleStatusUpdate(record.id, 'cleared')}
+                                                                className="px-3 py-1.5 rounded-xl bg-emerald-600 text-white font-bold text-[11px] hover:bg-emerald-700 transition disabled:opacity-50"
+                                                            >
+                                                                {isUpdating ? 'Saving...' : 'Mark Cleared'}
+                                                            </button>
+                                                        )}
+                                                        {record.status !== 'review' && (
+                                                            <button
+                                                                type="button"
+                                                                disabled={isUpdating}
+                                                                onClick={() => handleStatusUpdate(record.id, 'review')}
+                                                                className="px-3 py-1.5 rounded-xl border border-gray-200 bg-white text-gray-700 font-bold text-[11px] hover:bg-gray-50 transition disabled:opacity-50"
+                                                            >
+                                                                For Review
+                                                            </button>
+                                                        )}
+                                                    </div>
                                                 </td>
                                             </tr>
-                                        ),
-                                    )
+                                        );
+                                    })
                                 )}
                             </tbody>
                         </table>
                     </div>
                 </div>
 
-                {/* INFORMATION */}
-                <div className="rounded-2xl border border-[#E5E7F5] bg-[#F8F8FF] p-5">
-                    <div className="flex gap-3">
-                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#1B1F5C] text-white">
-                            <ShieldCheck className="h-4 w-4" />
-                        </div>
-
-                        <div>
-                            <h3 className="text-xs font-bold text-[#1B1F5C]">
-                                Clearance workflow
-                            </h3>
-
-                            <p className="mt-1 max-w-3xl text-[11px] leading-5 text-gray-500">
-                                This page is now connected to the
-                                admin navigation. The request
-                                management actions can be connected
-                                to the clearance database once the
-                                clearance workflow and database
-                                records are enabled.
-                            </p>
-                        </div>
-                    </div>
-                </div>
+                {/* PAGINATION */}
+                {paginationLinks.length > 3 && (
+                    <nav className="flex flex-wrap items-center justify-center gap-1.5 pt-2" aria-label="Pagination">
+                        {paginationLinks.map((link, idx) => (
+                            <Link
+                                key={idx}
+                                href={link.url ?? '#'}
+                                preserveState
+                                preserveScroll
+                                className={`min-w-[2.25rem] rounded-xl px-3.5 py-2 text-center text-xs font-bold transition ${
+                                    link.active
+                                        ? 'bg-[#1B1F5C] text-white'
+                                        : link.url
+                                        ? 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+                                        : 'bg-white text-gray-300 border border-gray-100 pointer-events-none'
+                                }`}
+                                dangerouslySetInnerHTML={{ __html: link.label }}
+                            />
+                        ))}
+                    </nav>
+                )}
             </div>
         </>
     );
 }
 
-function SummaryCard({
-    title,
-    value,
-    description,
-    icon: Icon,
-}: {
-    title: string;
-    value: number;
-    description: string;
-    icon: typeof Clock3;
-}) {
+Clearance.layout = (page: React.ReactNode) => <AdminLayout title="Student Clearance">{page}</AdminLayout>;
+
+function SummaryCard({ title, value, description, icon: Icon }: { title: string; value: number; description: string; icon: typeof Clock3 }) {
     return (
-        <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
-            <div className="flex items-start justify-between">
-                <div>
-                    <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400">
-                        {title}
-                    </p>
-
-                    <p className="mt-2 text-2xl font-bold text-[#1B1F5C]">
-                        {value}
-                    </p>
-
-                    <p className="mt-1 text-[11px] text-gray-400">
-                        {description}
-                    </p>
-                </div>
-
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#F1F1FF] text-[#1B1F5C]">
-                    <Icon className="h-4 w-4" />
-                </div>
+        <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-xs flex items-center justify-between">
+            <div>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{title}</p>
+                <p className="mt-2 text-3xl font-black text-[#1B1F5C] tracking-tight">{value}</p>
+                <p className="mt-1 text-xs text-gray-400">{description}</p>
+            </div>
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-50 text-[#1B1F5C]">
+                <Icon className="h-5 w-5" />
             </div>
         </div>
     );
 }
 
-function StatusBadge({
-    status,
-}: {
-    status: ClearanceStatus;
-}) {
+function StatusBadge({ status }: { status: ClearanceStatus }) {
     const configuration = {
-        pending: {
-            label: 'Pending',
-            className:
-                'bg-amber-50 text-amber-700 border-amber-100',
-        },
-        review: {
-            label: 'For Review',
-            className:
-                'bg-blue-50 text-blue-700 border-blue-100',
-        },
-        cleared: {
-            label: 'Cleared',
-            className:
-                'bg-green-50 text-green-700 border-green-100',
-        },
+        pending: { label: 'Pending', className: 'bg-amber-50 text-amber-700 border-amber-200/60' },
+        review: { label: 'For Review', className: 'bg-blue-50 text-blue-700 border-blue-200/60' },
+        cleared: { label: 'Cleared', className: 'bg-emerald-50 text-emerald-700 border-emerald-200/60' },
     };
 
     const current = configuration[status];
 
     return (
-        <span
-            className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold ${current.className}`}
-        >
+        <span className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-bold ${current.className}`}>
+            <span className="h-1.5 w-1.5 rounded-full bg-current" />
             {current.label}
         </span>
     );
