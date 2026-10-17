@@ -1,19 +1,22 @@
 <?php
 
 use App\Http\Controllers\Admin\AdminDashboardController;
+use App\Http\Controllers\Admin\AdminEventApprovalController;
+use App\Http\Controllers\Admin\AnalyticsController;
+use App\Http\Controllers\Admin\ClearanceController;
 use App\Http\Controllers\Admin\StudentManagementController;
 use App\Http\Controllers\AttendanceController;
 use App\Http\Controllers\EventController;
 use App\Http\Controllers\FaceVerificationController;
 use App\Http\Controllers\Admin\AnalyticsController;
-use App\Http\Controllers\Admin\ClearanceController;
+use App\Http\Controllers\StudentCheckInController;
 use App\Models\Event;
 use App\Models\Student;
+use Carbon\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
-use Carbon\Carbon;
 
 Route::inertia('/', 'welcome')->name('home');
 
@@ -30,6 +33,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
         // Redirect admin users directly to their dedicated dashboard
         if ($user->role === 'admin') {
             return redirect()->route('admin.dashboard');
+        }
+
+        // Redirect organizer users directly to their dedicated dashboard
+        if ($user->role === 'organizer') {
+            return redirect()->route('organizer.dashboard');
         }
 
         $student = $user->load([
@@ -284,6 +292,13 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 '/events/{event}/status', 
                 [EventController::class, 'updateStatus']
             )->name('events.update-status');
+
+            // -----------------------------------------------------------------
+            // ADMIN EVENT APPROVAL WORKFLOW
+            // -----------------------------------------------------------------
+
+            Route::post('/events/{event}/approve', [AdminEventApprovalController::class, 'approve'])->name('events.approve');
+            Route::post('/events/{event}/reject', [AdminEventApprovalController::class, 'reject'])->name('events.reject');
             
             // -----------------------------------------------------------------
             // ADMIN ANALYTICS & REPORTS
@@ -299,6 +314,28 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 [AnalyticsController::class, 'showEvent']
             )->name('analytics.event-show');
 
+        });
+
+
+    // =========================================================================
+    // ORGANIZER ROUTES
+    // =========================================================================
+
+    Route::prefix('organizer')
+        ->as('organizer.')
+        ->group(function () {
+            // Organizer Dashboard & Attendance Stream Analytics
+            Route::get('/dashboard', [OrganizerDashboardController::class, 'index'])->name('dashboard');
+            
+            // Scoped Event Management (Creates events with 'pending' status for Admin approval)
+            Route::get('/events', [OrganizerEventController::class, 'index'])->name('events.index');
+            Route::post('/events', [OrganizerEventController::class, 'store'])->name('events.store');
+            Route::put('/events/{event}', [OrganizerEventController::class, 'update'])->name('events.update');
+            Route::delete('/events/{event}', [OrganizerEventController::class, 'destroy'])->name('events.destroy');
+
+            // Continuous Facial Recognition Kiosk Mode
+            Route::get('/kiosk', [KioskController::class, 'index'])->name('kiosk.index');
+            Route::post('/kiosk/verify', [KioskController::class, 'verifyFace'])->name('kiosk.verify');
         });
 
 

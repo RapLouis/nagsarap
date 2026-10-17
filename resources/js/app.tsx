@@ -17,8 +17,11 @@ createInertiaApp({
                 return null;
 
             // Authentication pages
-            // These pages have their own full-screen designs
             case name.startsWith('auth/'):
+                return null;
+
+            // Organizer pages (handled completely by OrganizerLayout internally)
+            case name.startsWith('organizer/'):
                 return null;
 
             // Settings pages
@@ -29,7 +32,7 @@ createInertiaApp({
             case name.startsWith('teams/'):
                 return AppLayout;
 
-            // Default application pages
+            // Default application pages (Students)
             default:
                 return AppLayout;
         }
