@@ -6,6 +6,7 @@ use App\Http\Controllers\AttendanceController;
 use App\Http\Controllers\EventController;
 use App\Http\Controllers\FaceVerificationController;
 use App\Http\Controllers\Admin\AnalyticsController;
+use App\Http\Controllers\Admin\ClearanceController;
 use App\Models\Event;
 use App\Models\Student;
 use Illuminate\Support\Facades\Auth;
@@ -50,65 +51,88 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
         $today = now()->toDateString();
 
-        // Active events for today
-        $activeEvents = Event::ongoing()->with('days')->get()->transform(function ($event) {
-            $event->schedules = $event->days->map(function ($day) {
-                return [
-                    'date'  => Carbon::parse($day->event_date)->format('Y-m-d'),
-                    'slots' => $day->slots ?? [],
-                ];
-            });
-            return $event;
-        });
+        // Build the student's exact section string for scoping
+        $studentSectionStr = $student ? trim("{$student->degree} - {$student->year_section}") : '';
 
-        // Upcoming events for the Coming Up widget
-        $upcomingEvents = Event::with('days')->get()->map(function ($event) use ($today) {
-            $futureDays = $event->days->filter(fn($day) => Carbon::parse($day->event_date)->toDateString() > $today);
-            if ($futureDays->isEmpty()) {
-                return null;
-            }
+        // Reusable scoping filter for student-targeted events
+        $studentEventScope = function ($query) use ($studentSectionStr) {
+            $query->where('target_scope', 'all')
+                  ->orWhere(function ($sub) use ($studentSectionStr) {
+                      $sub->where('target_scope', 'section')
+                        ->whereJsonContains('target_sections', $studentSectionStr);
+                  });
+        };
 
-            $sortedDays = $futureDays->sortBy('event_date');
-            $nextDate = Carbon::parse($sortedDays->first()->event_date)->toDateString();
-            $startDate = Carbon::parse($event->days->min('event_date'))->toDateString();
-            $endDate = Carbon::parse($event->days->max('event_date'))->toDateString();
-
-            return [
-                'event_id' => $event->event_id,
-                'title' => $event->title,
-                'location' => $event->location,
-                'next_date' => $nextDate,
-                'start_date' => $startDate,
-                'end_date' => $endDate,
-                'day_count' => $event->days->count(),
-            ];
-        })->filter()->values();
-
-        // Calendar events for grid and inspector
-        $calendarEvents = Event::with('days')->get()->map(function ($event) {
-            $schedules = $event->days->isNotEmpty() 
-                ? $event->days->map(function ($day) {
+        // Active events for today filtered by target audience scope
+        $activeEvents = Event::ongoing()
+            ->where($studentEventScope)
+            ->with('days')
+            ->get()
+            ->transform(function ($event) {
+                $event->schedules = $event->days->map(function ($day) {
                     return [
-                        'date' => $day->event_date instanceof Carbon ? $day->event_date->format('Y-m-d') : Carbon::parse($day->event_date)->format('Y-m-d'),
+                        'date'  => Carbon::parse($day->event_date)->format('Y-m-d'),
                         'slots' => $day->slots ?? [],
                     ];
-                })
-                : [
-                    [
-                        'date' => $event->event_date instanceof Carbon ? $event->event_date->format('Y-m-d') : Carbon::parse($event->event_date)->format('Y-m-d'),
-                        'slots' => [],
-                    ]
+                });
+                return $event;
+            });
+
+        // Upcoming events for the Coming Up widget filtered by target scope
+        $upcomingEvents = Event::with('days')
+            ->where($studentEventScope)
+            ->get()
+            ->map(function ($event) use ($today) {
+                $futureDays = $event->days->filter(fn($day) => Carbon::parse($day->event_date)->toDateString() > $today);
+                if ($futureDays->isEmpty()) {
+                    return null;
+                }
+
+                $sortedDays = $futureDays->sortBy('event_date');
+                $nextDate = Carbon::parse($sortedDays->first()->event_date)->toDateString();
+                $startDate = Carbon::parse($event->days->min('event_date'))->toDateString();
+                $endDate = Carbon::parse($event->days->max('event_date'))->toDateString();
+
+                return [
+                    'event_id' => $event->event_id,
+                    'title' => $event->title,
+                    'location' => $event->location,
+                    'next_date' => $nextDate,
+                    'start_date' => $startDate,
+                    'end_date' => $endDate,
+                    'day_count' => $event->days->count(),
                 ];
+            })->filter()->values();
 
-            return [
-                'event_id' => $event->event_id,
-                'title' => $event->title,
-                'location' => $event->location,
-                'schedules' => $schedules->toArray(),
-            ];
-        });
+        // Calendar events for grid and inspector filtered by target scope
+        $calendarEvents = Event::with('days')
+            ->where($studentEventScope)
+            ->get()
+            ->map(function ($event) {
+                $schedules = $event->days->isNotEmpty() 
+                    ? $event->days->map(function ($day) {
+                        return [
+                            'date' => $day->event_date instanceof Carbon ? $day->event_date->format('Y-m-d') : Carbon::parse($day->event_date)->format('Y-m-d'),
+                            'slots' => $day->slots ?? [],
+                        ];
+                    })
+                    ->toArray()
+                    : [
+                        [
+                            'date' => $event->event_date instanceof Carbon ? $event->event_date->format('Y-m-d') : Carbon::parse($event->event_date)->format('Y-m-d'),
+                            'slots' => [],
+                        ]
+                    ];
 
-        $totalExpectedEvents = Event::count();
+                return [
+                    'event_id' => $event->event_id,
+                    'title' => $event->title,
+                    'location' => $event->location,
+                    'schedules' => $schedules,
+                ];
+            });
+
+        $totalExpectedEvents = Event::where($studentEventScope)->count();
 
         return Inertia::render('dashboard', [
             'student' => $student,
@@ -139,15 +163,31 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 : null;
         }
 
-        $activeEvents = Event::ongoing()->with('days')->get()->transform(function ($event) {
-            $event->schedules = $event->days->map(function ($day) {
-                return [
-                    'date'  => Carbon::parse($day->event_date)->format('Y-m-d'),
-                    'slots' => $day->slots ?? [],
-                ];
+        // Build the student's exact section string for scoping
+        $studentSectionStr = $student ? trim("{$student->degree} - {$student->year_section}") : '';
+
+        // Reusable scoping filter for student-targeted events
+        $studentEventScope = function ($query) use ($studentSectionStr) {
+            $query->where('target_scope', 'all')
+                  ->orWhere(function ($sub) use ($studentSectionStr) {
+                      $sub->where('target_scope', 'section')
+                        ->whereJsonContains('target_sections', $studentSectionStr);
+                  });
+        };
+
+        $activeEvents = Event::ongoing()
+            ->where($studentEventScope)
+            ->with('days')
+            ->get()
+            ->transform(function ($event) {
+                $event->schedules = $event->days->map(function ($day) {
+                    return [
+                        'date'  => Carbon::parse($day->event_date)->format('Y-m-d'),
+                        'slots' => $day->slots ?? [],
+                    ];
+                });
+                return $event;
             });
-            return $event;
-        });
 
         return Inertia::render('CheckIn', [
             'student' => $student,
@@ -205,15 +245,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
             )->name('students.destroy');
 
             // -----------------------------------------------------------------
-            // STUDENT CLEARANCE
+            // STUDENT CLEARANCE & ABSENTEEISM MONITOR
             // -----------------------------------------------------------------
 
-            Route::get(
-                '/clearance',
-                function () {
-                    return Inertia::render('admin/Clearance');
-                }
-            )->name('clearance.index');
+            Route::get('/clearance', [ClearanceController::class, 'index'])->name('clearance.index');
+            Route::patch('/clearance/{clearance}/status', [ClearanceController::class, 'updateStatus'])->name('clearance.update');
 
             // -----------------------------------------------------------------
             // EVENT MANAGEMENT

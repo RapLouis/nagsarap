@@ -24,6 +24,14 @@ return new class extends Migration
             $table->unsignedInteger('radius_meters')->default(100);
             $table->json('geofence_polygon')->nullable();
             
+            // =================================================================
+            // PARTICIPANT SCOPE / TARGET AUDIENCE CONFIGURATION
+            // =================================================================
+            $table->enum('target_scope', ['all', 'program', 'year_level', 'section'])->default('all');
+            $table->json('target_programs')->nullable();    // e.g., ['BSCS', 'BSIT']
+            $table->json('target_year_levels')->nullable(); // e.g., ['1', '2', '3', '4']
+            $table->json('target_sections')->nullable();    // e.g., ['4-A', '4-B']
+
             // ADMINISTRATIVE APPROVAL STATUS
             $table->enum('approval_status', ['approved', 'pending', 'declined'])->default('approved');
             $table->boolean('is_active')->default(true);

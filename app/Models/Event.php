@@ -16,14 +16,14 @@ class Event extends Model
     protected $primaryKey = 'event_id';
 
     protected $fillable = [
-        'title','description','event_date','event_end_date','location','is_geofenced','geofence_type',
+        'title','description','event_date','target_scope','target_sections','event_end_date','location','is_geofenced','geofence_type',
         'latitude','longitude','radius_meters','geofence_polygon','is_active','approval_status',
     ];
 
     protected $casts = [
         'event_id' => 'integer', 'event_date' => 'date:Y-m-d', 'event_end_date' => 'date:Y-m-d',
         'is_active' => 'boolean', 'is_geofenced' => 'boolean', 'latitude' => 'float',
-        'longitude' => 'float', 'radius_meters' => 'integer', 'geofence_polygon' => 'array',
+        'longitude' => 'float', 'radius_meters' => 'integer', 'geofence_polygon' => 'array', 'target_sections' => 'array', 
     ];
 
     public function days(): HasMany { return $this->hasMany(EventDay::class, 'event_id', 'event_id'); }

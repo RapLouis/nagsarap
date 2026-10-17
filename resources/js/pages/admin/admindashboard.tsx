@@ -198,7 +198,7 @@ export default function AdminDashboard({
                     {/* KPI 3: Pending Clearances */}
                     <div className="flex flex-col justify-between rounded-3xl border border-gray-100 bg-white p-6 shadow-xs">
                         <div className="flex items-center justify-between">
-                            <span className="text-xs font-bold uppercase tracking-wider text-gray-400">Pending Clearances</span>
+                            <span className="text-xs font-bold uppercase tracking-wider text-gray-400">Pending Sanctions</span>
                             <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
                                 <FileCheck className="h-5 w-5" />
                             </div>
@@ -268,7 +268,7 @@ export default function AdminDashboard({
                     <div className="lg:col-span-2 rounded-3xl border border-gray-100 bg-white p-6 lg:p-8 shadow-xs space-y-6">
                         <div className="flex items-center justify-between pb-4 border-b border-gray-100">
                             <div>
-                                <h2 className="text-lg font-bold text-gray-900">Live Operations & Biometric Telemetry</h2>
+                                <h2 className="text-lg font-bold text-gray-900">Live Operations</h2>
                                 <p className="text-xs text-gray-500">Real-time monitoring for all active campus sessions today</p>
                             </div>
                             <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700 border border-emerald-200/50">
@@ -343,7 +343,7 @@ export default function AdminDashboard({
                     <div className="rounded-3xl border border-gray-100 bg-white p-6 lg:p-8 shadow-xs space-y-6">
                         <div className="flex items-center justify-between pb-4 border-b border-gray-100">
                             <div>
-                                <h2 className="text-lg font-bold text-gray-900">Clearance Triage</h2>
+                                <h2 className="text-lg font-bold text-gray-900">Sanction Section</h2>
                                 <p className="text-xs text-gray-500">Actionable student requests</p>
                             </div>
                             <span className="text-xs font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full">
@@ -375,13 +375,13 @@ export default function AdminDashboard({
                             ) : (
                                 <div className="py-12 text-center text-gray-400 text-xs space-y-1">
                                     <CheckCircle2 className="h-8 w-8 mx-auto text-emerald-400" />
-                                    <p className="font-bold text-gray-700 mt-2">All Clearances Processed</p>
+                                    <p className="font-bold text-gray-700 mt-2">All Sanctions Processed</p>
                                     <p className="text-gray-400 text-[11px]">No pending requests require your attention right now.</p>
                                 </div>
                             )}
                         </div>
                         <Link href="/admin/clearance" className="block text-center text-xs font-bold text-[#1B1F5C] hover:underline pt-2">
-                            View All Clearance Records &rarr;
+                            View All Sanctions Records &rarr;
                         </Link>
                     </div>
 
