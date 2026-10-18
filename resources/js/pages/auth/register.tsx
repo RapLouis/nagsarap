@@ -8,7 +8,6 @@ import { Spinner } from '@/components/ui/spinner';
 import { validateFaceImage } from '@/lib/faceValidation';
 import { compressImage } from '@/lib/utils';
 import {
-    Cpu,
     Mail,
     User,
     Hash,
@@ -17,6 +16,7 @@ import {
     Upload,
 } from 'lucide-react';
 import { useState, FormEvent, ChangeEvent } from 'react';
+import logoImage from '../logo.jpeg';
 
 type Props = {
     teamInvitation?: {
@@ -141,10 +141,10 @@ export default function Register({}: Props) {
                     <div className="pointer-events-none absolute -bottom-32 -right-32 h-80 w-80 rounded-full border border-[#F5A623]/20" />
 
                     <div className="relative z-10">
-                        <div className="mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-full border-4 border-[#F5A623] bg-white shadow-[0_0_25px_rgba(245,166,35,0.3)]">
-                            <Cpu className="h-12 w-12 text-[#1B1F5C]" />
+                        <div className="mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-full border-4 border-[#F5A623] bg-white shadow-[0_0_25px_rgba(245,166,35,0.3)] overflow-hidden p-2">
+                            <img src={logoImage} alt="Logo" className="h-full w-full object-contain scale-125" />
                         </div>
-                        <h1 className="text-4xl font-extrabold tracking-wider text-[#F5A623]">CCIS</h1>
+                        <h1 className="text-4xl font-extrabold tracking-wider text-[#F5A623]">4ttnd</h1>
                         <h2 className="mt-1 text-xl font-bold tracking-wide">Attendance System</h2>
                         <p className="mx-auto mt-4 max-w-xs text-sm leading-relaxed text-white/70">
                             Create your student account, upload your profile picture, and verify your Form 5.
@@ -455,5 +455,5 @@ export default function Register({}: Props) {
 
 Register.layout = {
     title: 'Create an Account',
-    description: 'Register for the CCIS Attendance System',
+    description: 'Register for the 4ttnd Attendance System',
 };

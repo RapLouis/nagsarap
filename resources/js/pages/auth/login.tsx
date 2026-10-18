@@ -11,7 +11,8 @@ import { Spinner } from '@/components/ui/spinner';
 import { register } from '@/routes';
 import { store } from '@/routes/login';
 import { request } from '@/routes/password';
-import { Cpu, Mail } from 'lucide-react';
+import { Mail } from 'lucide-react';
+import logoImage from '../logo.jpeg';
 
 type Props = {
     status?: string;
@@ -72,12 +73,12 @@ export default function Login({
                     {/* Branding */}
                     <div className="relative z-10">
 
-                        <div className="mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-full border-4 border-[#F5A623] bg-white shadow-[0_0_25px_rgba(245,166,35,0.3)]">
-                            <Cpu className="h-12 w-12 text-[#1B1F5C]" />
+                        <div className="mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-full border-4 border-[#F5A623] bg-white shadow-[0_0_25px_rgba(245,166,35,0.3)] overflow-hidden p-2">
+                            <img src={logoImage} alt="Logo" className="h-full w-full object-contain scale-125" />
                         </div>
 
                         <h1 className="text-4xl font-extrabold tracking-wider text-[#F5A623]">
-                            CCIS
+                            4ttnd
                         </h1>
 
                         <h2 className="mt-1 text-xl font-bold tracking-wide">
@@ -110,7 +111,7 @@ export default function Login({
                             </h3>
 
                             <p className="mt-2 text-xs text-gray-500">
-                                Sign in to your CCIS Attendance account
+                                Sign in to your 4ttnd Attendance account
                             </p>
 
                         </div>
@@ -283,6 +284,6 @@ export default function Login({
 }
 
 Login.layout = {
-    title: 'Log in to CCIS Attendance System',
+    title: 'Log in to 4ttnd Attendance System',
     description: 'Enter your credentials below to log in',
 };

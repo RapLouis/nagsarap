@@ -7,10 +7,10 @@ import {
     BarChart3,
     BookOpen,
     LogOut,
-    Menu,
     X,
 } from 'lucide-react';
 import { LogoutModal } from '@/components/logout-modal';
+import logoImage from '../pages/logo.jpeg';
 
 type AdminSidebarProps = {
     isOpen?: boolean;
@@ -37,8 +37,13 @@ export function AdminSidebar({ isOpen = false, onClose }: AdminSidebarProps) {
             <div className="flex flex-col min-h-0">
                 <div className="flex items-center justify-between mb-8 pl-2 shrink-0">
                     <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-white rounded-full" />
-                        <span className="text-2xl font-bold tracking-wide">Brand</span>
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white overflow-hidden shadow-md p-0.5">
+                            <img src={logoImage} alt="4ttnd Logo" className="h-full w-full object-contain scale-125" />
+                        </div>
+                        <div className="flex items-baseline tracking-wider">
+                            <span className="text-2xl font-black text-[#FFD600]">4</span>
+                            <span className="text-lg font-bold text-white">ttnd</span>
+                        </div>
                     </div>
                     {/* Mobile Close Button */}
                     {onClose && (
