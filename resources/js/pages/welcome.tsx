@@ -1,7 +1,8 @@
 import { Head, Link } from '@inertiajs/react';
 import { Button } from '@/components/ui/button';
 import { login, register } from '@/routes';
-import { Cpu, MapPin, ShieldCheck, ScanFace } from 'lucide-react';
+import { MapPin, ShieldCheck, ScanFace } from 'lucide-react';
+import logoImage from './logo.jpeg';
 
 export default function Welcome() {
     return (
@@ -33,8 +34,8 @@ export default function Welcome() {
                     {/* Navigation */}
                     <nav className="relative z-20 flex items-center justify-between px-6 py-6 lg:px-16">
                         <div className="flex items-center gap-3">
-                            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white">
-                                <Cpu className="h-5 w-5 text-[#1B1F5C]" />
+                            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white overflow-hidden shadow-sm">
+                                <img src={logoImage} alt="Logo" className="h-full w-full object-cover" />
                             </div>
 
                             <div>
@@ -125,8 +126,9 @@ export default function Welcome() {
                                     {/* Main Circle */}
                                     <div className="relative flex h-72 w-72 items-center justify-center rounded-full border-2 border-[#F5A623]/40 bg-white/5 backdrop-blur-sm sm:h-80 sm:w-80">
                                         <div className="flex h-56 w-56 items-center justify-center rounded-full border border-white/10 bg-white/5">
-                                            <div className="flex h-36 w-36 items-center justify-center rounded-full bg-white shadow-[0_0_40px_rgba(245,166,35,0.25)]">
-                                                <Cpu className="h-20 w-20 text-[#1B1F5C]" />
+                                            {/* Increased inner wrapper size and logo dimensions to make the "4" logo look bigger */}
+                                            <div className="flex h-44 w-44 items-center justify-center rounded-full bg-white shadow-[0_0_40px_rgba(245,166,35,0.25)] overflow-hidden p-2">
+                                                <img src={logoImage} alt="Logo" className="h-full w-full object-contain scale-125" />
                                             </div>
                                         </div>
 
