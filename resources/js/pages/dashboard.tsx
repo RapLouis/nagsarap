@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Head, Link } from '@inertiajs/react';
+import { Head, Link, usePage } from '@inertiajs/react';
 import {
     Calendar as CalendarIcon,
     Clock,
@@ -17,6 +17,7 @@ import {
     CheckCircle2,
     Lock,
     RotateCcw,
+    Camera,
 } from 'lucide-react';
 import CheckInModal from '@/components/CheckInModal';
 import { type ScheduleItem, type TimeSlot } from '@/lib/eventValidation';
@@ -117,6 +118,9 @@ export default function Dashboard({
     totalExpectedEvents,
     today: todayProp,
 }: DashboardProps) {
+    const { auth } = usePage<any>().props;
+    const isApprovedOrganizer = auth?.user?.role === 'organizer';
+
     const today = todayProp || localToday();
 
     const [selectedSlotEvent, setSelectedSlotEvent] = useState<{
@@ -197,9 +201,11 @@ export default function Dashboard({
 
             <div className="min-h-screen bg-gray-50/50 p-6 lg:p-8 space-y-8 text-gray-900">
 
-                {/* HERO WELCOME BANNER */}
+                {/* HERO WELCOME BANNER WITH RESPONSIVE ORGANIZER PORTAL BUTTON */}
                 <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-[#0b1354] to-[#1B1F5C] p-6 lg:p-8 text-white shadow-md">
                     <div className="relative z-10 flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+                        
+                        {/* Student Details */}
                         <div className="flex items-center gap-5">
                             <div className="h-16 w-16 overflow-hidden rounded-2xl border-2 border-amber-400 bg-indigo-950 shadow-inner shrink-0">
                                 {student.face_photo_url ? (
@@ -225,18 +231,35 @@ export default function Dashboard({
                             </div>
                         </div>
 
-                        <div className="flex items-center gap-3 bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/10 shrink-0">
-                            <div>
-                                <span className="text-[11px] uppercase tracking-wider text-indigo-300 font-semibold block">Attendance Rate</span>
-                                <span className="text-2xl font-black text-amber-400">
-                                    {attendanceRate !== null ? `${attendanceRate}%` : '—'}
-                                </span>
+                        {/* Actions & Stats Row */}
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 shrink-0">
+                            
+                            {/* Organizer Portal Button (Visible ONLY if Approved Organizer) */}
+                            {isApprovedOrganizer && (
+                                <Link
+                                    href="/organizer/dashboard"
+                                    className="inline-flex items-center justify-center gap-2 px-4 py-3 bg-[#C9973E] hover:bg-[#b88632] text-slate-950 font-extrabold text-xs rounded-2xl shadow-md transition active:scale-98"
+                                >
+                                    <Camera className="w-4 h-4 text-slate-950" />
+                                    Organizer Portal &rarr;
+                                </Link>
+                            )}
+
+                            {/* Attendance Quick Metrics */}
+                            <div className="flex items-center gap-3 bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/10">
+                                <div>
+                                    <span className="text-[11px] uppercase tracking-wider text-indigo-300 font-semibold block">Attendance Rate</span>
+                                    <span className="text-2xl font-black text-amber-400">
+                                        {attendanceRate !== null ? `${attendanceRate}%` : '—'}
+                                    </span>
+                                </div>
+                                <div className="h-8 w-px bg-white/20 mx-2" />
+                                <div>
+                                    <span className="text-[11px] uppercase tracking-wider text-indigo-300 font-semibold block">Sessions</span>
+                                    <span className="text-2xl font-black text-white">{eventsAttended}</span>
+                                </div>
                             </div>
-                            <div className="h-8 w-px bg-white/20 mx-2" />
-                            <div>
-                                <span className="text-[11px] uppercase tracking-wider text-indigo-300 font-semibold block">Sessions</span>
-                                <span className="text-2xl font-black text-white">{eventsAttended}</span>
-                            </div>
+
                         </div>
                     </div>
                 </div>
@@ -333,10 +356,7 @@ export default function Dashboard({
                                                                         <SlotStatusBadge status={slotBadge({ hasIn: Boolean(slot.time_in_start), hasOut: Boolean(slot.time_out_start), inState, outState, inDone, outDone })} />
                                                                     </div>
 
-                                                                    {/* UX-Optimized Action Card Grid (Check-In & Check-Out) */}
                                                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                                                        
-                                                                        {/* TIME-IN BOX */}
                                                                         {slot.time_in_start && (
                                                                             <div className={`p-4 rounded-xl border flex flex-col justify-between transition ${
                                                                                 inDone 
@@ -372,7 +392,6 @@ export default function Dashboard({
                                                                             </div>
                                                                         )}
 
-                                                                        {/* TIME-OUT BOX */}
                                                                         {slot.time_out_start && (
                                                                             <div className={`p-4 rounded-xl border flex flex-col justify-between transition ${
                                                                                 outDone 
@@ -407,7 +426,6 @@ export default function Dashboard({
                                                                                 )}
                                                                             </div>
                                                                         )}
-
                                                                     </div>
                                                                 </div>
                                                             );
@@ -487,7 +505,6 @@ export default function Dashboard({
                                 })}
                             </div>
 
-                            {/* DYNAMIC DATE-BASED INSPECTOR */}
                             <div className="pt-3 border-t border-gray-100 space-y-2">
                                 <div className="flex items-center justify-between text-xs gap-2">
                                     <span className="text-gray-500 font-semibold truncate">{formatLongDate(selectedDateStr)}</span>
@@ -563,7 +580,7 @@ export default function Dashboard({
                             </div>
                         </div>
 
-                        {/* COMING UP (Dynamically Filtered) */}
+                        {/* COMING UP */}
                         <div className="bg-white p-6 rounded-3xl shadow-xs border border-gray-100 space-y-4">
                             <div className="flex items-center justify-between">
                                 <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">

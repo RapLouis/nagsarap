@@ -4,6 +4,7 @@ use App\Http\Controllers\Admin\AdminDashboardController;
 use App\Http\Controllers\Admin\AdminEventApprovalController;
 use App\Http\Controllers\Admin\AnalyticsController;
 use App\Http\Controllers\Admin\ClearanceController;
+use App\Http\Controllers\Admin\OrganizerKeyController as AdminOrganizerKeyController;
 use App\Http\Controllers\Admin\StudentManagementController;
 use App\Http\Controllers\AttendanceController;
 use App\Http\Controllers\EventController;
@@ -11,6 +12,8 @@ use App\Http\Controllers\FaceVerificationController;
 use App\Http\Controllers\Organizer\KioskController;
 use App\Http\Controllers\Organizer\OrganizerDashboardController;
 use App\Http\Controllers\Organizer\OrganizerEventController;
+use App\Http\Controllers\Student\OrganizerApplyController;
+use App\Http\Middleware\EnsureUserIsOrganizer;
 use App\Models\Event;
 use App\Models\Student;
 use Carbon\Carbon;
@@ -24,21 +27,16 @@ Route::inertia('/', 'welcome')->name('home');
 Route::middleware(['auth', 'verified'])->group(function () {
 
     // =========================================================================
-    // DASHBOARD REDIRECT DISPATCHER
+    // MAIN STUDENT DASHBOARD (ACCESSIBLE TO STUDENTS & ORGANIZERS)
     // =========================================================================
 
     Route::get('/dashboard', function () {
         /** @var \App\Models\User $user */
         $user = Auth::user();
 
-        // Redirect admin users directly to their dedicated dashboard
+        // Admin users still redirect to admin dashboard
         if ($user->role === 'admin') {
             return redirect()->route('admin.dashboard');
-        }
-
-        // Redirect organizer users directly to their dedicated dashboard
-        if ($user->role === 'organizer') {
-            return redirect()->route('organizer.dashboard');
         }
 
         $student = $user->load([
@@ -59,11 +57,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
         }
 
         $today = now()->toDateString();
-
-        // Build the student's exact section string for scoping
         $studentSectionStr = $student ? trim("{$student->degree} - {$student->year_section}") : '';
 
-        // Reusable scoping filter for student-targeted events
         $studentEventScope = function ($query) use ($studentSectionStr) {
             $query->where('target_scope', 'all')
                   ->orWhere(function ($sub) use ($studentSectionStr) {
@@ -72,7 +67,6 @@ Route::middleware(['auth', 'verified'])->group(function () {
                   });
         };
 
-        // Active events for today filtered by target audience scope
         $activeEvents = Event::ongoing()
             ->where($studentEventScope)
             ->with('days')
@@ -87,7 +81,6 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 return $event;
             });
 
-        // Upcoming events for the Coming Up widget filtered by target scope
         $upcomingEvents = Event::with('days')
             ->where($studentEventScope)
             ->get()
@@ -113,7 +106,6 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 ];
             })->filter()->values();
 
-        // Calendar events for grid and inspector filtered by target scope
         $calendarEvents = Event::with('days')
             ->where($studentEventScope)
             ->get()
@@ -155,7 +147,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
 
     // =========================================================================
-    // STUDENT CHECK-IN HUB
+    // STUDENT CHECK-IN HUB & ORGANIZER APPLICATION
     // =========================================================================
 
     Route::get('/check-in', function () {
@@ -172,10 +164,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 : null;
         }
 
-        // Build the student's exact section string for scoping
         $studentSectionStr = $student ? trim("{$student->degree} - {$student->year_section}") : '';
 
-        // Reusable scoping filter for student-targeted events
         $studentEventScope = function ($query) use ($studentSectionStr) {
             $query->where('target_scope', 'all')
                   ->orWhere(function ($sub) use ($studentSectionStr) {
@@ -204,6 +194,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ]);
     })->name('check-in');
 
+    Route::post('/organizer/apply', [OrganizerApplyController::class, 'submit'])->name('organizer.apply');
+
 
     // =========================================================================
     // ADMIN ROUTES
@@ -213,108 +205,34 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ->prefix('admin')
         ->as('admin.')
         ->group(function () {
+            Route::get('/dashboard', [AdminDashboardController::class, 'index'])->name('dashboard');
+            Route::get('/students', [StudentManagementController::class, 'index'])->name('students.index');
+            Route::patch('/students/{student}', [StudentManagementController::class, 'update'])->name('students.update');
+            Route::patch('/students/{student}/verify', [StudentManagementController::class, 'verify'])->name('students.verify');
+            Route::patch('/students/{student}/reject', [StudentManagementController::class, 'reject'])->name('students.reject');
+            Route::delete('/students/{student}', [StudentManagementController::class, 'destroy'])->name('students.destroy');
 
-            // -----------------------------------------------------------------
-            // ADMIN DASHBOARD
-            // -----------------------------------------------------------------
-
-            Route::get(
-                '/dashboard',
-                [AdminDashboardController::class, 'index']
-            )->name('dashboard');
-
-
-            // -----------------------------------------------------------------
-            // STUDENT MANAGEMENT
-            // -----------------------------------------------------------------
-
-            Route::get(
-                '/students',
-                [StudentManagementController::class, 'index']
-            )->name('students.index');
-
-            Route::patch(
-                '/students/{student}',
-                [StudentManagementController::class, 'update']
-            )->name('students.update');
-
-            Route::patch(
-                '/students/{student}/verify',
-                [StudentManagementController::class, 'verify']
-            )->name('students.verify');
-
-            Route::patch(
-                '/students/{student}/reject',
-                [StudentManagementController::class, 'reject']
-            )->name('students.reject');
-
-            Route::delete(
-                '/students/{student}',
-                [StudentManagementController::class, 'destroy']
-            )->name('students.destroy');
-
-            // -----------------------------------------------------------------
-            // STUDENT CLEARANCE & ABSENTEEISM MONITOR
-            // -----------------------------------------------------------------
+            Route::get('/organizer-keys', [AdminOrganizerKeyController::class, 'index'])->name('organizer-keys.index');
+            Route::post('/organizer-keys', [AdminOrganizerKeyController::class, 'storeKey'])->name('organizer-keys.store');
+            Route::patch('/organizer-keys/{key}/toggle', [AdminOrganizerKeyController::class, 'toggleKey'])->name('organizer-keys.toggle');
+            Route::post('/organizer-applications/{application}/approve', [AdminOrganizerKeyController::class, 'approveApplication'])->name('organizer-applications.approve');
+            Route::post('/organizer-applications/{application}/reject', [AdminOrganizerKeyController::class, 'rejectApplication'])->name('organizer-applications.reject');
 
             Route::get('/clearance', [ClearanceController::class, 'index'])->name('clearance.index');
             Route::patch('/clearance/{clearance}/status', [ClearanceController::class, 'updateStatus'])->name('clearance.update');
 
-            // -----------------------------------------------------------------
-            // EVENT MANAGEMENT
-            // -----------------------------------------------------------------
-
-            Route::get(
-                '/events',
-                [EventController::class, 'index']
-            )->name('events.index');
-
-            Route::post(
-                '/events',
-                [EventController::class, 'store']
-            )->name('events.store');
-
-            Route::put(
-                '/events/{event}',
-                [EventController::class, 'update']
-            )->name('events.update');
-
-            Route::patch(
-                '/events/{event}/toggle',
-                [EventController::class, 'toggleActive']
-            )->name('events.toggle');
-
-            Route::delete(
-                '/events/{event}',
-                [EventController::class, 'destroy']
-            )->name('events.destroy');
-
-            Route::patch(
-                '/events/{event}/status', 
-                [EventController::class, 'updateStatus']
-            )->name('events.update-status');
-
-            // -----------------------------------------------------------------
-            // ADMIN EVENT APPROVAL WORKFLOW
-            // -----------------------------------------------------------------
+            Route::get('/events', [EventController::class, 'index'])->name('events.index');
+            Route::post('/events', [EventController::class, 'store'])->name('events.store');
+            Route::put('/events/{event}', [EventController::class, 'update'])->name('events.update');
+            Route::patch('/events/{event}/toggle', [EventController::class, 'toggleActive'])->name('events.toggle');
+            Route::delete('/events/{event}', [EventController::class, 'destroy'])->name('events.destroy');
+            Route::patch('/events/{event}/status', [EventController::class, 'updateStatus'])->name('events.update-status');
 
             Route::post('/events/{event}/approve', [AdminEventApprovalController::class, 'approve'])->name('events.approve');
             Route::post('/events/{event}/reject', [AdminEventApprovalController::class, 'reject'])->name('events.reject');
             
-            // -----------------------------------------------------------------
-            // ADMIN ANALYTICS & REPORTS
-            // -----------------------------------------------------------------
-
-            Route::get(
-                '/analytics',
-                [AnalyticsController::class, 'index']
-            )->name('analytics.index');
-
-            Route::get(
-                '/analytics/events/{event}',
-                [AnalyticsController::class, 'showEvent']
-            )->name('analytics.event-show');
-
+            Route::get('/analytics', [AnalyticsController::class, 'index'])->name('analytics.index');
+            Route::get('/analytics/events/{event}', [AnalyticsController::class, 'showEvent'])->name('analytics.event-show');
         });
 
 
@@ -322,79 +240,36 @@ Route::middleware(['auth', 'verified'])->group(function () {
     // ORGANIZER ROUTES
     // =========================================================================
 
-    Route::prefix('organizer')
+    Route::middleware([EnsureUserIsOrganizer::class])
+        ->prefix('organizer')
         ->as('organizer.')
         ->group(function () {
-            // Organizer Dashboard & Attendance Stream Analytics
             Route::get('/dashboard', [OrganizerDashboardController::class, 'index'])->name('dashboard');
-            
-            // Scoped Event Management (Creates events with 'pending' status for Admin approval)
             Route::get('/events', [OrganizerEventController::class, 'index'])->name('events.index');
             Route::post('/events', [OrganizerEventController::class, 'store'])->name('events.store');
             Route::put('/events/{event}', [OrganizerEventController::class, 'update'])->name('events.update');
             Route::delete('/events/{event}', [OrganizerEventController::class, 'destroy'])->name('events.destroy');
 
-            // Continuous Facial Recognition Kiosk Mode
             Route::get('/kiosk', [KioskController::class, 'index'])->name('kiosk.index');
             Route::post('/kiosk/verify', [KioskController::class, 'verifyFace'])->name('kiosk.verify');
         });
 
 
     // =========================================================================
-    // BIOMETRIC FACE VERIFICATION
+    // BIOMETRIC & ATTENDANCE
     // =========================================================================
 
-    Route::get(
-        '/register/verify-face',
-        [FaceVerificationController::class, 'show']
-    )->middleware('throttle:20,1')
-     ->name('register.verify-face');
+    Route::get('/register/verify-face', [FaceVerificationController::class, 'show'])->middleware('throttle:20,1')->name('register.verify-face');
+    Route::post('/register/verify-face', [FaceVerificationController::class, 'verifyFace'])->middleware('throttle:10,1')->name('register.verify-face.submit');
 
-    Route::post(
-        '/register/verify-face',
-        [FaceVerificationController::class, 'verifyFace']
-    )->middleware('throttle:10,1')
-     ->name('register.verify-face.submit');
+    Route::post('/attendance/check-in', [AttendanceController::class, 'markAttendance'])->name('attendance.check-in');
 
-
-    // =========================================================================
-    // ATTENDANCE
-    // =========================================================================
-
-    Route::post(
-        '/attendance/check-in',
-        [AttendanceController::class, 'markAttendance']
-    )->name('attendance.check-in');
-
-
-    // =========================================================================
-    // SECURE PRIVATE STORAGE ACCESS
-    // =========================================================================
-
-    Route::get(
-        '/student/{student:student_id}/face-photo',
-        function (Student $student) {
-
-            if (!$student->face_photo_path) {
-                abort(404);
-            }
-
-            $relativePath = ltrim(
-                str_replace(
-                    ['/storage/', 'storage/'],
-                    '',
-                    $student->face_photo_path
-                ),
-                '/'
-            );
-
-            if (!Storage::disk('private')->exists($relativePath)) {
-                abort(404);
-            }
-
-            return Storage::disk('private')->response($relativePath);
-        }
-    )->name('student.face-photo');
+    Route::get('/student/{student:student_id}/face-photo', function (Student $student) {
+        if (!$student->face_photo_path) abort(404);
+        $relativePath = ltrim(str_replace(['/storage/', 'storage/'], '', $student->face_photo_path), '/');
+        if (!Storage::disk('private')->exists($relativePath)) abort(404);
+        return Storage::disk('private')->response($relativePath);
+    })->name('student.face-photo');
 });
 
 require __DIR__.'/settings.php';
