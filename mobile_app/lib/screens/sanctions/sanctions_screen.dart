@@ -16,15 +16,13 @@ class SanctionsScreen extends StatefulWidget {
 class _SanctionsScreenState extends State<SanctionsScreen> {
   static const Color navy = Color(0xFF080878);
   static const Color gold = Color(0xFFFFC800);
-  static const Color muted = Color(0xFF94A3B8);
-
-  static const Color pendingColor = Color(0xFFD97706);
-  static const Color resolvedColor = Color(0xFF16A34A);
+  static const Color muted = Color(0xFF64748B);
 
   bool _loading = true;
   String? _error;
 
   List<SanctionItem> _sanctions = const [];
+  String _selectedFilter = 'All'; // 'All', 'Pending', 'Resolved'
 
   @override
   void initState() {
@@ -78,19 +76,52 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
     }
   }
 
+  int get _pendingCount => _sanctions.where((s) => !s.isResolved).length;
+  int get _resolvedCount => _sanctions.where((s) => s.isResolved).length;
+
+  List<SanctionItem> get _filteredSanctions {
+    if (_selectedFilter == 'Pending') {
+      return _sanctions.where((s) => !s.isResolved).toList();
+    } else if (_selectedFilter == 'Resolved') {
+      return _sanctions.where((s) => s.isResolved).toList();
+    }
+    return _sanctions;
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = themeController.isDarkMode;
 
     return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      appBar: AppBar(
-        backgroundColor: isDark ? const Color(0xFF1E293B) : navy,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        title: const Text(
-          'Sanctions',
-          style: TextStyle(fontWeight: FontWeight.w700),
+      backgroundColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(80),
+        child: Container(
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E293B) : navy,
+            border: Border(
+              bottom: BorderSide(
+                color: isDark ? const Color(0xFF334155) : const Color(0xFF0F172A).withValues(alpha: 0.1),
+              ),
+            ),
+          ),
+          child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: const Text(
+                  'Sanctions Monitoring Table',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.4,
+                  ),
+                ),
+              ),
+            ),
+          ),
         ),
       ),
       body: RefreshIndicator(
@@ -122,246 +153,377 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
       return ListView(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.all(20),
-        children: [const SizedBox(height: 100), _buildError()],
+        children: [const SizedBox(height: 100), _buildErrorCard()],
       );
     }
 
-    if (_sanctions.isEmpty) {
-      return ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.all(20),
-        children: [const SizedBox(height: 100), _buildEmpty()],
-      );
-    }
+    final filtered = _filteredSanctions;
 
-    return ListView.builder(
+    return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(14, 20, 14, 110),
-      itemCount: _sanctions.length + 1,
-      itemBuilder: (BuildContext context, int index) {
-        if (index == 0) return _buildTableHeader();
-        final sanction = _sanctions[index - 1];
-        return _buildTableRow(sanction, index - 1);
-      },
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
+      children: [
+        _buildSegmentedFilter(),
+        const SizedBox(height: 16),
+        if (filtered.isEmpty)
+          _buildEmptyState()
+        else
+          ...filtered.map((sanction) => _buildSanctionCard(sanction)),
+      ],
     );
   }
 
-  Widget _buildTableHeader() {
+  Widget _buildSegmentedFilter() {
     final isDark = themeController.isDarkMode;
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1E293B) : const Color(0xFFEDEDF8),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+        color: isDark ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0).withValues(alpha: 0.7),
+        borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E2E8),
+          color: isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1),
+          width: 1.0,
         ),
       ),
       child: Row(
-        children: [
-          SizedBox(
-            width: 78,
-            child: Text(
-              'Date',
-              style: TextStyle(
-                color: isDark ? gold : navy,
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ),
-          Expanded(
-            child: Text(
-              'Attendance issue',
-              style: TextStyle(
-                color: isDark ? gold : navy,
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ),
-          SizedBox(
-            width: 72,
-            child: Text(
-              'Status',
-              textAlign: TextAlign.right,
-              style: TextStyle(
-                color: isDark ? gold : navy,
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+        children: ['All', 'Pending', 'Resolved'].map((tab) {
+          final isSelected = _selectedFilter == tab;
+          final count = tab == 'All'
+              ? _sanctions.length
+              : (tab == 'Pending' ? _pendingCount : _resolvedCount);
 
-  Widget _buildTableRow(SanctionItem sanction, int index) {
-    final isDark = themeController.isDarkMode;
-    final resolved = sanction.isResolved;
-    final statusColor = resolved ? resolvedColor : pendingColor;
-
-    final dateText = sanction.issuedAt == null
-        ? '--'
-        : DateFormat('MMM d, yyyy').format(sanction.issuedAt!.toLocal());
-
-    String title = sanction.title.trim();
-    if (title.isEmpty) title = 'Attendance issue';
-
-    final rowColor = isDark
-        ? (index.isEven ? const Color(0xFF0F172A) : const Color(0xFF1E293B))
-        : (index.isEven ? Colors.white : const Color(0xFFFAFAFC));
-
-    final borderColor =
-        isDark ? const Color(0xFF334155) : const Color(0xFFE2E2E8);
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
-      decoration: BoxDecoration(
-        color: rowColor,
-        border: Border(
-          left: BorderSide(color: borderColor),
-          right: BorderSide(color: borderColor),
-          bottom: BorderSide(color: borderColor),
-        ),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 78,
-            child: Text(
-              dateText,
-              style: const TextStyle(
-                color: muted,
-                fontSize: 10.5,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: Text(
-                title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: isDark ? Colors.white : navy,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
-          ),
-          SizedBox(
-            width: 72,
-            child: Align(
-              alignment: Alignment.topRight,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          return Expanded(
+            child: GestureDetector(
+              onTap: () => setState(() => _selectedFilter = tab),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: statusColor.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(20),
+                  color: isSelected
+                      ? (isDark ? const Color(0xFF0F172A) : Colors.white)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(8),
+                  boxShadow: isSelected
+                      ? [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.04),
+                            blurRadius: 4,
+                            offset: const Offset(0, 1),
+                          )
+                        ]
+                      : null,
                 ),
                 child: Text(
-                  resolved ? 'Resolved' : 'Pending',
-                  textAlign: TextAlign.center,
+                  '$tab ($count)',
                   style: TextStyle(
-                    color: statusColor,
-                    fontSize: 9.5,
-                    fontWeight: FontWeight.w800,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                    color: isSelected
+                        ? (isDark ? Colors.white : navy)
+                        : muted,
                   ),
                 ),
               ),
             ),
-          ),
-        ],
+          );
+        }).toList(),
       ),
     );
   }
 
-  Widget _buildEmpty() {
+  Widget _buildSanctionCard(SanctionItem sanction) {
+    final isDark = themeController.isDarkMode;
+    final issueInfo = _parseIssueInfo(sanction);
+
+    final dateText = sanction.issuedAt == null
+        ? 'Date Unspecified'
+        : DateFormat('MMM d, yyyy').format(sanction.issuedAt!.toLocal());
+
+    final timeText = sanction.issuedAt == null
+        ? ''
+        : DateFormat('h:mm a').format(sanction.issuedAt!.toLocal());
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B) : Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: sanction.isResolved
+              ? (isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0))
+              : issueInfo.color.withValues(alpha: 0.4),
+          width: sanction.isResolved ? 1.0 : 1.2,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // TOP ROW: EVENT NAME + RESOLVED/PENDING STATUS
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Text(
+                    issueInfo.eventName,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: isDark ? Colors.white : navy,
+                      height: 1.2,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                _buildStatusPill(sanction.isResolved, isDark),
+              ],
+            ),
+
+            const SizedBox(height: 10),
+
+            // MIDDLE ROW: ISSUE TYPE BADGE + DATE
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+                  decoration: BoxDecoration(
+                    color: issueInfo.color.withValues(alpha: isDark ? 0.2 : 0.12),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: issueInfo.color.withValues(alpha: 0.3),
+                      width: 1.0,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(issueInfo.icon, size: 13, color: issueInfo.color),
+                      const SizedBox(width: 5),
+                      Text(
+                        issueInfo.issueLabel,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.3,
+                          color: issueInfo.color,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Spacer(),
+                Row(
+                  children: [
+                    const Icon(Icons.calendar_today_rounded, size: 11, color: muted),
+                    const SizedBox(width: 4),
+                    Text(
+                      timeText.isNotEmpty ? '$dateText • $timeText' : dateText,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        color: muted,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatusPill(bool isResolved, bool isDark) {
+    if (isResolved) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2.5),
+        decoration: BoxDecoration(
+          color: const Color(0xFFDCFCE7),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: const Text(
+          'RESOLVED',
+          style: TextStyle(
+            fontSize: 9.5,
+            fontWeight: FontWeight.w800,
+            color: Color(0xFF15803D),
+            letterSpacing: 0.3,
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2.5),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFEF3C7),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: const Text(
+        'PENDING',
+        style: TextStyle(
+          fontSize: 9.5,
+          fontWeight: FontWeight.w800,
+          color: Color(0xFFB45309),
+          letterSpacing: 0.3,
+        ),
+      ),
+    );
+  }
+
+  // --------------------------------------------------------------------------
+  // SMART ISSUE PARSER & FORMATTER
+  // --------------------------------------------------------------------------
+
+  _ParsedIssue _parseIssueInfo(SanctionItem sanction) {
+    final rawTitle = sanction.title.trim();
+    String eventName = rawTitle;
+    String lower = rawTitle.toLowerCase();
+
+    // Extract Event Name if formatted as "Event Name - Issue Type" or "Event Name : Issue Type"
+    if (rawTitle.contains(' - ')) {
+      final parts = rawTitle.split(' - ');
+      eventName = parts[0].trim();
+      lower = parts.sublist(1).join(' ').toLowerCase();
+    } else if (rawTitle.contains(' : ')) {
+      final parts = rawTitle.split(' : ');
+      eventName = parts[0].trim();
+      lower = parts.sublist(1).join(' ').toLowerCase();
+    }
+
+    final isNoAttendance = lower.contains('no attendance') ||
+        lower.contains('absent') ||
+        lower.contains('both missed') ||
+        (lower.contains('time-in') && lower.contains('time-out')) ||
+        (lower.contains('time in') && lower.contains('time out'));
+
+    final isTimeInMissed = lower.contains('time-in') || lower.contains('time in');
+    final isTimeOutMissed = lower.contains('time-out') || lower.contains('time out');
+
+    if (isNoAttendance) {
+      return _ParsedIssue(
+        eventName: eventName.isEmpty ? 'Scheduled Event' : eventName,
+        issueLabel: 'NO ATTENDANCE RECORDED',
+        color: const Color(0xFFDC2626), // Crimson Red
+        icon: Icons.event_busy_rounded,
+      );
+    } else if (isTimeInMissed) {
+      return _ParsedIssue(
+        eventName: eventName.isEmpty ? 'Scheduled Event' : eventName,
+        issueLabel: 'TIME-IN MISSED',
+        color: const Color(0xFFD97706), // Amber
+        icon: Icons.login_rounded,
+      );
+    } else if (isTimeOutMissed) {
+      return _ParsedIssue(
+        eventName: eventName.isEmpty ? 'Scheduled Event' : eventName,
+        issueLabel: 'TIME-OUT MISSED',
+        color: const Color(0xFFEA580C), // Orange
+        icon: Icons.logout_rounded,
+      );
+    }
+
+    return _ParsedIssue(
+      eventName: eventName.isEmpty ? 'Scheduled Event' : eventName,
+      issueLabel: rawTitle.toUpperCase(),
+      color: const Color(0xFF475569), // Slate
+      icon: Icons.warning_amber_rounded,
+    );
+  }
+
+  Widget _buildEmptyState() {
     final isDark = themeController.isDarkMode;
 
     return Container(
-      padding: const EdgeInsets.all(28),
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1E293B) : Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E2E8),
-        ),
-      ),
+      padding: const EdgeInsets.symmetric(vertical: 48, horizontal: 20),
+      alignment: Alignment.center,
       child: Column(
         children: [
-          Icon(
-            Icons.event_available_rounded,
-            color: isDark ? gold : navy,
-            size: 45,
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.check_circle_outline_rounded,
+              size: 36,
+              color: const Color(0xFF16A34A).withValues(alpha: 0.8),
+            ),
           ),
           const SizedBox(height: 12),
           Text(
             'No attendance issues',
             style: TextStyle(
-              fontSize: 17,
+              fontSize: 15,
               fontWeight: FontWeight.w700,
-              color: isDark ? Colors.white : Colors.black,
+              color: isDark ? Colors.white : navy,
             ),
           ),
-          const SizedBox(height: 7),
+          const SizedBox(height: 4),
           const Text(
-            'You currently have no recorded attendance issues.',
+            'You currently have no recorded attendance sanctions or warnings.',
             textAlign: TextAlign.center,
-            style: TextStyle(color: muted, fontSize: 13),
+            style: TextStyle(fontSize: 12, color: muted),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildError() {
+  Widget _buildErrorCard() {
     final isDark = themeController.isDarkMode;
 
     return Container(
-      padding: const EdgeInsets.all(28),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF1E293B) : Colors.white,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+        ),
       ),
       child: Column(
         children: [
-          const Icon(Icons.error_outline_rounded, color: Colors.red, size: 44),
+          const Icon(Icons.error_outline_rounded, color: Color(0xFFDC2626), size: 30),
+          const SizedBox(height: 8),
+          Text(
+            _error ?? 'Unable to load attendance issues.',
+            style: const TextStyle(fontSize: 12, color: muted),
+          ),
           const SizedBox(height: 12),
-          Text(
-            'Unable to load attendance issues',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 17,
-              fontWeight: FontWeight.w700,
-              color: isDark ? Colors.white : Colors.black,
-            ),
-          ),
-          const SizedBox(height: 7),
-          Text(
-            _error ?? 'Please try again.',
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: muted, fontSize: 13),
-          ),
-          const SizedBox(height: 18),
-          FilledButton(
+          ElevatedButton(
             onPressed: _loadSanctions,
-            style: FilledButton.styleFrom(
+            style: ElevatedButton.styleFrom(
               backgroundColor: isDark ? gold : navy,
               foregroundColor: isDark ? navy : Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(6),
+              ),
             ),
-            child: const Text('Try Again'),
+            child: const Text('Try Again', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
           ),
         ],
       ),
     );
   }
+}
+
+class _ParsedIssue {
+  final String eventName;
+  final String issueLabel;
+  final Color color;
+  final IconData icon;
+
+  const _ParsedIssue({
+    required this.eventName,
+    required this.issueLabel,
+    required this.color,
+    required this.icon,
+  });
 }

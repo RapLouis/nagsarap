@@ -336,7 +336,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _hasTimeOutForEvent(EventItem event) =>
       _getAttendanceCountForEvent(event) >= 2;
 
-  bool _isEventWindowActive(EventItem event) {
+ bool _isEventWindowActive(EventItem event) {
     final now = DateTime.now();
 
     final timeInStr = _getTimeInWindow(event);
@@ -351,12 +351,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final outStart = timeOutParts.isNotEmpty ? _parseTimeToDateTime(timeOutParts[0]) : null;
     final outEnd = timeOutParts.length > 1 ? _parseTimeToDateTime(timeOutParts[1]) : null;
 
-    if (_hasTimeOutForEvent(event)) return false;
+    final count = _getAttendanceCountForEvent(event);
+    if (count >= 2) return false;
 
     const margin = Duration(minutes: 15);
 
-    // 1. Time-Out Window check (allows Time-Out check-in even if Time-In was missed)
-    if (outStart != null) {
+    // 1. Check Time-Out Window (if Time-Out not yet completed)
+    if (count < 2 && outStart != null) {
       final startBound = outStart.subtract(margin);
       final endBound = (outEnd ?? outStart.add(const Duration(hours: 4))).add(margin);
       if ((now.isAfter(startBound) || now.isAtSameMomentAs(startBound)) &&
@@ -365,19 +366,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
     }
 
-    // 2. Time-In Window check
-    if (!_hasTimeInForEvent(event) && inStart != null) {
+    // 2. Check Time-In Window (if Time-In not yet completed)
+    if (count == 0 && inStart != null) {
       final startBound = inStart.subtract(margin);
       final endBound = (inEnd ?? outStart ?? inStart.add(const Duration(hours: 4))).add(margin);
       if ((now.isAfter(startBound) || now.isAtSameMomentAs(startBound)) &&
           (now.isBefore(endBound) || now.isAtSameMomentAs(endBound))) {
-        return true;
-      }
-    }
-
-    if (inStart != null && outEnd != null) {
-      if (now.isAfter(inStart.subtract(margin)) &&
-          now.isBefore(outEnd.add(margin))) {
         return true;
       }
     }
@@ -429,7 +423,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _openAttendanceScanner() async {
+ Future<void> _openAttendanceScanner() async {
     final today = _todayEvents;
 
     if (today.isEmpty) {
@@ -453,7 +447,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     if (today.length == 1) {
-      _openAttendanceScannerForEvent(today.first);
+      final event = today.first;
+      if (!_isEventWindowActive(event)) {
+        _showEventDetailModal(event);
+        return;
+      }
+      _openAttendanceScannerForEvent(event);
     } else {
       final selectedEvent = await showModalBottomSheet<EventItem>(
         context: context,
@@ -486,58 +485,90 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     style: TextStyle(color: muted, fontSize: 12.5),
                   ),
                   const SizedBox(height: 16),
-                  for (final event in today)
-                    Container(
-                      margin: const EdgeInsets.only(bottom: 8),
-                      decoration: BoxDecoration(
-                        color: isDark
-                            ? const Color(0xFF1E293B)
-                            : const Color(0xFFF8FAFC),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
-                          color: isDark
-                              ? const Color(0xFF334155)
-                              : const Color(0xFFE2E8F0),
-                        ),
-                      ),
-                      child: ListTile(
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 2,
-                        ),
-                        leading: Container(
-                          width: 36,
-                          height: 36,
-                          decoration: BoxDecoration(
-                            color: gold.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(8),
+                  for (final event in today) ...[
+                    Builder(
+                      builder: (ctx) {
+                        final isActive = _isEventWindowActive(event);
+                        final count = _getAttendanceCountForEvent(event);
+                        final isCompleted = count >= 2;
+
+                        return Opacity(
+                          opacity: isActive ? 1.0 : 0.5,
+                          child: Container(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            decoration: BoxDecoration(
+                              color: isDark
+                                  ? const Color(0xFF1E293B)
+                                  : const Color(0xFFF8FAFC),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: isActive
+                                    ? gold
+                                    : (isDark
+                                        ? const Color(0xFF334155)
+                                        : const Color(0xFFE2E8F0)),
+                              ),
+                            ),
+                            child: ListTile(
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 2,
+                              ),
+                              leading: Container(
+                                width: 36,
+                                height: 36,
+                                decoration: BoxDecoration(
+                                  color: (isActive ? gold : muted)
+                                      .withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Icon(
+                                  isActive
+                                      ? Icons.event_available_rounded
+                                      : Icons.lock_rounded,
+                                  color: isActive ? gold : muted,
+                                  size: 18,
+                                ),
+                              ),
+                              title: Text(
+                                event.name,
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 14,
+                                  color: isDark ? Colors.white : navy,
+                                ),
+                              ),
+                              subtitle: Text(
+                                isCompleted
+                                    ? 'Completed (2/2)'
+                                    : (isActive
+                                        ? 'Window Active'
+                                        : 'Window Closed / Locked'),
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  color: isActive ? const Color(0xFF16A34A) : muted,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              trailing: Icon(
+                                isActive
+                                    ? Icons.arrow_forward_ios_rounded
+                                    : Icons.lock_outline_rounded,
+                                color: isActive ? muted : Colors.grey,
+                                size: 14,
+                              ),
+                              onTap: isActive
+                                  ? () => Navigator.pop(sheetContext, event)
+                                  : () {
+                                      Navigator.pop(sheetContext);
+                                      _showEventDetailModal(event);
+                                    },
+                            ),
                           ),
-                          child: const Icon(
-                            Icons.event_available_rounded,
-                            color: gold,
-                            size: 18,
-                          ),
-                        ),
-                        title: Text(
-                          event.name,
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 14,
-                            color: isDark ? Colors.white : navy,
-                          ),
-                        ),
-                        subtitle: Text(
-                          _getDisplayWindow(event),
-                          style: const TextStyle(fontSize: 11.5, color: muted),
-                        ),
-                        trailing: const Icon(
-                          Icons.arrow_forward_ios_rounded,
-                          color: muted,
-                          size: 14,
-                        ),
-                        onTap: () => Navigator.pop(sheetContext, event),
-                      ),
+                        );
+                      },
                     ),
+                  ],
                 ],
               ),
             ),

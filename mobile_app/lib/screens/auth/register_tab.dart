@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:io';
 
+import 'package:camera/camera.dart';
 import 'package:file_selector/file_selector.dart' as fs;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -70,37 +72,6 @@ class _RegisterTabState extends State<RegisterTab> {
     confirmPasswordController.dispose();
 
     super.dispose();
-  }
-
-  // --------------------------------------------------------------------------
-  // UN-MIRROR FRONT CAMERA PHOTO USING ISOLATE (COMPUTE)
-  // --------------------------------------------------------------------------
-
-  static Uint8List _flipImageBytes(Uint8List bytes) {
-    img.Image? decodedImage = img.decodeImage(bytes);
-    if (decodedImage == null) return bytes;
-
-    decodedImage = img.bakeOrientation(decodedImage);
-    final flippedImage = img.flipHorizontal(decodedImage);
-    return Uint8List.fromList(img.encodeJpg(flippedImage, quality: 85));
-  }
-
-  Future<XFile> _fixMirroredPhoto(XFile file) async {
-    try {
-      final bytes = await file.readAsBytes();
-      final processedBytes = await compute(_flipImageBytes, bytes);
-
-      final tempDir = Directory.systemTemp;
-      final targetPath =
-          '${tempDir.path}/profile_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      final fixedFile = File(targetPath);
-      await fixedFile.writeAsBytes(processedBytes);
-
-      return XFile(fixedFile.path);
-    } catch (e) {
-      debugPrint('Error un-mirroring photo: $e');
-      return file;
-    }
   }
 
   // --------------------------------------------------------------------------
@@ -192,20 +163,25 @@ class _RegisterTabState extends State<RegisterTab> {
     }
 
     try {
-      XFile? image = await imagePicker.pickImage(
-        source: selectedSource,
-        preferredCameraDevice: CameraDevice.front,
-        imageQuality: 80,
-        maxWidth: 1024,
-        maxHeight: 1024,
-      );
+      XFile? image;
+
+      if (selectedSource == ImageSource.camera) {
+        image = await Navigator.of(context).push<XFile>(
+          MaterialPageRoute(
+            builder: (_) => const ProfileCameraScreen(),
+          ),
+        );
+      } else {
+        image = await imagePicker.pickImage(
+          source: ImageSource.gallery,
+          imageQuality: 80,
+          maxWidth: 1024,
+          maxHeight: 1024,
+        );
+      }
 
       if (image == null) {
         return;
-      }
-
-      if (selectedSource == ImageSource.camera) {
-        image = await _fixMirroredPhoto(image);
       }
 
       if (!mounted) {
@@ -1149,6 +1125,357 @@ class _PasswordRequirement extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// CUSTOM CIRCULAR CAMERA SCREEN WITH CAPTURE & PREVIEW
+// ============================================================================
+
+class ProfileCameraScreen extends StatefulWidget {
+  const ProfileCameraScreen({super.key});
+
+  @override
+  State<ProfileCameraScreen> createState() => _ProfileCameraScreenState();
+}
+
+class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
+  CameraController? _cameraController;
+  bool _isInitialized = false;
+  bool _isCapturing = false;
+  XFile? _capturedImage;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _initFrontCamera();
+  }
+
+  Future<void> _initFrontCamera() async {
+    try {
+      final cameras = await availableCameras();
+      if (cameras.isEmpty) {
+        setState(() {
+          _errorMessage = 'No camera found on this device.';
+        });
+        return;
+      }
+
+      final frontCamera = cameras.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.front,
+        orElse: () => cameras.first,
+      );
+
+      final controller = CameraController(
+        frontCamera,
+        ResolutionPreset.high,
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.jpeg,
+      );
+
+      await controller.initialize();
+
+      if (!mounted) {
+        await controller.dispose();
+        return;
+      }
+
+      setState(() {
+        _cameraController = controller;
+        _isInitialized = true;
+      });
+    } catch (e) {
+      debugPrint('Camera initialization error: $e');
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Unable to access camera.';
+        });
+      }
+    }
+  }
+
+  static Uint8List _flipImageBytes(Uint8List bytes) {
+    img.Image? decoded = img.decodeImage(bytes);
+    if (decoded == null) return bytes;
+
+    decoded = img.bakeOrientation(decoded);
+    final flipped = img.flipHorizontal(decoded);
+    return Uint8List.fromList(img.encodeJpg(flipped, quality: 85));
+  }
+
+  Future<void> _capturePhoto() async {
+    if (_isCapturing || _cameraController == null || !_cameraController!.value.isInitialized) {
+      return;
+    }
+
+    setState(() {
+      _isCapturing = true;
+    });
+
+    try {
+      final rawFile = await _cameraController!.takePicture();
+      final bytes = await rawFile.readAsBytes();
+
+      // Un-mirror image
+      final processedBytes = await compute(_flipImageBytes, bytes);
+
+      final tempDir = Directory.systemTemp;
+      final targetPath =
+          '${tempDir.path}/profile_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final fixedFile = File(targetPath);
+      await fixedFile.writeAsBytes(processedBytes);
+
+      setState(() {
+        _capturedImage = XFile(fixedFile.path);
+        _isCapturing = false;
+      });
+    } catch (e) {
+      debugPrint('Photo capture error: $e');
+      setState(() {
+        _isCapturing = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to take photo. Try again.')),
+        );
+      }
+    }
+  }
+
+  void _retakePhoto() {
+    setState(() {
+      _capturedImage = null;
+    });
+  }
+
+  void _confirmPhoto() {
+    if (_capturedImage != null) {
+      Navigator.of(context).pop(_capturedImage);
+    }
+  }
+
+  @override
+  void dispose() {
+    _cameraController?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0F172A),
+      appBar: AppBar(
+        backgroundColor: AppColors.navy,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        title: Text(
+          _capturedImage == null ? 'Take Profile Photo' : 'Review Photo',
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+      body: SafeArea(
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            // Instruction
+            Positioned(
+              top: 24,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(
+                    color: AppColors.gold.withValues(alpha: 0.6),
+                    width: 1.5,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.center_focus_strong_rounded,
+                      color: AppColors.gold,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _capturedImage == null
+                          ? 'Position your face inside the circle'
+                          : 'Review your captured photo',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            // BIGGER CIRCULAR VIEWPORT / PREVIEW CONTAINER (320px)
+            Center(
+              child: Container(
+                width: 320,
+                height: 320,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.black,
+                  border: Border.all(
+                    color: AppColors.gold,
+                    width: 4,
+                  ),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x66000000),
+                      blurRadius: 16,
+                      offset: Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: ClipOval(
+                  child: _capturedImage != null
+                      ? Image.file(
+                          File(_capturedImage!.path),
+                          fit: BoxFit.cover,
+                        )
+                      : (_isInitialized && _cameraController != null
+                          ? LayoutBuilder(
+                              builder: (context, constraints) {
+                                final previewRatio = _cameraController!.value.aspectRatio;
+                                return SizedBox(
+                                  width: constraints.maxWidth,
+                                  height: constraints.maxHeight,
+                                  child: ClipRect(
+                                    child: OverflowBox(
+                                      alignment: Alignment.center,
+                                      child: FittedBox(
+                                        fit: BoxFit.cover,
+                                        child: SizedBox(
+                                          width: constraints.maxWidth,
+                                          height: constraints.maxWidth * previewRatio,
+                                          child: CameraPreview(_cameraController!),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            )
+                          : Center(
+                              child: _errorMessage != null
+                                  ? Padding(
+                                      padding: const EdgeInsets.all(16.0),
+                                      child: Text(
+                                        _errorMessage!,
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(
+                                          color: Colors.white70,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    )
+                                  : const CircularProgressIndicator(
+                                      color: AppColors.gold,
+                                    ),
+                            )),
+                ),
+              ),
+            ),
+
+            // BOTTOM CONTROLS (CAPTURE BUTTON OR RETAKE / USE BUTTONS)
+            Positioned(
+              bottom: 40,
+              child: _capturedImage == null
+                  ? GestureDetector(
+                      onTap: _isInitialized && !_isCapturing ? _capturePhoto : null,
+                      child: Container(
+                        width: 76,
+                        height: 76,
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Colors.white,
+                            width: 4,
+                          ),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Color(0x40000000),
+                              blurRadius: 10,
+                              offset: Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: Container(
+                          decoration: const BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: AppColors.gold,
+                          ),
+                          child: _isCapturing
+                              ? const Padding(
+                                  padding: EdgeInsets.all(20),
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 3,
+                                    color: AppColors.navy,
+                                  ),
+                                )
+                              : const Icon(
+                                  Icons.camera_alt_rounded,
+                                  color: AppColors.navy,
+                                  size: 34,
+                                ),
+                        ),
+                      ),
+                    )
+                  : Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        ElevatedButton.icon(
+                          onPressed: _retakePhoto,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.white24,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(24),
+                            ),
+                          ),
+                          icon: const Icon(Icons.replay_rounded, size: 18),
+                          label: const Text(
+                            'Retake',
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        ElevatedButton.icon(
+                          onPressed: _confirmPhoto,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.gold,
+                            foregroundColor: AppColors.navy,
+                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(24),
+                            ),
+                          ),
+                          icon: const Icon(Icons.check_rounded, size: 18),
+                          label: const Text(
+                            'Use Photo',
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }
