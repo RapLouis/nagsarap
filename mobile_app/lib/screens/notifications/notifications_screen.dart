@@ -114,7 +114,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             color: isDark ? const Color(0xFF1E293B) : navy,
             border: Border(
               bottom: BorderSide(
-                color: isDark ? const Color(0xFF334155) : Colors.transparent,
+                color: isDark ? const Color(0xFF334155) : const Color(0xFF0F172A).withValues(alpha: 0.1),
               ),
             ),
           ),
@@ -129,7 +129,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       color: Colors.white,
                       fontSize: 18,
                       fontWeight: FontWeight.w700,
-                      letterSpacing: -0.2,
+                      letterSpacing: -0.3,
                     ),
                   ),
                   const Spacer(),
@@ -138,7 +138,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       onPressed: _markingAll ? null : _markAllRead,
                       style: TextButton.styleFrom(
                         foregroundColor: gold,
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                         minimumSize: const Size(50, 30),
                       ),
                       child: _markingAll
@@ -209,7 +209,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
       children: [
         _buildSegmentedFilter(),
-        const SizedBox(height: 14),
+        const SizedBox(height: 16),
         if (filtered.isEmpty)
           _buildEmptyState()
         else
@@ -224,10 +224,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     return Container(
       padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0).withValues(alpha: 0.6),
+        color: isDark ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0).withValues(alpha: 0.7),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
           color: isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1),
+          width: 1.0,
         ),
       ),
       child: Row(
@@ -238,20 +239,30 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 _showUnreadOnly = false;
                 _visibleLimit = 15;
               }),
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 7),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                padding: const EdgeInsets.symmetric(vertical: 8),
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: !_showUnreadOnly
                       ? (isDark ? const Color(0xFF0F172A) : Colors.white)
                       : Colors.transparent,
                   borderRadius: BorderRadius.circular(8),
+                  boxShadow: !_showUnreadOnly
+                      ? [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.04),
+                            blurRadius: 4,
+                            offset: const Offset(0, 1),
+                          )
+                        ]
+                      : null,
                 ),
                 child: Text(
                   'All (${_notifications.length})',
                   style: TextStyle(
                     fontSize: 12,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w700,
                     color: !_showUnreadOnly
                         ? (isDark ? Colors.white : navy)
                         : muted,
@@ -266,20 +277,30 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 _showUnreadOnly = true;
                 _visibleLimit = 15;
               }),
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 7),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                padding: const EdgeInsets.symmetric(vertical: 8),
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: _showUnreadOnly
                       ? (isDark ? const Color(0xFF0F172A) : Colors.white)
                       : Colors.transparent,
                   borderRadius: BorderRadius.circular(8),
+                  boxShadow: _showUnreadOnly
+                      ? [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.04),
+                            blurRadius: 4,
+                            offset: const Offset(0, 1),
+                          )
+                        ]
+                      : null,
                 ),
                 child: Text(
                   'Unread ($_unreadCount)',
                   style: TextStyle(
                     fontSize: 12,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w700,
                     color: _showUnreadOnly
                         ? (isDark ? Colors.white : navy)
                         : muted,
@@ -300,20 +321,20 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     for (final notification in notifications) {
       final day = notification.createdAt == null
           ? 'Recent'
-          : DateFormat('MMMM d, yyyy').format(notification.createdAt!.toLocal());
+          : DateFormat('EEEE, MMMM d').format(notification.createdAt!.toLocal());
 
       if (day != currentDay) {
-        if (widgets.isNotEmpty) widgets.add(const SizedBox(height: 10));
+        if (widgets.isNotEmpty) widgets.add(const SizedBox(height: 12));
         widgets.add(
           Padding(
-            padding: const EdgeInsets.only(left: 4, bottom: 4),
+            padding: const EdgeInsets.only(left: 2, bottom: 6),
             child: Text(
               day.toUpperCase(),
               style: const TextStyle(
                 color: muted,
                 fontSize: 10,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.5,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.8,
               ),
             ),
           ),
@@ -330,92 +351,120 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
   Widget _buildCleanCard(NotificationItem notification) {
     final isDark = themeController.isDarkMode;
-    final accentColor = _notificationColor(notification.type);
-    final icon = _notificationIcon(notification.type);
+    final config = _getNotificationConfig(notification.type, isDark);
 
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: () => _markRead(notification),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         child: Container(
+          padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: isDark ? const Color(0xFF1E293B) : Colors.white,
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(10),
             border: Border.all(
-              color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+              color: notification.isRead
+                  ? (isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0))
+                  : config.color.withValues(alpha: 0.4),
+              width: notification.isRead ? 1.0 : 1.2,
             ),
           ),
-          clipBehavior: Clip.antiAlias,
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // CRISP ICON BOX
               Container(
-                width: 3.5,
-                height: 68,
-                color: notification.isRead ? Colors.transparent : accentColor,
-              ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(7),
-                        decoration: BoxDecoration(
-                          color: accentColor.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Icon(icon, color: accentColor, size: 18),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    notification.title,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: notification.isRead
-                                          ? FontWeight.w600
-                                          : FontWeight.w700,
-                                      color: isDark ? Colors.white : navy,
-                                    ),
-                                  ),
-                                ),
-                                if (notification.createdAt != null)
-                                  Text(
-                                    DateFormat('h:mm a').format(notification.createdAt!.toLocal()),
-                                    style: const TextStyle(
-                                      fontSize: 10,
-                                      color: muted,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                              ],
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              notification.message,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 11.5,
-                                height: 1.3,
-                                color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: isDark ? config.iconBgDark : config.iconBgLight,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: config.color.withValues(alpha: 0.25),
+                    width: 1.0,
                   ),
+                ),
+                child: Icon(config.icon, color: config.color, size: 19),
+              ),
+
+              const SizedBox(width: 12),
+
+              // MAIN CONTENT
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // BADGE + TIMESTAMP + UNREAD DOT
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+                          decoration: BoxDecoration(
+                            color: isDark ? config.badgeBgDark : config.badgeBgLight,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            config.badgeLabel,
+                            style: TextStyle(
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.4,
+                              color: isDark ? config.badgeTextDark : config.badgeTextLight,
+                            ),
+                          ),
+                        ),
+                        const Spacer(),
+                        if (notification.createdAt != null)
+                          Text(
+                            DateFormat('h:mm a').format(notification.createdAt!.toLocal()),
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: Color(0xFF94A3B8),
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        if (!notification.isRead) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: config.color,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+
+                    const SizedBox(height: 6),
+
+                    // TITLE
+                    Text(
+                      notification.title,
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: notification.isRead ? FontWeight.w600 : FontWeight.w700,
+                        color: isDark ? Colors.white : const Color(0xFF0F172A),
+                        height: 1.2,
+                      ),
+                    ),
+
+                    const SizedBox(height: 4),
+
+                    // BODY MESSAGE
+                    Text(
+                      notification.message,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        height: 1.4,
+                        color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF475569),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -429,16 +478,23 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     final isDark = themeController.isDarkMode;
 
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 20),
+      padding: const EdgeInsets.symmetric(vertical: 48, horizontal: 20),
       alignment: Alignment.center,
       child: Column(
         children: [
-          Icon(
-            Icons.notifications_off_outlined,
-            size: 40,
-            color: muted.withValues(alpha: 0.6),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.notifications_none_rounded,
+              size: 32,
+              color: muted.withValues(alpha: 0.7),
+            ),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           Text(
             'All caught up',
             style: TextStyle(
@@ -447,10 +503,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               color: isDark ? Colors.white : navy,
             ),
           ),
-          const SizedBox(height: 2),
+          const SizedBox(height: 4),
           const Text(
-            'You have no notifications to review.',
-            style: TextStyle(fontSize: 11.5, color: muted),
+            'You have no unread updates to review.',
+            style: TextStyle(fontSize: 12, color: muted),
           ),
         ],
       ),
@@ -464,20 +520,20 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF1E293B) : Colors.white,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         border: Border.all(
           color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
         ),
       ),
       child: Column(
         children: [
-          const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 30),
-          const SizedBox(height: 6),
+          const Icon(Icons.error_outline_rounded, color: Color(0xFFDC2626), size: 28),
+          const SizedBox(height: 8),
           Text(
             _error ?? 'Failed to load notifications.',
             style: const TextStyle(fontSize: 12, color: muted),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           ElevatedButton(
             onPressed: _loadNotifications,
             style: ElevatedButton.styleFrom(
@@ -485,45 +541,133 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               foregroundColor: isDark ? navy : Colors.white,
               elevation: 0,
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(6),
               ),
             ),
-            child: const Text('Try Again', style: TextStyle(fontSize: 12)),
+            child: const Text('Try Again', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
           ),
         ],
       ),
     );
   }
 
-  IconData _notificationIcon(String type) {
-    switch (type.trim().toLowerCase()) {
-      case 'event':
-      case 'upcoming_event':
-        return Icons.event_note_rounded;
-      case 'attendance':
-      case 'attendance_recorded':
-        return Icons.verified_rounded;
-      case 'sanction':
-      case 'warning':
-        return Icons.gpp_bad_rounded;
-      default:
-        return Icons.notifications_active_rounded;
-    }
-  }
+  // --------------------------------------------------------------------------
+  // DESIGN SYSTEM CONFIGURATION MAPPER
+  // --------------------------------------------------------------------------
 
-  Color _notificationColor(String type) {
-    switch (type.trim().toLowerCase()) {
-      case 'attendance':
-      case 'attendance_recorded':
-        return const Color(0xFF16A34A); // Green for attendance
-      case 'sanction':
-      case 'warning':
-        return const Color(0xFFDC2626); // Red for sanctions
-      case 'event':
-      case 'upcoming_event':
-        return const Color(0xFF3B82F6); // Blue for scheduled events
-      default:
-        return const Color(0xFFD97706); // Amber for general
+  _NotificationConfig _getNotificationConfig(String type, bool isDark) {
+    final t = type.trim().toLowerCase();
+
+    // 1. ATTENDANCE FAILED / ABSENCE / SANCTION
+    if (t.contains('attendance') && (t.contains('fail') || t.contains('error') || t.contains('absent'))) {
+      return const _NotificationConfig(
+        color: Color(0xFFDC2626), // Red 600
+        badgeBgLight: Color(0xFFFEE2E2),
+        badgeTextLight: Color(0xFFB91C1C),
+        iconBgLight: Color(0xFFFEF2F2),
+        badgeBgDark: Color(0xFF7F1D1D),
+        badgeTextDark: Color(0xFFFECACA),
+        iconBgDark: Color(0xFF450A0A),
+        icon: Icons.cancel_outlined,
+        badgeLabel: 'ATTENDANCE FAILED',
+      );
     }
+
+    // 2. ATTENDANCE SUCCESS / VERIFIED PRESENT
+    if (t.contains('attendance')) {
+      return const _NotificationConfig(
+        color: Color(0xFF16A34A), // Emerald 600
+        badgeBgLight: Color(0xFFDCFCE7),
+        badgeTextLight: Color(0xFF15803D),
+        iconBgLight: Color(0xFFF0FDF4),
+        badgeBgDark: Color(0xFF064E3B),
+        badgeTextDark: Color(0xFF86EFAC),
+        iconBgDark: Color(0xFF022C22),
+        icon: Icons.check_circle_outline_rounded,
+        badgeLabel: 'VERIFIED PRESENT',
+      );
+    }
+
+    // 3. EVENT UPDATED / SCHEDULE CHANGE
+    if (t.contains('update') || t.contains('reschedule') || t.contains('change')) {
+      return const _NotificationConfig(
+        color: Color(0xFFD97706), // Amber 600
+        badgeBgLight: Color(0xFFFEF3C7),
+        badgeTextLight: Color(0xFFB45309),
+        iconBgLight: Color(0xFFFFFBEB),
+        badgeBgDark: Color(0xFF78350F),
+        badgeTextDark: Color(0xFFFDE68A),
+        iconBgDark: Color(0xFF451A03),
+        icon: Icons.update_rounded,
+        badgeLabel: 'EVENT UPDATED',
+      );
+    }
+
+    // 4. NEW EVENT
+    if (t.contains('event')) {
+      return const _NotificationConfig(
+        color: Color(0xFF2563EB), // Blue 600
+        badgeBgLight: Color(0xFFDBEAFE),
+        badgeTextLight: Color(0xFF1D4ED8),
+        iconBgLight: Color(0xFFEFF6FF),
+        badgeBgDark: Color(0xFF1E3A8A),
+        badgeTextDark: Color(0xFF93C5FD),
+        iconBgDark: Color(0xFF172554),
+        icon: Icons.calendar_today_outlined,
+        badgeLabel: 'NEW EVENT',
+      );
+    }
+
+    // 5. SANCTION / WARNING / PENALTY
+    if (t.contains('sanction') || t.contains('warning') || t.contains('penalty')) {
+      return const _NotificationConfig(
+        color: Color(0xFFE11D48), // Rose 600
+        badgeBgLight: Color(0xFFFFE4E6),
+        badgeTextLight: Color(0xFFBE123C),
+        iconBgLight: Color(0xFFFFF1F2),
+        badgeBgDark: Color(0xFF881337),
+        badgeTextDark: Color(0xFFFDA4AF),
+        iconBgDark: Color(0xFF4C0519),
+        icon: Icons.gpp_maybe_outlined,
+        badgeLabel: 'SANCTION NOTICE',
+      );
+    }
+
+    // 6. DEFAULT / GENERAL
+    return const _NotificationConfig(
+      color: Color(0xFF475569), // Slate 600
+      badgeBgLight: Color(0xFFE2E8F0),
+      badgeTextLight: Color(0xFF334155),
+      iconBgLight: Color(0xFFF1F5F9),
+      badgeBgDark: Color(0xFF334155),
+      badgeTextDark: Color(0xFFCBD5E1),
+      iconBgDark: Color(0xFF1E293B),
+      icon: Icons.notifications_none_outlined,
+      badgeLabel: 'GENERAL NOTICE',
+    );
   }
+}
+
+class _NotificationConfig {
+  final Color color;
+  final Color badgeBgLight;
+  final Color badgeTextLight;
+  final Color iconBgLight;
+  final Color badgeBgDark;
+  final Color badgeTextDark;
+  final Color iconBgDark;
+  final IconData icon;
+  final String badgeLabel;
+
+  const _NotificationConfig({
+    required this.color,
+    required this.badgeBgLight,
+    required this.badgeTextLight,
+    required this.iconBgLight,
+    required this.badgeBgDark,
+    required this.badgeTextDark,
+    required this.iconBgDark,
+    required this.icon,
+    required this.badgeLabel,
+  });
 }

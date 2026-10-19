@@ -88,136 +88,246 @@ class _AttendanceFaceVerificationScreenState
   }
 
   // --------------------------------------------------------------------------
-  // STRICT ADMIN WINDOW ROUTING (ZERO MIDPOINT CALCULATION)
+  // AUTOMATIC WINDOW & ACTIVE SESSION DETECTION
   // --------------------------------------------------------------------------
 
   AttendanceSessionType? _determineCurrentSession() {
     final now = DateTime.now();
 
-    DateTime? parseTimeString(String? str) {
+    String? getRawVal(List<String> keys) {
+      return _findInMap(widget.event.raw, keys);
+    }
+
+    DateTime? parseSingleTime(String? str) {
       if (str == null) return null;
       final text = str.trim();
-      if (text.isEmpty || text.toLowerCase() == 'null') return null;
-      try {
-        final uppercase = text.toUpperCase();
-        if (uppercase.contains('AM') || uppercase.contains('PM')) {
-          final parsed = DateFormat('h:mm a').parseLoose(uppercase);
-          return DateTime(
-              now.year, now.month, now.day, parsed.hour, parsed.minute, parsed.second);
-        }
-        final parts = text.split(':');
+      if (text.isEmpty || text.toLowerCase() == 'null' || text.toLowerCase() == 'tba') return null;
+
+      const formats = ['HH:mm:ss', 'HH:mm', 'h:mm a', 'hh:mm a', 'h:mmA', 'hh:mmA'];
+      for (final format in formats) {
+        try {
+          final parsed = DateFormat(format, 'en_US').parseLoose(text.toUpperCase());
+          return DateTime(now.year, now.month, now.day, parsed.hour, parsed.minute, parsed.second);
+        } catch (_) {}
+      }
+      return null;
+    }
+
+    List<DateTime?> extractWindowTimes({
+      required List<String> windowKeys,
+      required List<String> startKeys,
+      required List<String> endKeys,
+      String? fallbackStart,
+      String? fallbackEnd,
+    }) {
+      final combinedStr = getRawVal(windowKeys);
+      if (combinedStr != null && combinedStr.contains(RegExp(r'[-–]'))) {
+        final parts = combinedStr.split(RegExp(r'[-–]')).map((s) => s.trim()).toList();
         if (parts.length >= 2) {
-          final hour = int.parse(parts[0].trim());
-          final minute = int.parse(parts[1].trim());
-          final second =
-              parts.length >= 3 ? int.parse(parts[2].trim().split(' ')[0]) : 0;
-          return DateTime(
-              now.year, now.month, now.day, hour, minute, second);
-        }
-      } catch (_) {}
-      return null;
-    }
-
-    String? getRawVal(List<String> keys) {
-      for (final key in keys) {
-        final val = widget.event.raw[key];
-        if (val != null) {
-          final text = val.toString().trim();
-          if (text.isNotEmpty && text.toLowerCase() != 'null') return text;
+          final s = parseSingleTime(parts[0]);
+          final e = parseSingleTime(parts[1]);
+          if (s != null || e != null) {
+            return [s, e];
+          }
         }
       }
-      return null;
+
+      final rawStart = getRawVal(startKeys) ?? fallbackStart;
+      final rawEnd = getRawVal(endKeys) ?? fallbackEnd;
+
+      return [parseSingleTime(rawStart), parseSingleTime(rawEnd)];
     }
 
-    // 1. Extract Admin Time-In Window Boundaries
-    final timeInStart = parseTimeString(getRawVal([
-          'time_in_start',
-          'timeInStart',
-          'time_in_start_time',
-          'time_in_begin',
-          'start_time',
-          'time_in',
-          'attendance_start'
-        ])) ?? parseTimeString(widget.event.startTime);
+    // 1. Extract Time-In Boundaries
+    final timeInTimes = extractWindowTimes(
+      windowKeys: [
+        'time_in_window',
+        'timeInWindow',
+        'time_in_range',
+        'time_in_slot',
+        'time_in_text',
+        'timeInText'
+      ],
+      startKeys: [
+        'time_in_start',
+        'timeInStart',
+        'time_in_start_time',
+        'timeInStartTime',
+        'time_in_window_start',
+        'timeInWindowStart',
+        'time_in_from',
+        'timeInFrom',
+        'time_in_open',
+        'timeInOpen',
+        'timein_start',
+        'in_start',
+        'time_in_begin',
+        'start_time',
+        'time_in',
+        'attendance_start'
+      ],
+      endKeys: [
+        'time_in_end',
+        'timeInEnd',
+        'time_in_end_time',
+        'timeInEndTime',
+        'time_in_window_end',
+        'timeInWindowEnd',
+        'time_in_to',
+        'timeInTo',
+        'time_in_close',
+        'timeInClose',
+        'timein_end',
+        'in_end',
+        'time_in_cutoff',
+        'time_in_limit'
+      ],
+      fallbackStart: widget.event.startTime,
+    );
 
-    final timeInEnd = parseTimeString(getRawVal([
-      'time_in_end',
-      'timeInEnd',
-      'time_in_end_time',
-      'time_in_cutoff',
-      'time_in_limit',
-      'time_in_to',
-      'time_in_close'
-    ]));
+    // 2. Extract Time-Out Boundaries
+    final timeOutTimes = extractWindowTimes(
+      windowKeys: [
+        'time_out_window',
+        'timeOutWindow',
+        'time_out_range',
+        'time_out_slot',
+        'time_out_text',
+        'timeOutText'
+      ],
+      startKeys: [
+        'time_out_start',
+        'timeOutStart',
+        'time_out_start_time',
+        'timeOutStartTime',
+        'time_out_window_start',
+        'timeOutWindowStart',
+        'time_out_from',
+        'timeOutFrom',
+        'time_out_open',
+        'timeOutOpen',
+        'timeout_start',
+        'out_start',
+        'time_out_begin'
+      ],
+      endKeys: [
+        'time_out_end',
+        'timeOutEnd',
+        'time_out_end_time',
+        'timeOutEndTime',
+        'time_out_window_end',
+        'timeOutWindowEnd',
+        'time_out_to',
+        'timeOutTo',
+        'time_out_close',
+        'timeOutClose',
+        'timeout_end',
+        'out_end',
+        'time_out_cutoff',
+        'time_out_limit'
+      ],
+      fallbackEnd: widget.event.endTime,
+    );
 
-    // 2. Extract Admin Time-Out Window Boundaries
-    final timeOutStart = parseTimeString(getRawVal([
-      'time_out_start',
-      'timeOutStart',
-      'time_out_start_time',
-      'time_out_begin',
-      'time_out_from',
-      'time_out_open'
-    ]));
+    var timeInStart = timeInTimes[0];
+    var timeInEnd = timeInTimes[1];
+    var timeOutStart = timeOutTimes[0];
+    var timeOutEnd = timeOutTimes[1];
 
-    final timeOutEnd = parseTimeString(getRawVal([
-          'time_out_end',
-          'timeOutEnd',
-          'time_out_end_time',
-          'time_out_cutoff',
-          'time_out_close',
-          'end_time',
-          'time_out',
-          'attendance_end'
-        ])) ?? parseTimeString(widget.event.endTime);
-
-    // ------------------------------------------------------------------------
-    // RULE 1: STRICT TIME-IN WINDOW CHECK
-    // Every single second inside [timeInStart, timeInEnd] routes to TIME-IN
-    // ------------------------------------------------------------------------
-    if (timeInStart != null && timeInEnd != null) {
-      final inTimeInWindow = (now.isAfter(timeInStart) || now.isAtSameMomentAs(timeInStart)) &&
-          (now.isBefore(timeInEnd) || now.isAtSameMomentAs(timeInEnd));
-
-      if (inTimeInWindow && !_hasTimeIn) {
-        return AttendanceSessionType.timeIn;
+    // Infer missing bounds
+    if (timeInEnd == null) {
+      if (timeOutStart != null) {
+        timeInEnd = timeOutStart;
+      } else if (timeInStart != null && timeOutEnd != null) {
+        final diff = timeOutEnd.difference(timeInStart).inSeconds ~/ 2;
+        timeInEnd = timeInStart.add(Duration(seconds: diff));
+      } else if (timeInStart != null) {
+        timeInEnd = timeInStart.add(const Duration(hours: 2));
       }
     }
 
-    // ------------------------------------------------------------------------
-    // RULE 2: STRICT TIME-OUT WINDOW CHECK
-    // Every second inside [timeOutStart, timeOutEnd] routes to TIME-OUT
-    // (ALLOWED REGARDLESS OF WHETHER THE STUDENT ATTENDED TIME-IN)
-    // ------------------------------------------------------------------------
-    if (timeOutStart != null && timeOutEnd != null) {
-      final inTimeOutWindow = (now.isAfter(timeOutStart) || now.isAtSameMomentAs(timeOutStart)) &&
-          (now.isBefore(timeOutEnd) || now.isAtSameMomentAs(timeOutEnd));
+    if (timeOutStart == null) {
+      if (timeInEnd != null) {
+        timeOutStart = timeInEnd;
+      } else if (timeInStart != null && timeOutEnd != null) {
+        final diff = timeOutEnd.difference(timeInStart).inSeconds ~/ 2;
+        timeOutStart = timeInStart.add(Duration(seconds: diff));
+      } else if (timeOutEnd != null) {
+        timeOutStart = timeOutEnd.subtract(const Duration(hours: 2));
+      }
+    }
 
-      if (inTimeOutWindow && !_hasTimeOut) {
+    const margin = Duration(minutes: 15);
+
+    // ------------------------------------------------------------------------
+    // EVALUATION RULE 1: TIME-OUT WINDOW CHECK
+    // If current time is inside Time-Out window and student hasn't recorded Time-Out,
+    // route to TIME-OUT (even if Time-In was missed!).
+    // ------------------------------------------------------------------------
+    if (timeOutStart != null && !_hasTimeOut) {
+      final startBound = timeOutStart.subtract(margin);
+      final endBound = (timeOutEnd ?? timeOutStart.add(const Duration(hours: 4))).add(margin);
+
+      if ((now.isAfter(startBound) || now.isAtSameMomentAs(startBound)) &&
+          (now.isBefore(endBound) || now.isAtSameMomentAs(endBound))) {
         return AttendanceSessionType.timeOut;
       }
     }
 
     // ------------------------------------------------------------------------
-    // RULE 3: SINGLE BLOCK / BROAD EVENT FALLBACK (No sub-window cutoffs in JSON)
+    // EVALUATION RULE 2: TIME-IN WINDOW CHECK
+    // If current time is inside Time-In window and student hasn't recorded Time-In,
+    // route to TIME-IN.
     // ------------------------------------------------------------------------
-    if (timeInStart != null && timeOutEnd != null) {
-      final isWithinEvent = (now.isAfter(timeInStart) || now.isAtSameMomentAs(timeInStart)) &&
-          (now.isBefore(timeOutEnd) || now.isAtSameMomentAs(timeOutEnd));
+    if (timeInStart != null && !_hasTimeIn) {
+      final startBound = timeInStart.subtract(margin);
+      final endBound = (timeInEnd ?? timeInStart.add(const Duration(hours: 4))).add(margin);
 
-      if (isWithinEvent) {
-        // If explicit time_in_end passed -> force Time-Out
-        if (timeInEnd != null && now.isAfter(timeInEnd)) {
-          if (!_hasTimeOut) return AttendanceSessionType.timeOut;
-        } 
-        // If explicit time_out_start not reached -> force Time-In
-        else if (timeOutStart != null && now.isBefore(timeOutStart)) {
-          if (!_hasTimeIn) return AttendanceSessionType.timeIn;
-        } 
-        // Unsplit event block: 1st check-in = Time-In, 2nd check-in = Time-Out
-        else {
-          if (!_hasTimeIn) return AttendanceSessionType.timeIn;
-          if (!_hasTimeOut) return AttendanceSessionType.timeOut;
+      if ((now.isAfter(startBound) || now.isAtSameMomentAs(startBound)) &&
+          (now.isBefore(endBound) || now.isAtSameMomentAs(endBound))) {
+        return AttendanceSessionType.timeIn;
+      }
+    }
+
+    // ------------------------------------------------------------------------
+    // EVALUATION RULE 3: MID-EVENT / PAST TIME-IN CUTOFF
+    // ------------------------------------------------------------------------
+    if (!_hasTimeOut) {
+      if (_hasTimeIn || (timeInEnd != null && now.isAfter(timeInEnd))) {
+        return AttendanceSessionType.timeOut;
+      }
+    }
+
+    if (!_hasTimeIn) {
+      return AttendanceSessionType.timeIn;
+    }
+
+    return null;
+  }
+
+  String? _findInMap(Map map, List<String> targetKeys) {
+    final cleanTargets = targetKeys.map((k) => k.toLowerCase().replaceAll('_', '')).toList();
+
+    for (final entry in map.entries) {
+      final keyStr = entry.key.toString().toLowerCase().replaceAll('_', '');
+      if (cleanTargets.contains(keyStr) && entry.value != null) {
+        final val = entry.value.toString().trim();
+        if (val.isNotEmpty && val.toLowerCase() != 'null') {
+          return val;
+        }
+      }
+    }
+
+    for (final value in map.values) {
+      if (value is Map) {
+        final found = _findInMap(value, targetKeys);
+        if (found != null) return found;
+      } else if (value is List) {
+        for (final item in value) {
+          if (item is Map) {
+            final found = _findInMap(item, targetKeys);
+            if (found != null) return found;
+          }
         }
       }
     }
@@ -668,10 +778,6 @@ class _AttendanceFaceVerificationScreenState
     _camera?.dispose();
     super.dispose();
   }
-
-  // --------------------------------------------------------------------------
-  // UI BUILD
-  // --------------------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {

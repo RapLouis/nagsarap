@@ -351,28 +351,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final outStart = timeOutParts.isNotEmpty ? _parseTimeToDateTime(timeOutParts[0]) : null;
     final outEnd = timeOutParts.length > 1 ? _parseTimeToDateTime(timeOutParts[1]) : null;
 
-    final count = _getAttendanceCountForEvent(event);
-    if (count >= 2) return false;
+    if (_hasTimeOutForEvent(event)) return false;
 
-    if (count == 0 && inStart != null) {
-      final startBound = inStart.subtract(const Duration(minutes: 15));
-      final endBound = inEnd ?? outStart ?? inStart.add(const Duration(hours: 4));
-      if (now.isAfter(startBound) && now.isBefore(endBound)) {
+    const margin = Duration(minutes: 15);
+
+    // 1. Time-Out Window check (allows Time-Out check-in even if Time-In was missed)
+    if (outStart != null) {
+      final startBound = outStart.subtract(margin);
+      final endBound = (outEnd ?? outStart.add(const Duration(hours: 4))).add(margin);
+      if ((now.isAfter(startBound) || now.isAtSameMomentAs(startBound)) &&
+          (now.isBefore(endBound) || now.isAtSameMomentAs(endBound))) {
         return true;
       }
     }
 
-    if (count == 1 && outStart != null) {
-      final startBound = outStart.subtract(const Duration(minutes: 15));
-      final endBound = outEnd ?? outStart.add(const Duration(hours: 6));
-      if (now.isAfter(startBound) && now.isBefore(endBound)) {
+    // 2. Time-In Window check
+    if (!_hasTimeInForEvent(event) && inStart != null) {
+      final startBound = inStart.subtract(margin);
+      final endBound = (inEnd ?? outStart ?? inStart.add(const Duration(hours: 4))).add(margin);
+      if ((now.isAfter(startBound) || now.isAtSameMomentAs(startBound)) &&
+          (now.isBefore(endBound) || now.isAtSameMomentAs(endBound))) {
         return true;
       }
     }
 
     if (inStart != null && outEnd != null) {
-      if (now.isAfter(inStart.subtract(const Duration(minutes: 15))) &&
-          now.isBefore(outEnd.add(const Duration(minutes: 15)))) {
+      if (now.isAfter(inStart.subtract(margin)) &&
+          now.isBefore(outEnd.add(margin))) {
         return true;
       }
     }
