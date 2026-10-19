@@ -42,7 +42,7 @@ export function AdminSidebar({ isOpen = false, onClose }: AdminSidebarProps) {
                         </div>
                         <div className="flex items-baseline tracking-wider">
                             <span className="text-2xl font-black text-[#FFD600]">4</span>
-                            <span className="text-lg font-bold text-white">4ttnd</span>
+                            <span className="text-lg font-bold text-white">ttnd</span>
                         </div>
                     </div>
                     {/* Mobile Close Button */}

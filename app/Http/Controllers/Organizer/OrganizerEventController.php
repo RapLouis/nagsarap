@@ -21,7 +21,7 @@ class OrganizerEventController extends Controller
         $baseQuery = Event::where('user_id', $userId);
 
         $counts = [
-            'ongoing' => (clone $baseQuery)->where('approval_status', 'approved')->whereDate('event_date', '<=', $today)->where(fn($q) => $q->whereDate('event_end_date', '>=', $today)->orWhereNull('event_end_date'))->count(),
+            'ongoing' => (clone $baseQuery)->where('approval_status', 'approved')->whereDate('event_date', $today)->count(),
             'upcoming' => (clone $baseQuery)->where('approval_status', 'approved')->whereDate('event_date', '>', $today)->count(),
             'completed' => (clone $baseQuery)->where('approval_status', 'approved')->where(fn($q) => $q->whereDate('event_end_date', '<', $today)->orWhere(fn($sub) => $sub->whereNull('event_end_date')->whereDate('event_date', '<', $today)))->count(),
             'pending' => (clone $baseQuery)->where('approval_status', 'pending')->count(),
@@ -38,8 +38,7 @@ class OrganizerEventController extends Controller
         switch ($tab) {
             case 'ongoing':
                 $query->where('approval_status', 'approved')
-                      ->whereDate('event_date', '<=', $today)
-                      ->where(fn($q) => $q->whereDate('event_end_date', '>=', $today)->orWhereNull('event_end_date'));
+                      ->whereDate('event_date', $today);
                 break;
             case 'upcoming':
                 $query->where('approval_status', 'approved')->whereDate('event_date', '>', $today);

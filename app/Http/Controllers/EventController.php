@@ -60,7 +60,8 @@ class EventController extends Controller
 
         switch ($activeTab) {
             case 'ongoing':
-                $eventsQuery->ongoing();    
+                $eventsQuery->ongoing()
+                            ->whereDate('event_date', Carbon::today());    
                 break;
             case 'upcoming':
                 $eventsQuery->upcoming();
@@ -75,7 +76,8 @@ class EventController extends Controller
                 $eventsQuery->declined();
                 break;
             default:
-                $eventsQuery->ongoing();
+                $eventsQuery->ongoing()
+                            ->whereDate('event_date', Carbon::today());
                 break;
         }
 
@@ -95,7 +97,7 @@ class EventController extends Controller
         });
 
         $counts = [
-            'ongoing'   => Event::ongoing()->count(),
+            'ongoing'   => Event::ongoing()->whereDate('event_date', Carbon::today())->count(),
             'upcoming'  => Event::upcoming()->count(),
             'completed' => Event::completed()->count(),
             'pending'   => Event::pending()->count(),
