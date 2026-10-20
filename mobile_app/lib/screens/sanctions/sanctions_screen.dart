@@ -22,7 +22,7 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
   String? _error;
 
   List<SanctionItem> _sanctions = const [];
-  String _selectedFilter = 'All'; // 'All', 'Pending', 'Resolved'
+  String _selectedFilter = 'All';
 
   @override
   void initState() {
@@ -46,7 +46,6 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
       if (result.success) {
         final sorted = List<SanctionItem>.from(result.sanctions);
 
-        // Sort descending: Latest/newest missed events on top
         sorted.sort((a, b) {
           final first = a.issuedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
           final second = b.issuedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
@@ -94,33 +93,27 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
 
     return Scaffold(
       backgroundColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(80),
-        child: Container(
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF1E293B) : navy,
-            border: Border(
-              bottom: BorderSide(
-                color: isDark ? const Color(0xFF334155) : const Color(0xFF0F172A).withValues(alpha: 0.1),
-              ),
-            ),
-          ),
-          child: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: const Text(
-                  'Sanctions Monitoring Table',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: -0.4,
-                  ),
-                ),
-              ),
-            ),
+      appBar: AppBar(
+        backgroundColor: isDark ? const Color(0xFF1E293B) : navy,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () {
+            if (Navigator.of(context).canPop()) {
+              Navigator.of(context).pop();
+            } else {
+              Navigator.of(context).pushReplacementNamed('/home');
+            }
+          },
+        ),
+        title: const Text(
+          'Sanctions',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 18,
+            fontWeight: FontWeight.w700,
+            letterSpacing: -0.3,
           ),
         ),
       ),
@@ -262,7 +255,6 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // TOP ROW: EVENT NAME + RESOLVED/PENDING STATUS
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -281,10 +273,7 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
                 _buildStatusPill(sanction.isResolved, isDark),
               ],
             ),
-
             const SizedBox(height: 10),
-
-            // MIDDLE ROW: ISSUE TYPE BADGE + DATE
             Row(
               children: [
                 Container(
@@ -375,16 +364,11 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
     );
   }
 
-  // --------------------------------------------------------------------------
-  // SMART ISSUE PARSER & FORMATTER
-  // --------------------------------------------------------------------------
-
   _ParsedIssue _parseIssueInfo(SanctionItem sanction) {
     final rawTitle = sanction.title.trim();
     String eventName = rawTitle;
     String lower = rawTitle.toLowerCase();
 
-    // Extract Event Name if formatted as "Event Name - Issue Type" or "Event Name : Issue Type"
     if (rawTitle.contains(' - ')) {
       final parts = rawTitle.split(' - ');
       eventName = parts[0].trim();
@@ -408,21 +392,21 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
       return _ParsedIssue(
         eventName: eventName.isEmpty ? 'Scheduled Event' : eventName,
         issueLabel: 'NO ATTENDANCE RECORDED',
-        color: const Color(0xFFDC2626), // Crimson Red
+        color: const Color(0xFFDC2626),
         icon: Icons.event_busy_rounded,
       );
     } else if (isTimeInMissed) {
       return _ParsedIssue(
         eventName: eventName.isEmpty ? 'Scheduled Event' : eventName,
         issueLabel: 'TIME-IN MISSED',
-        color: const Color(0xFFD97706), // Amber
+        color: const Color(0xFFD97706),
         icon: Icons.login_rounded,
       );
     } else if (isTimeOutMissed) {
       return _ParsedIssue(
         eventName: eventName.isEmpty ? 'Scheduled Event' : eventName,
         issueLabel: 'TIME-OUT MISSED',
-        color: const Color(0xFFEA580C), // Orange
+        color: const Color(0xFFEA580C),
         icon: Icons.logout_rounded,
       );
     }
@@ -430,7 +414,7 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
     return _ParsedIssue(
       eventName: eventName.isEmpty ? 'Scheduled Event' : eventName,
       issueLabel: rawTitle.toUpperCase(),
-      color: const Color(0xFF475569), // Slate
+      color: const Color(0xFF475569),
       icon: Icons.warning_amber_rounded,
     );
   }
