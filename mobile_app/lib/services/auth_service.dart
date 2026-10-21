@@ -15,6 +15,9 @@ class AuthResult {
 
   final bool offline;
 
+  /// Compatibility getter for UI widgets
+  bool get isOffline => offline;
+
   const AuthResult({
     required this.success,
     required this.message,
@@ -34,27 +37,15 @@ class AuthService {
   static const FlutterSecureStorage _storage = FlutterSecureStorage();
 
   static const String _cachedUserKey = 'ccis_cached_user';
-
   static const String _cachedStudentKey = 'ccis_cached_student';
-
   static const String _cachedSessionKey = 'ccis_offline_session_enabled';
 
   // ===========================================================================
   // LOGIN
   //
-  // First authentication MUST happen online.
-  //
-  // We intentionally do NOT store the password.
-  //
-  // After Laravel successfully authenticates the student:
-  //
-  // Laravel
-  //   ↓
-  // Sanctum token
-  //   ↓
-  // user/student profile cached securely
-  //   ↓
-  // future offline app launches can restore the verified session
+  // Online: Authenticates with Laravel backend and caches student profile.
+  // Offline: Falls back gracefully to verified cached offline session if network
+  // is unavailable and prior login exists.
   // ===========================================================================
 
   Future<AuthResult> login({
@@ -66,8 +57,8 @@ class AuthService {
         ApiEndpoints.login,
         data: {'student_number': studentNumber.trim(), 'password': password},
         options: Options(
-          sendTimeout: const Duration(seconds: 15),
-          receiveTimeout: const Duration(seconds: 15),
+          sendTimeout: const Duration(seconds: 10),
+          receiveTimeout: const Duration(seconds: 10),
         ),
       );
 
@@ -121,25 +112,42 @@ class AuthService {
         offline: false,
       );
     } on DioException catch (e) {
-      // A typed username/password login must not silently bypass Laravel.
-      //
-      // If the server cannot be contacted, the existing verified cached
-      // session can still be restored by AuthGate/me().
+      // If server or network is unreachable, fallback to verified offline cache
       if (e.response == null) {
+        final offlineSession = await restoreOfflineSession();
+        if (offlineSession.success) {
+          return AuthResult(
+            success: true,
+            message: 'Logged in using cached offline session.',
+            user: offlineSession.user,
+            student: offlineSession.student,
+            offline: true,
+          );
+        }
+
         return const AuthResult(
           success: false,
           message:
-              'Internet is unavailable. '
-              'If this device was previously signed in, reopen the app '
-              'to restore the saved offline session.',
+              'Network unavailable. An initial online login is required before going offline.',
         );
       }
 
       return AuthResult(success: false, message: _extractErrorMessage(e));
     } catch (_) {
+      final offlineSession = await restoreOfflineSession();
+      if (offlineSession.success) {
+        return AuthResult(
+          success: true,
+          message: 'Logged in using cached offline session.',
+          user: offlineSession.user,
+          student: offlineSession.student,
+          offline: true,
+        );
+      }
+
       return const AuthResult(
         success: false,
-        message: 'Unable to log in. Please try again.',
+        message: 'Unable to log in. Please check your connection.',
       );
     }
   }
@@ -148,18 +156,10 @@ class AuthService {
   // CURRENT USER / SESSION RESTORE
   //
   // ONLINE:
-  // saved token
-  //    ↓
-  // Laravel /me
-  //    ↓
-  // refresh secure cache
+  // saved token -> Laravel /me -> refresh secure cache
   //
   // OFFLINE:
-  // saved token
-  //    ↓
-  // Laravel unreachable
-  //    ↓
-  // restore last SERVER-VERIFIED local identity
+  // saved token -> Laravel unreachable -> restore last server-verified identity
   // ===========================================================================
 
   Future<AuthResult> me() async {
@@ -211,7 +211,7 @@ class AuthService {
       final user = parsed.$1;
       final student = parsed.$2;
 
-      // Refresh the last known server-verified identity.
+      // Refresh last known server-verified identity.
       await _saveOfflineSession(user: user, student: student);
 
       return AuthResult(
@@ -222,10 +222,6 @@ class AuthService {
         offline: false,
       );
     } on DioException catch (e) {
-      // ==============================================================
-      // SERVER REJECTED TOKEN
-      // ==============================================================
-
       if (e.response?.statusCode == 401) {
         await _clearLocalSession();
 
@@ -235,17 +231,8 @@ class AuthService {
         );
       }
 
-      // ==============================================================
-      // INTERNET / SERVER UNAVAILABLE
-      //
-      // No HTTP response means the app was unable to contact Laravel.
-      //
-      // Restore only a session that Laravel authenticated earlier.
-      // ==============================================================
-
       if (e.response == null) {
         final cached = await restoreOfflineSession();
-
         if (cached.success) {
           return cached;
         }
@@ -253,10 +240,7 @@ class AuthService {
 
       return AuthResult(success: false, message: _extractErrorMessage(e));
     } catch (_) {
-      // Last fallback:
-      // if networking itself failed unexpectedly, attempt trusted cache.
       final cached = await restoreOfflineSession();
-
       if (cached.success) {
         return cached;
       }
@@ -293,7 +277,6 @@ class AuthService {
       }
 
       final userJson = await _storage.read(key: _cachedUserKey);
-
       final studentJson = await _storage.read(key: _cachedStudentKey);
 
       if ((userJson == null || userJson.isEmpty) &&
@@ -309,7 +292,6 @@ class AuthService {
 
       if (userJson != null && userJson.isNotEmpty) {
         final decoded = jsonDecode(userJson);
-
         if (decoded is Map) {
           user = Map<String, dynamic>.from(decoded);
         }
@@ -317,7 +299,6 @@ class AuthService {
 
       if (studentJson != null && studentJson.isNotEmpty) {
         final decoded = jsonDecode(studentJson);
-
         if (decoded is Map) {
           student = Map<String, dynamic>.from(decoded);
         }
@@ -361,8 +342,6 @@ class AuthService {
       await _storage.write(key: _cachedStudentKey, value: jsonEncode(student));
     }
 
-    // Do not enable offline session restoration unless at least one identity
-    // object actually exists.
     if (user != null || student != null) {
       await _storage.write(key: _cachedSessionKey, value: 'true');
     }
@@ -370,12 +349,6 @@ class AuthService {
 
   // ===========================================================================
   // LOGOUT
-  //
-  // Explicit logout removes BOTH:
-  // - Sanctum token
-  // - offline identity cache
-  //
-  // Therefore a person cannot log out and then bypass authentication offline.
   // ===========================================================================
 
   Future<void> logout() async {
@@ -388,7 +361,7 @@ class AuthService {
         ),
       );
     } catch (_) {
-      // Local logout must still complete even while offline.
+      // Local logout must complete even while offline.
     } finally {
       await _clearLocalSession();
     }
@@ -396,11 +369,8 @@ class AuthService {
 
   Future<void> _clearLocalSession() async {
     await _api.removeToken();
-
     await _storage.delete(key: _cachedUserKey);
-
     await _storage.delete(key: _cachedStudentKey);
-
     await _storage.delete(key: _cachedSessionKey);
   }
 
