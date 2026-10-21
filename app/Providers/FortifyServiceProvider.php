@@ -11,6 +11,7 @@ use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\Password;
 use Inertia\Inertia;
+use Laravel\Fortify\Contracts\LoginResponse;
 use Laravel\Fortify\Contracts\RegisterResponse;
 use Laravel\Fortify\Features;
 use Laravel\Fortify\Fortify;
@@ -28,6 +29,17 @@ class FortifyServiceProvider extends ServiceProvider
             {
                 return redirect()->route('register.verify-face')
                     ->with('success', 'Account registered and Form 5 verified! Please complete live facial verification.');
+            }
+        });
+
+        // Bind custom post-login redirect response to force session persistence
+        $this->app->instance(LoginResponse::class, new class implements LoginResponse {
+            public function toResponse($request)
+            {
+                // Force session data to write to disk/database before sending redirect headers
+                $request->session()->save();
+
+                return redirect()->intended('/dashboard');
             }
         });
     }

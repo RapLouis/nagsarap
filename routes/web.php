@@ -228,6 +228,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::delete('/events/{event}', [EventController::class, 'destroy'])->name('events.destroy');
             Route::patch('/events/{event}/status', [EventController::class, 'updateStatus'])->name('events.update-status');
 
+            // Admin Event Approval Workflow
             Route::post('/events/{event}/approve', [AdminEventApprovalController::class, 'approve'])->name('events.approve');
             Route::post('/events/{event}/reject', [AdminEventApprovalController::class, 'reject'])->name('events.reject');
             
