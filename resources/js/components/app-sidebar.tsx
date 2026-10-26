@@ -3,7 +3,6 @@ import {
     Camera,
     Calendar,
     History,
-    User,
     LayoutGrid,
 } from 'lucide-react';
 import AppLogo from '@/components/app-logo';
@@ -18,7 +17,6 @@ import {
     SidebarMenuButton,
     SidebarMenuItem,
 } from '@/components/ui/sidebar';
-import { dashboard } from '@/routes';
 import type { NavItem } from '@/types';
 
 const NAVY = '#070b3f';
@@ -26,7 +24,7 @@ const NAVY = '#070b3f';
 const mainNavItems: NavItem[] = [
     {
         title: 'Dashboard',
-        href: dashboard(),
+        href: '/dashboard',
         icon: LayoutGrid,
     },
     {
@@ -58,7 +56,7 @@ export function AppSidebar() {
                 <SidebarMenu>
                     <SidebarMenuItem>
                         <SidebarMenuButton size="lg" asChild className="hover:bg-white/10 text-white">
-                            <Link href={dashboard()} prefetch className="flex items-center gap-3">
+                            <Link href="/dashboard" prefetch className="flex items-center gap-3">
                                 <AppLogo />
                             </Link>
                         </SidebarMenuButton>

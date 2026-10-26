@@ -1,3 +1,4 @@
+import React, { useState } from 'react';
 import { Form, Head, usePage, Link } from '@inertiajs/react';
 import ProfileController from '@/actions/App/Http/Controllers/Settings/ProfileController';
 import DeleteUser from '@/components/delete-user';
@@ -8,9 +9,15 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { edit } from '@/routes/profile';
 import { send } from '@/routes/verification';
-import { ShieldCheck, ShieldAlert, User, GraduationCap, KeyRound } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, User, GraduationCap, KeyRound, Key, ChevronRight, AlertCircle, Clock, CheckCircle2 } from 'lucide-react';
 import type { Auth } from '@/types';
 import { route } from 'ziggy-js';
+import ApplyOrganizerModal from '@/components/ApplyOrganizerModal'; // Adjust import path if needed
+
+type OrganizerApplicationStatus = {
+    status?: 'pending' | 'approved' | 'rejected';
+    rejection_reason?: string | null;
+};
 
 type StudentFillableData = {
     student_id?: number;
@@ -28,10 +35,12 @@ type StudentFillableData = {
     verification_status?: string;
     face_photo_path?: string | null;
     face_photo_url?: string | null;
+    organizer_application?: OrganizerApplicationStatus | null;
 };
 
 type UserData = Auth['user'] & StudentFillableData & {
     student?: StudentFillableData;
+    organizer_application?: OrganizerApplicationStatus | null;
 };
 
 type PageProps = {
@@ -51,10 +60,12 @@ export default function Profile({
     status?: string;
 }) {
     const props = usePage<PageProps>().props;
+    const [showApplyModal, setShowApplyModal] = useState(false);
     
     // Fallback to auth.user if custom controller prop is absent
     const currentUser = props.user || props.auth.user;
     const student = currentUser.student || currentUser;
+    const appStatus = student.organizer_application?.status || currentUser.organizer_application?.status;
 
     // Build full name: First Middle Surname Extension
     const fullName = [
@@ -259,7 +270,65 @@ export default function Profile({
                     </div>
                 </section>
 
-                {/* 3. ACCOUNT & SECURITY SETTINGS */}
+                {/* 3. ORGANIZER PERMISSIONS & KEY PAIR AUTHORIZATION */}
+                <section className="rounded-xl bg-card text-card-foreground p-6 shadow-sm border border-border space-y-6">
+                    <div className="flex items-center justify-between border-b border-border pb-4">
+                        <div className="flex items-center gap-2">
+                            <Key className="h-5 w-5 text-primary" />
+                            <Heading
+                                variant="small"
+                                title="Organizer Permissions"
+                                description="Manage event management access and key pair verification"
+                            />
+                        </div>
+
+                        {/* Status Badge */}
+                        {currentUser.role === 'organizer' ? (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                                <CheckCircle2 className="w-3.5 h-3.5" /> Active Organizer
+                            </span>
+                        ) : appStatus === 'pending' ? (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                                <Clock className="w-3.5 h-3.5" /> Pending Approval
+                            </span>
+                        ) : appStatus === 'rejected' ? (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20">
+                                <AlertCircle className="w-3.5 h-3.5" /> Application Rejected
+                            </span>
+                        ) : (
+                            <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-muted text-muted-foreground">
+                                Standard Student
+                            </span>
+                        )}
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div className="text-sm text-muted-foreground">
+                            {currentUser.role === 'organizer' ? (
+                                <p>You have organizer privileges. You can manage events and run the attendance kiosk.</p>
+                            ) : appStatus === 'pending' ? (
+                                <p>Your key pair application is currently under administrator review.</p>
+                            ) : (
+                                <p>Have an Organization Key Pair from an admin? Submit it here to apply for an Organizer role.</p>
+                            )}
+                        </div>
+
+                        {currentUser.role !== 'organizer' && (
+                            <Button
+                                type="button"
+                                onClick={() => setShowApplyModal(true)}
+                                style={{ backgroundColor: GOLD }}
+                                className="text-white hover:opacity-90 transition-opacity shrink-0 flex items-center gap-2"
+                            >
+                                <Key className="w-4 h-4" />
+                                {appStatus === 'pending' ? 'View Application Status' : 'Apply as Organizer'}
+                                <ChevronRight className="w-4 h-4" />
+                            </Button>
+                        )}
+                    </div>
+                </section>
+
+                {/* 4. ACCOUNT & SECURITY SETTINGS */}
                 <section className="rounded-xl bg-card text-card-foreground p-6 shadow-sm border border-border space-y-6">
                     <div className="flex items-center gap-2 border-b border-border pb-4">
                         <KeyRound className="h-5 w-5 text-primary" />
@@ -273,6 +342,14 @@ export default function Profile({
                     <DeleteUser />
                 </section>
             </div>
+
+            {/* ORGANIZER KEY PAIR SUBMISSION MODAL */}
+            <ApplyOrganizerModal
+                isOpen={showApplyModal}
+                onClose={() => setShowApplyModal(false)}
+                applicationStatus={appStatus}
+                rejectionReason={student.organizer_application?.rejection_reason || currentUser.organizer_application?.rejection_reason}
+            />
         </>
     );
 }
