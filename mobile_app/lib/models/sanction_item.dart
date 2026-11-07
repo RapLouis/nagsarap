@@ -6,6 +6,7 @@ class SanctionItem {
 
   final DateTime? issuedAt;
   final DateTime? resolvedAt;
+  final DateTime? eventDate;
 
   const SanctionItem({
     required this.id,
@@ -14,6 +15,7 @@ class SanctionItem {
     required this.status,
     required this.issuedAt,
     required this.resolvedAt,
+    this.eventDate,
   });
 
   factory SanctionItem.fromJson(Map<String, dynamic> json) {
@@ -24,6 +26,7 @@ class SanctionItem {
       status: _stringValue(json['status'], fallback: 'pending'),
       issuedAt: _dateValue(json['issued_at'] ?? json['created_at']),
       resolvedAt: _dateValue(json['resolved_at']),
+      eventDate: _dateValue(json['event_date'] ?? json['start_date'] ?? json['issued_at']),
     );
   }
 

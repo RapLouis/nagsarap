@@ -104,10 +104,6 @@ class RegistrationService {
 
   final ApiService _api = ApiService.instance;
 
-  // ===========================================================================
-  // REFERENCE PHOTO
-  // ===========================================================================
-
   Future<ReferencePhotoValidationResult> validateReferencePhoto({
     required XFile profilePhoto,
   }) async {
@@ -158,10 +154,6 @@ class RegistrationService {
       );
     }
   }
-
-  // ===========================================================================
-  // REGISTER STUDENT ACCOUNT
-  // ===========================================================================
 
   Future<RegistrationResult> register({
     required String studentNumber,
@@ -249,10 +241,6 @@ class RegistrationService {
     }
   }
 
-  // ===========================================================================
-  // SERVER LIVENESS CHALLENGE
-  // ===========================================================================
-
   Future<LivenessChallengeResult> requestLivenessChallenge() async {
     final sessionId = const Uuid().v4();
 
@@ -314,10 +302,6 @@ class RegistrationService {
       );
     }
   }
-
-  // ===========================================================================
-  // ANALYZE LIVE FRAME
-  // ===========================================================================
 
   Future<LivenessFrameResult> analyzeLivenessFrame({
     required XFile frame,
@@ -387,20 +371,26 @@ class RegistrationService {
     }
   }
 
-  // ===========================================================================
-  // FINAL BIOMETRIC VERIFICATION (INCLUDES NONCE AND SESSION ID)
-  // ===========================================================================
-
   Future<BiometricVerificationResult> verifyRegistrationFace({
     required XFile centerFrame,
     required XFile turnedFrame,
+    required List<XFile> flashFrames,
+    required List<String> flashColors,
     required String challengeNonce,
     required String sessionId,
   }) async {
     try {
-      final formData = FormData.fromMap({
+      final Map<String, dynamic> formMap = {
         'challenge_nonce': challengeNonce,
         'session_id': sessionId,
+        'frontal_image_base64': await MultipartFile.fromFile(
+          centerFrame.path,
+          filename: 'center.jpg',
+        ),
+        'turn_peak_image_base64': await MultipartFile.fromFile(
+          turnedFrame.path,
+          filename: 'turned.jpg',
+        ),
         'center_frame': await MultipartFile.fromFile(
           centerFrame.path,
           filename: 'center.jpg',
@@ -409,7 +399,17 @@ class RegistrationService {
           turnedFrame.path,
           filename: 'turned.jpg',
         ),
-      });
+      };
+
+      for (int i = 0; i < flashFrames.length; i++) {
+        formMap['flash_images_base64[$i]'] = await MultipartFile.fromFile(
+          flashFrames[i].path,
+          filename: 'flash_$i.jpg',
+        );
+        formMap['flash_colors[$i]'] = flashColors[i];
+      }
+
+      final formData = FormData.fromMap(formMap);
 
       final response = await _api.dio.post(
         ApiEndpoints.verifyRegistrationFace,
@@ -453,10 +453,6 @@ class RegistrationService {
       );
     }
   }
-
-  // ===========================================================================
-  // HELPERS
-  // ===========================================================================
 
   Map<String, dynamic>? _asMap(dynamic value) {
     if (value is Map) {

@@ -47,8 +47,8 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
         final sorted = List<SanctionItem>.from(result.sanctions);
 
         sorted.sort((a, b) {
-          final first = a.issuedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-          final second = b.issuedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          final first = a.eventDate ?? a.issuedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          final second = b.eventDate ?? b.issuedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
           return second.compareTo(first);
         });
 
@@ -70,22 +70,91 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
       setState(() {
         _loading = false;
         _sanctions = const [];
-        _error = 'Unable to load attendance issues.';
+        _error = 'Unable to load sanctions.';
       });
     }
   }
 
+  List<_EventSanctionCard> _getGroupedSanctions() {
+    List<SanctionItem> items = _sanctions;
+    if (_selectedFilter == 'Pending') {
+      items = _sanctions.where((s) => !s.isResolved).toList();
+    } else if (_selectedFilter == 'Resolved') {
+      items = _sanctions.where((s) => s.isResolved).toList();
+    }
+
+    final Map<String, List<SanctionItem>> eventMap = {};
+    for (final item in items) {
+      final eventName = _extractEventName(item.title);
+      eventMap.putIfAbsent(eventName, () => []).add(item);
+    }
+
+    final List<_EventSanctionCard> cards = [];
+
+    eventMap.forEach((eventName, groupItems) {
+      DateTime? eventDate;
+      for (final item in groupItems) {
+        final candidate = item.eventDate ?? item.issuedAt;
+        if (candidate != null) {
+          if (eventDate == null || candidate.isAfter(eventDate!)) {
+            eventDate = candidate;
+          }
+        }
+      }
+
+      final isResolved = groupItems.every((i) => i.isResolved);
+      final Set<String> missedTags = {};
+
+      for (final item in groupItems) {
+        final lower = item.title.toLowerCase();
+        if (lower.contains('time-in') || lower.contains('time in')) {
+          missedTags.add('TIME-IN MISSED');
+        }
+        if (lower.contains('time-out') || lower.contains('time out')) {
+          missedTags.add('TIME-OUT MISSED');
+        }
+        if (missedTags.isEmpty) {
+          missedTags.add('ATTENDANCE MISSED');
+        }
+      }
+
+      final sortedTags = missedTags.toList()
+        ..sort((a, b) {
+          if (a.contains('TIME-IN') && b.contains('TIME-OUT')) return -1;
+          if (a.contains('TIME-OUT') && b.contains('TIME-IN')) return 1;
+          return a.compareTo(b);
+        });
+
+      cards.add(_EventSanctionCard(
+        eventName: eventName,
+        date: eventDate,
+        isResolved: isResolved,
+        missedTags: sortedTags,
+      ));
+    });
+
+    cards.sort((a, b) {
+      final d1 = a.date ?? DateTime(0);
+      final d2 = b.date ?? DateTime(0);
+      return d2.compareTo(d1);
+    });
+
+    return cards;
+  }
+
+  String _extractEventName(String title) {
+    final trimmed = title.trim();
+    if (trimmed.contains(' - ')) {
+      return trimmed.split(' - ')[0].trim();
+    }
+    if (trimmed.contains(' : ')) {
+      return trimmed.split(' : ')[0].trim();
+    }
+    return trimmed;
+  }
+
   int get _pendingCount => _sanctions.where((s) => !s.isResolved).length;
   int get _resolvedCount => _sanctions.where((s) => s.isResolved).length;
-
-  List<SanctionItem> get _filteredSanctions {
-    if (_selectedFilter == 'Pending') {
-      return _sanctions.where((s) => !s.isResolved).toList();
-    } else if (_selectedFilter == 'Resolved') {
-      return _sanctions.where((s) => s.isResolved).toList();
-    }
-    return _sanctions;
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -97,23 +166,12 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
         backgroundColor: isDark ? const Color(0xFF1E293B) : navy,
         foregroundColor: Colors.white,
         elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () {
-            if (Navigator.of(context).canPop()) {
-              Navigator.of(context).pop();
-            } else {
-              Navigator.of(context).pushReplacementNamed('/home');
-            }
-          },
-        ),
         title: const Text(
           'Sanctions',
           style: TextStyle(
             color: Colors.white,
             fontSize: 18,
             fontWeight: FontWeight.w700,
-            letterSpacing: -0.3,
           ),
         ),
       ),
@@ -150,7 +208,7 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
       );
     }
 
-    final filtered = _filteredSanctions;
+    final cards = _getGroupedSanctions();
 
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
@@ -158,10 +216,10 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
       children: [
         _buildSegmentedFilter(),
         const SizedBox(height: 16),
-        if (filtered.isEmpty)
+        if (cards.isEmpty)
           _buildEmptyState()
         else
-          ...filtered.map((sanction) => _buildSanctionCard(sanction)),
+          ...cards.map((card) => _buildSanctionCard(card)),
       ],
     );
   }
@@ -191,27 +249,18 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
               onTap: () => setState(() => _selectedFilter = tab),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 150),
-                padding: const EdgeInsets.symmetric(vertical: 8),
+                padding: const EdgeInsets.symmetric(vertical: 9),
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: isSelected
                       ? (isDark ? const Color(0xFF0F172A) : Colors.white)
                       : Colors.transparent,
                   borderRadius: BorderRadius.circular(8),
-                  boxShadow: isSelected
-                      ? [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.04),
-                            blurRadius: 4,
-                            offset: const Offset(0, 1),
-                          )
-                        ]
-                      : null,
                 ),
                 child: Text(
                   '$tab ($count)',
                   style: TextStyle(
-                    fontSize: 11.5,
+                    fontSize: 12,
                     fontWeight: FontWeight.w700,
                     color: isSelected
                         ? (isDark ? Colors.white : navy)
@@ -226,196 +275,113 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
     );
   }
 
-  Widget _buildSanctionCard(SanctionItem sanction) {
+  Widget _buildSanctionCard(_EventSanctionCard card) {
     final isDark = themeController.isDarkMode;
-    final issueInfo = _parseIssueInfo(sanction);
 
-    final dateText = sanction.issuedAt == null
+    final dateText = card.date == null
         ? 'Date Unspecified'
-        : DateFormat('MMM d, yyyy').format(sanction.issuedAt!.toLocal());
-
-    final timeText = sanction.issuedAt == null
-        ? ''
-        : DateFormat('h:mm a').format(sanction.issuedAt!.toLocal());
+        : DateFormat('MMM d, yyyy').format(card.date!.toLocal());
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 10),
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF1E293B) : Colors.white,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: sanction.isResolved
-              ? (isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0))
-              : issueInfo.color.withValues(alpha: 0.4),
-          width: sanction.isResolved ? 1.0 : 1.2,
+          color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+          width: 1.0,
         ),
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Text(
-                    issueInfo.eventName,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: isDark ? Colors.white : navy,
-                      height: 1.2,
-                    ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  card.eventName,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: isDark ? Colors.white : navy,
                   ),
                 ),
-                const SizedBox(width: 8),
-                _buildStatusPill(sanction.isResolved, isDark),
-              ],
+              ),
+              const SizedBox(width: 8),
+              _buildStatusPill(card.isResolved),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            dateText,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: muted,
             ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
-                  decoration: BoxDecoration(
-                    color: issueInfo.color.withValues(alpha: isDark ? 0.2 : 0.12),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(
-                      color: issueInfo.color.withValues(alpha: 0.3),
-                      width: 1.0,
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(issueInfo.icon, size: 13, color: issueInfo.color),
-                      const SizedBox(width: 5),
-                      Text(
-                        issueInfo.issueLabel,
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 0.3,
-                          color: issueInfo.color,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const Spacer(),
-                Row(
-                  children: [
-                    const Icon(Icons.calendar_today_rounded, size: 11, color: muted),
-                    const SizedBox(width: 4),
-                    Text(
-                      timeText.isNotEmpty ? '$dateText • $timeText' : dateText,
-                      style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500,
-                        color: muted,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ],
-        ),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            children: card.missedTags.map((tag) => _buildTag(tag, isDark)).toList(),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildStatusPill(bool isResolved, bool isDark) {
-    if (isResolved) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2.5),
-        decoration: BoxDecoration(
-          color: const Color(0xFFDCFCE7),
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: const Text(
-          'RESOLVED',
-          style: TextStyle(
-            fontSize: 9.5,
-            fontWeight: FontWeight.w800,
-            color: Color(0xFF15803D),
-            letterSpacing: 0.3,
-          ),
-        ),
-      );
-    }
-
+  Widget _buildStatusPill(bool isResolved) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2.5),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: const Color(0xFFFEF3C7),
+        color: isResolved ? const Color(0xFFDCFCE7) : const Color(0xFFFEF3C7),
         borderRadius: BorderRadius.circular(4),
       ),
-      child: const Text(
-        'PENDING',
+      child: Text(
+        isResolved ? 'RESOLVED' : 'PENDING',
         style: TextStyle(
-          fontSize: 9.5,
+          fontSize: 10,
           fontWeight: FontWeight.w800,
-          color: Color(0xFFB45309),
+          color: isResolved ? const Color(0xFF15803D) : const Color(0xFFB45309),
           letterSpacing: 0.3,
         ),
       ),
     );
   }
 
-  _ParsedIssue _parseIssueInfo(SanctionItem sanction) {
-    final rawTitle = sanction.title.trim();
-    String eventName = rawTitle;
-    String lower = rawTitle.toLowerCase();
+  Widget _buildTag(String tag, bool isDark) {
+    Color textColor;
+    Color bgColor;
 
-    if (rawTitle.contains(' - ')) {
-      final parts = rawTitle.split(' - ');
-      eventName = parts[0].trim();
-      lower = parts.sublist(1).join(' ').toLowerCase();
-    } else if (rawTitle.contains(' : ')) {
-      final parts = rawTitle.split(' : ');
-      eventName = parts[0].trim();
-      lower = parts.sublist(1).join(' ').toLowerCase();
+    if (tag.contains('TIME-IN')) {
+      textColor = const Color(0xFFB45309);
+      bgColor = isDark ? const Color(0xFF451A03) : const Color(0xFFFEF3C7);
+    } else if (tag.contains('TIME-OUT')) {
+      textColor = const Color(0xFFC2410C);
+      bgColor = isDark ? const Color(0xFF431407) : const Color(0xFFFFEDD5);
+    } else {
+      textColor = const Color(0xFF475569);
+      bgColor = isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9);
     }
 
-    final isNoAttendance = lower.contains('no attendance') ||
-        lower.contains('absent') ||
-        lower.contains('both missed') ||
-        (lower.contains('time-in') && lower.contains('time-out')) ||
-        (lower.contains('time in') && lower.contains('time out'));
-
-    final isTimeInMissed = lower.contains('time-in') || lower.contains('time in');
-    final isTimeOutMissed = lower.contains('time-out') || lower.contains('time out');
-
-    if (isNoAttendance) {
-      return _ParsedIssue(
-        eventName: eventName.isEmpty ? 'Scheduled Event' : eventName,
-        issueLabel: 'NO ATTENDANCE RECORDED',
-        color: const Color(0xFFDC2626),
-        icon: Icons.event_busy_rounded,
-      );
-    } else if (isTimeInMissed) {
-      return _ParsedIssue(
-        eventName: eventName.isEmpty ? 'Scheduled Event' : eventName,
-        issueLabel: 'TIME-IN MISSED',
-        color: const Color(0xFFD97706),
-        icon: Icons.login_rounded,
-      );
-    } else if (isTimeOutMissed) {
-      return _ParsedIssue(
-        eventName: eventName.isEmpty ? 'Scheduled Event' : eventName,
-        issueLabel: 'TIME-OUT MISSED',
-        color: const Color(0xFFEA580C),
-        icon: Icons.logout_rounded,
-      );
-    }
-
-    return _ParsedIssue(
-      eventName: eventName.isEmpty ? 'Scheduled Event' : eventName,
-      issueLabel: rawTitle.toUpperCase(),
-      color: const Color(0xFF475569),
-      icon: Icons.warning_amber_rounded,
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        tag,
+        style: TextStyle(
+          fontSize: 10.5,
+          fontWeight: FontWeight.w700,
+          color: textColor,
+          letterSpacing: 0.2,
+        ),
+      ),
     );
   }
 
@@ -427,30 +393,17 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
       alignment: Alignment.center,
       child: Column(
         children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(
-              Icons.check_circle_outline_rounded,
-              size: 36,
-              color: const Color(0xFF16A34A).withValues(alpha: 0.8),
-            ),
-          ),
-          const SizedBox(height: 12),
           Text(
-            'No attendance issues',
+            'No Sanctions',
             style: TextStyle(
               fontSize: 15,
-              fontWeight: FontWeight.w700,
+              fontWeight: FontWeight.bold,
               color: isDark ? Colors.white : navy,
             ),
           ),
           const SizedBox(height: 4),
           const Text(
-            'You currently have no recorded attendance sanctions or warnings.',
+            'You currently have no recorded attendance sanctions.',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12, color: muted),
           ),
@@ -473,10 +426,8 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
       ),
       child: Column(
         children: [
-          const Icon(Icons.error_outline_rounded, color: Color(0xFFDC2626), size: 30),
-          const SizedBox(height: 8),
           Text(
-            _error ?? 'Unable to load attendance issues.',
+            _error ?? 'Unable to load sanctions.',
             style: const TextStyle(fontSize: 12, color: muted),
           ),
           const SizedBox(height: 12),
@@ -498,16 +449,16 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
   }
 }
 
-class _ParsedIssue {
+class _EventSanctionCard {
   final String eventName;
-  final String issueLabel;
-  final Color color;
-  final IconData icon;
+  final DateTime? date;
+  final bool isResolved;
+  final List<String> missedTags;
 
-  const _ParsedIssue({
+  _EventSanctionCard({
     required this.eventName,
-    required this.issueLabel,
-    required this.color,
-    required this.icon,
+    required this.date,
+    required this.isResolved,
+    required this.missedTags,
   });
 }

@@ -171,12 +171,14 @@ class AttendanceService {
     required double locationAccuracy,
     required XFile centerFrame,
     required XFile turnedFrame,
+    required List<XFile> flashFrames,
+    required List<String> flashColors,
     required String challengeNonce,
     required String sessionId,
     String type = 'time_in',
   }) async {
     try {
-      final formData = FormData.fromMap({
+      final Map<String, dynamic> formMap = {
         'event_id': eventId,
         'type': type,
         'check_in_type': type,
@@ -186,6 +188,14 @@ class AttendanceService {
         'latitude': latitude,
         'longitude': longitude,
         'location_accuracy': locationAccuracy,
+        'frontal_image_base64': await MultipartFile.fromFile(
+          centerFrame.path,
+          filename: 'attendance-center.jpg',
+        ),
+        'turn_peak_image_base64': await MultipartFile.fromFile(
+          turnedFrame.path,
+          filename: 'attendance-turn.jpg',
+        ),
         'center_frame': await MultipartFile.fromFile(
           centerFrame.path,
           filename: 'attendance-center.jpg',
@@ -194,7 +204,17 @@ class AttendanceService {
           turnedFrame.path,
           filename: 'attendance-turn.jpg',
         ),
-      });
+      };
+
+      for (int i = 0; i < flashFrames.length; i++) {
+        formMap['flash_images_base64[$i]'] = await MultipartFile.fromFile(
+          flashFrames[i].path,
+          filename: 'flash_$i.jpg',
+        );
+        formMap['flash_colors[$i]'] = flashColors[i];
+      }
+
+      final formData = FormData.fromMap(formMap);
 
       final response = await _api.dio.post(
         ApiEndpoints.attendanceMobileCheckIn,
@@ -244,6 +264,7 @@ class AttendanceService {
     required DateTime attendanceTime,
     required XFile centerFrame,
     required XFile turnedFrame,
+    required List<XFile> flashFrames,
     required String livenessDirection,
     String type = 'time_in',
   }) async {
@@ -254,7 +275,8 @@ class AttendanceService {
         return const AttendanceResult(
           success: false,
           code: 'OFFLINE_ALREADY_PENDING',
-          message: 'An offline attendance for this event is already waiting to sync.',
+          message:
+              'An offline attendance for this event is already waiting to sync.',
         );
       }
 
@@ -266,6 +288,7 @@ class AttendanceService {
         attendanceTime: attendanceTime,
         centerFrame: centerFrame,
         turnedFrame: turnedFrame,
+        flashFrames: flashFrames,
         livenessDirection: livenessDirection,
         sessionType: type,
       );
@@ -304,7 +327,7 @@ class AttendanceService {
     }
 
     try {
-      final formData = FormData.fromMap({
+      final Map<String, dynamic> formMap = {
         'event_id': record.eventId,
         'attendance_uuid': record.uuid,
         'attendance_time': record.attendanceTime,
@@ -312,8 +335,17 @@ class AttendanceService {
         'longitude': record.longitude,
         'location_accuracy': record.locationAccuracy,
         'liveness_direction': record.livenessDirection,
+        'direction': record.livenessDirection,
         'session_type': record.sessionType,
         'type': record.sessionType,
+        'frontal_image_base64': await MultipartFile.fromFile(
+          record.centerFramePath,
+          filename: 'offline-center.jpg',
+        ),
+        'turn_peak_image_base64': await MultipartFile.fromFile(
+          record.turnedFramePath,
+          filename: 'offline-turn.jpg',
+        ),
         'center_frame': await MultipartFile.fromFile(
           record.centerFramePath,
           filename: 'offline-center.jpg',
@@ -322,11 +354,20 @@ class AttendanceService {
           record.turnedFramePath,
           filename: 'offline-turn.jpg',
         ),
-      });
+      };
+
+      final colors = ['red', 'green', 'blue'];
+      for (int i = 0; i < record.flashFramePaths.length; i++) {
+        formMap['flash_images_base64[$i]'] = await MultipartFile.fromFile(
+          record.flashFramePaths[i],
+          filename: 'flash_$i.jpg',
+        );
+        formMap['flash_colors[$i]'] = colors[i % colors.length];
+      }
 
       final response = await _api.dio.post(
         ApiEndpoints.attendanceSync,
-        data: formData,
+        data: FormData.fromMap(formMap),
         options: Options(
           contentType: 'multipart/form-data',
           sendTimeout: const Duration(seconds: 60),
@@ -492,7 +533,7 @@ class AttendanceService {
       case 429:
         return 'Too many requests. Please wait.';
       default:
-        return 'Server Error (${response.statusCode}): ${response.statusMessage ?? "Attendance verification failed."}';
+        return 'Server Error (${response.statusCode}):${response.statusMessage ?? "Attendance verification failed."}';
     }
   }
 }

@@ -9,6 +9,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../../main.dart';
 import '../../models/event_item.dart';
 import '../../services/attendance_service.dart';
+import '../../services/secure_time_service.dart';
 
 enum _LivenessStep { lookCenter, turn, verifying, passed, failed }
 
@@ -57,6 +58,17 @@ class _AttendanceFaceVerificationScreenState
   String? _error;
   String? _hint;
 
+  Color _overlayFlashColor = Colors.transparent;
+  final List<XFile> _flashFrames = [];
+  final List<String> _flashColors = [];
+
+  final List<Color> _flashColorSequence = [
+    Colors.red,
+    Colors.green,
+    Colors.blue,
+  ];
+  final List<String> _flashColorNames = ['red', 'green', 'blue'];
+
   _LivenessStep _step = _LivenessStep.lookCenter;
 
   XFile? _centerFrame;
@@ -75,9 +87,8 @@ class _AttendanceFaceVerificationScreenState
       duration: const Duration(milliseconds: 1000),
     )..repeat(reverse: true);
 
-    _currentSession = _determineCurrentSession();
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      _currentSession = await _determineCurrentSession();
       if (_currentSession == null) {
         _showClosedDialog(
             'Attendance is currently closed or already completed for this event.');
@@ -87,27 +98,38 @@ class _AttendanceFaceVerificationScreenState
     });
   }
 
-  // --------------------------------------------------------------------------
-  // AUTOMATIC WINDOW & ACTIVE SESSION DETECTION
-  // --------------------------------------------------------------------------
-
-  AttendanceSessionType? _determineCurrentSession() {
-    final now = DateTime.now();
+  Future<AttendanceSessionType?> _determineCurrentSession() async {
+    final now = await SecureTimeService.instance.getTrustedTime();
 
     String? getRawVal(List<String> keys) {
       return _findInMap(widget.event.raw, keys);
     }
 
     DateTime? parseSingleTime(String? str) {
-      if (str == null) return null;
+      if (str == null) {
+        return null;
+      }
       final text = str.trim();
-      if (text.isEmpty || text.toLowerCase() == 'null' || text.toLowerCase() == 'tba') return null;
+      if (text.isEmpty ||
+          text.toLowerCase() == 'null' ||
+          text.toLowerCase() == 'tba') {
+        return null;
+      }
 
-      const formats = ['HH:mm:ss', 'HH:mm', 'h:mm a', 'hh:mm a', 'h:mmA', 'hh:mmA'];
+      const formats = [
+        'HH:mm:ss',
+        'HH:mm',
+        'h:mm a',
+        'hh:mm a',
+        'h:mmA',
+        'hh:mmA'
+      ];
       for (final format in formats) {
         try {
-          final parsed = DateFormat(format, 'en_US').parseLoose(text.toUpperCase());
-          return DateTime(now.year, now.month, now.day, parsed.hour, parsed.minute, parsed.second);
+          final parsed =
+              DateFormat(format, 'en_US').parseLoose(text.toUpperCase());
+          return DateTime(
+              now.year, now.month, now.day, parsed.hour, parsed.minute, parsed.second);
         } catch (_) {}
       }
       return null;
@@ -122,7 +144,8 @@ class _AttendanceFaceVerificationScreenState
     }) {
       final combinedStr = getRawVal(windowKeys);
       if (combinedStr != null && combinedStr.contains(RegExp(r'[-–]'))) {
-        final parts = combinedStr.split(RegExp(r'[-–]')).map((s) => s.trim()).toList();
+        final parts =
+            combinedStr.split(RegExp(r'[-–]')).map((s) => s.trim()).toList();
         if (parts.length >= 2) {
           final s = parseSingleTime(parts[0]);
           final e = parseSingleTime(parts[1]);
@@ -138,7 +161,6 @@ class _AttendanceFaceVerificationScreenState
       return [parseSingleTime(rawStart), parseSingleTime(rawEnd)];
     }
 
-    // 1. Extract Time-In Boundaries
     final timeInTimes = extractWindowTimes(
       windowKeys: [
         'time_in_window',
@@ -185,7 +207,6 @@ class _AttendanceFaceVerificationScreenState
       fallbackStart: widget.event.startTime,
     );
 
-    // 2. Extract Time-Out Boundaries
     final timeOutTimes = extractWindowTimes(
       windowKeys: [
         'time_out_window',
@@ -234,7 +255,6 @@ class _AttendanceFaceVerificationScreenState
     var timeOutStart = timeOutTimes[0];
     var timeOutEnd = timeOutTimes[1];
 
-    // Infer missing bounds
     if (timeInEnd == null) {
       if (timeOutStart != null) {
         timeInEnd = timeOutStart;
@@ -259,14 +279,10 @@ class _AttendanceFaceVerificationScreenState
 
     const margin = Duration(minutes: 15);
 
-    // ------------------------------------------------------------------------
-    // EVALUATION RULE 1: TIME-OUT WINDOW CHECK
-    // If current time is inside Time-Out window and student hasn't recorded Time-Out,
-    // route to TIME-OUT (even if Time-In was missed!).
-    // ------------------------------------------------------------------------
     if (timeOutStart != null && !_hasTimeOut) {
       final startBound = timeOutStart.subtract(margin);
-      final endBound = (timeOutEnd ?? timeOutStart.add(const Duration(hours: 4))).add(margin);
+      final endBound =
+          (timeOutEnd ?? timeOutStart.add(const Duration(hours: 4))).add(margin);
 
       if ((now.isAfter(startBound) || now.isAtSameMomentAs(startBound)) &&
           (now.isBefore(endBound) || now.isAtSameMomentAs(endBound))) {
@@ -274,14 +290,10 @@ class _AttendanceFaceVerificationScreenState
       }
     }
 
-    // ------------------------------------------------------------------------
-    // EVALUATION RULE 2: TIME-IN WINDOW CHECK
-    // If current time is inside Time-In window and student hasn't recorded Time-In,
-    // route to TIME-IN.
-    // ------------------------------------------------------------------------
     if (timeInStart != null && !_hasTimeIn) {
       final startBound = timeInStart.subtract(margin);
-      final endBound = (timeInEnd ?? timeInStart.add(const Duration(hours: 4))).add(margin);
+      final endBound =
+          (timeInEnd ?? timeInStart.add(const Duration(hours: 4))).add(margin);
 
       if ((now.isAfter(startBound) || now.isAtSameMomentAs(startBound)) &&
           (now.isBefore(endBound) || now.isAtSameMomentAs(endBound))) {
@@ -289,9 +301,6 @@ class _AttendanceFaceVerificationScreenState
       }
     }
 
-    // ------------------------------------------------------------------------
-    // EVALUATION RULE 3: MID-EVENT / PAST TIME-IN CUTOFF
-    // ------------------------------------------------------------------------
     if (!_hasTimeOut) {
       if (_hasTimeIn || (timeInEnd != null && now.isAfter(timeInEnd))) {
         return AttendanceSessionType.timeOut;
@@ -306,7 +315,8 @@ class _AttendanceFaceVerificationScreenState
   }
 
   String? _findInMap(Map map, List<String> targetKeys) {
-    final cleanTargets = targetKeys.map((k) => k.toLowerCase().replaceAll('_', '')).toList();
+    final cleanTargets =
+        targetKeys.map((k) => k.toLowerCase().replaceAll('_', '')).toList();
 
     for (final entry in map.entries) {
       final keyStr = entry.key.toString().toLowerCase().replaceAll('_', '');
@@ -386,10 +396,6 @@ class _AttendanceFaceVerificationScreenState
     );
   }
 
-  // --------------------------------------------------------------------------
-  // INITIALIZATION & AUTOMATED CAPTURE SEQUENCE
-  // --------------------------------------------------------------------------
-
   Future<void> _initializeAndRunSequence() async {
     try {
       if (widget.event.id == null) {
@@ -432,13 +438,131 @@ class _AttendanceFaceVerificationScreenState
         _challengeSessionId = DateTime.now().millisecondsSinceEpoch.toString();
       }
 
-      await _runAutomatedCapture();
+      await _showInstructionModal();
     } catch (e) {
       if (!mounted || _disposed) return;
       setState(() {
         _step = _LivenessStep.failed;
         _error = e.toString().replaceFirst('Exception: ', '');
       });
+    }
+  }
+
+  Future<void> _showInstructionModal() async {
+    if (!mounted || _disposed) return;
+    final isDark = themeController.isDarkMode;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 60,
+                  height: 60,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFFEF3C7),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.security_rounded,
+                    color: Color(0xFFD97706),
+                    size: 32,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Text(
+                  'Anti-Spoofing Verification',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 19,
+                    fontWeight: FontWeight.w800,
+                    color: isDark ? Colors.white : brandNavy,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'To block photo or pre-recorded video spoofing, your screen will flash RED, GREEN, and BLUE light continuously while capturing your face during center and turned poses.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: isDark ? const Color(0xFFCBD5E1) : Colors.black87,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: isDark
+                        ? const Color(0xFF3B2D08)
+                        : const Color(0xFFFFFBEB),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: const Color(0xFFFDE68A)),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(
+                        Icons.warning_amber_rounded,
+                        color: Color(0xFFD97706),
+                        size: 22,
+                      ),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Warning: Screen light will flash rapidly. Keep phone steady at eye level.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFFD97706),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 22),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () {
+                      Navigator.of(dialogContext).pop();
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: isDark ? brandGold : brandNavy,
+                      foregroundColor: isDark ? brandNavy : Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
+                    child: const Text(
+                      'I Understand',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (mounted && !_disposed) {
+      await _runAutomatedCapture();
     }
   }
 
@@ -516,10 +640,6 @@ class _AttendanceFaceVerificationScreenState
     }
   }
 
-  // --------------------------------------------------------------------------
-  // AUTOMATED SNAPSHOT CAPTURE SEQUENCE
-  // --------------------------------------------------------------------------
-
   Future<void> _runAutomatedCapture() async {
     if (_isProcessing ||
         _camera == null ||
@@ -529,27 +649,59 @@ class _AttendanceFaceVerificationScreenState
     }
 
     _isProcessing = true;
+    _flashFrames.clear();
+    _flashColors.clear();
 
     try {
+      // PHASE 1: CENTER POSE WITH CONTINUOUS FLASHING
       setState(() {
         _step = _LivenessStep.lookCenter;
-        _hint = 'Hold still, capturing center face...';
+        _hint = 'Look straight. Screen is verifying light reflections...';
       });
 
-      await Future<void>.delayed(const Duration(milliseconds: 1200));
-      if (!mounted || _disposed) return;
+      for (int i = 0; i < _flashColorSequence.length; i++) {
+        if (!mounted || _disposed) return;
+
+        setState(() {
+          _overlayFlashColor = _flashColorSequence[i];
+        });
+
+        await Future.delayed(const Duration(milliseconds: 300));
+        if (!mounted || _disposed) return;
+
+        final frame = await _camera!.takePicture();
+        _flashFrames.add(frame);
+        _flashColors.add(_flashColorNames[i]);
+      }
 
       _centerFrame = await _camera!.takePicture();
 
+      // PHASE 2: HEAD TURN POSE WITH CONTINUED FLASHING
       setState(() {
         _step = _LivenessStep.turn;
-        _hint = 'Now turn your head towards $_direction...';
+        _hint = 'Turn your head to your $_direction while screen flashes...';
       });
 
-      await Future<void>.delayed(const Duration(milliseconds: 1500));
-      if (!mounted || _disposed) return;
+      for (int i = 0; i < _flashColorSequence.length; i++) {
+        if (!mounted || _disposed) return;
+
+        setState(() {
+          _overlayFlashColor = _flashColorSequence[i];
+        });
+
+        await Future.delayed(const Duration(milliseconds: 350));
+        if (!mounted || _disposed) return;
+
+        final frame = await _camera!.takePicture();
+        _flashFrames.add(frame);
+        _flashColors.add(_flashColorNames[i]);
+      }
 
       _turnedFrame = await _camera!.takePicture();
+
+      setState(() {
+        _overlayFlashColor = Colors.transparent;
+      });
 
       await _submitAttendance();
     } catch (e) {
@@ -557,6 +709,7 @@ class _AttendanceFaceVerificationScreenState
       if (mounted && !_disposed) {
         setState(() {
           _step = _LivenessStep.failed;
+          _overlayFlashColor = Colors.transparent;
           _error = 'Camera capture failed. Please retry.';
         });
       }
@@ -564,10 +717,6 @@ class _AttendanceFaceVerificationScreenState
       _isProcessing = false;
     }
   }
-
-  // --------------------------------------------------------------------------
-  // SUBMISSION TO BACKEND
-  // --------------------------------------------------------------------------
 
   Future<void> _submitAttendance() async {
     final eventId = widget.event.id;
@@ -605,6 +754,8 @@ class _AttendanceFaceVerificationScreenState
       locationAccuracy: pos.accuracy,
       centerFrame: _centerFrame!,
       turnedFrame: _turnedFrame!,
+      flashFrames: _flashFrames,
+      flashColors: _flashColors,
       challengeNonce: _challengeNonce ?? '',
       sessionId: _challengeSessionId ?? '',
       type: typeStr,
@@ -628,15 +779,19 @@ class _AttendanceFaceVerificationScreenState
       }
 
       if (result.networkUnavailable) {
+        // Compute tamper-proof real-time timestamp for offline storage
+        final trustedTime = await SecureTimeService.instance.getTrustedTime();
+
         final offlineQueueResult =
             await AttendanceService.instance.queueOfflineAttendance(
           eventId: eventId,
           latitude: pos.latitude,
           longitude: pos.longitude,
           locationAccuracy: pos.accuracy,
-          attendanceTime: DateTime.now(),
+          attendanceTime: trustedTime, // <-- Real time enforced (ignores device clock edits)
           centerFrame: _centerFrame!,
           turnedFrame: _turnedFrame!,
+          flashFrames: _flashFrames,
           livenessDirection: _direction,
           type: typeStr,
         );
@@ -787,7 +942,9 @@ class _AttendanceFaceVerificationScreenState
         : 'Time-Out';
 
     return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      backgroundColor: _overlayFlashColor != Colors.transparent
+          ? _overlayFlashColor
+          : Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
         backgroundColor: isDark ? const Color(0xFF1E293B) : brandNavy,
         foregroundColor: Colors.white,

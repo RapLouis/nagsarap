@@ -32,7 +32,7 @@ class _RegistrationFaceVerificationScreenState
   bool _isProcessing = false;
 
   RegistrationLivenessStep _step = RegistrationLivenessStep.lookCenter;
-  
+
   LivenessChallenge? _challenge;
   String _direction = 'left';
 
@@ -41,6 +41,17 @@ class _RegistrationFaceVerificationScreenState
 
   String? _hint;
   String? _error;
+
+  Color _overlayFlashColor = Colors.transparent;
+  final List<XFile> _flashFrames = [];
+  final List<String> _flashColors = [];
+
+  final List<Color> _flashColorSequence = [
+    Colors.red,
+    Colors.green,
+    Colors.blue,
+  ];
+  final List<String> _flashColorNames = ['red', 'green', 'blue'];
 
   XFile? _centerFrame;
   XFile? _turnedFrame;
@@ -99,8 +110,7 @@ class _RegistrationFaceVerificationScreenState
         _cameraReady = true;
       });
 
-      // Run automated robust snapshot capture sequence
-      await _runAutomatedCapture();
+      await _showInstructionModal();
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -111,55 +121,209 @@ class _RegistrationFaceVerificationScreenState
     }
   }
 
-  // --------------------------------------------------------------------------
-  // ROBUST AUTOMATED SNAPSHOT SEQUENCE
-  // --------------------------------------------------------------------------
+  Future<void> _showInstructionModal() async {
+    if (!mounted || _disposed) return;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          backgroundColor: Colors.white,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 60,
+                  height: 60,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFFEF3C7),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.security_rounded,
+                    color: Color(0xFFD97706),
+                    size: 32,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                const Text(
+                  'Anti-Spoofing Verification',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 19,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.navy,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'To block photo or pre-recorded video spoofing, your screen will flash RED, GREEN, and BLUE light continuously while capturing your face during center and turned poses.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.black87,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFFBEB),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: const Color(0xFFFDE68A)),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(
+                        Icons.warning_amber_rounded,
+                        color: Color(0xFFD97706),
+                        size: 22,
+                      ),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Warning: Screen light will flash rapidly. Keep phone steady at eye level.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF92400E),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 22),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () {
+                      Navigator.of(dialogContext).pop();
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.navy,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
+                    child: const Text(
+                      'I Understand',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (mounted && !_disposed) {
+      await _runAutomatedCapture();
+    }
+  }
 
   Future<void> _runAutomatedCapture() async {
-    if (_isProcessing || _camera == null || !_camera!.value.isInitialized || _disposed) {
+    if (_isProcessing ||
+        _camera == null ||
+        !_camera!.value.isInitialized ||
+        _disposed) {
       return;
     }
 
     _isProcessing = true;
+    _flashFrames.clear();
+    _flashColors.clear();
 
     try {
-      // Step 1: Center Frame Capture
+      // ----------------------------------------------------------------------
+      // PHASE 1: CENTER POSE WITH CONTINUOUS FLASHING
+      // ----------------------------------------------------------------------
       setState(() {
         _step = RegistrationLivenessStep.lookCenter;
-        _holdProgress = 0.5;
-        _hint = 'Hold still, capturing center face...';
+        _holdProgress = 0.1;
+        _hint = 'Look straight. Screen is verifying light reflections...';
       });
 
-      await Future<void>.delayed(const Duration(milliseconds: 1200));
-      if (!mounted || _disposed) return;
+      for (int i = 0; i < _flashColorSequence.length; i++) {
+        if (!mounted || _disposed) return;
+
+        setState(() {
+          _overlayFlashColor = _flashColorSequence[i];
+        });
+
+        await Future.delayed(const Duration(milliseconds: 300));
+        if (!mounted || _disposed) return;
+
+        final frame = await _camera!.takePicture();
+        _flashFrames.add(frame);
+        _flashColors.add(_flashColorNames[i]);
+
+        setState(() {
+          _holdProgress = 0.1 + (0.4 * ((i + 1) / _flashColorSequence.length));
+        });
+      }
 
       _centerFrame = await _camera!.takePicture();
       setState(() {
         _holdProgress = 1.0;
       });
 
-      // Step 2: Turn Frame Capture
+      // ----------------------------------------------------------------------
+      // PHASE 2: HEAD TURN POSE WITH CONTINUED FLASHING
+      // ----------------------------------------------------------------------
       setState(() {
         _step = RegistrationLivenessStep.turn;
-        _turnProgress = 0.5;
-        _hint = 'Now turn your head towards $_direction...';
+        _turnProgress = 0.1;
+        _hint = 'Turn your head to your $_direction while screen flashes...';
       });
 
-      await Future<void>.delayed(const Duration(milliseconds: 1500));
-      if (!mounted || _disposed) return;
+      for (int i = 0; i < _flashColorSequence.length; i++) {
+        if (!mounted || _disposed) return;
+
+        setState(() {
+          _overlayFlashColor = _flashColorSequence[i];
+        });
+
+        await Future.delayed(const Duration(milliseconds: 350));
+        if (!mounted || _disposed) return;
+
+        final frame = await _camera!.takePicture();
+        _flashFrames.add(frame);
+        _flashColors.add(_flashColorNames[i]);
+
+        setState(() {
+          _turnProgress = 0.1 + (0.8 * ((i + 1) / _flashColorSequence.length));
+        });
+      }
 
       _turnedFrame = await _camera!.takePicture();
+
       setState(() {
+        _overlayFlashColor = Colors.transparent;
         _turnProgress = 1.0;
       });
 
-      // Step 3: Submit Biometrics
       await _submitBiometrics();
     } catch (e) {
       debugPrint('Registration capture error: $e');
       if (mounted && !_disposed) {
         setState(() {
           _step = RegistrationLivenessStep.failed;
+          _overlayFlashColor = Colors.transparent;
           _error = 'Camera capture failed. Please retry.';
         });
       }
@@ -184,14 +348,17 @@ class _RegistrationFaceVerificationScreenState
             await RegistrationService.instance.verifyRegistrationFace(
           centerFrame: _centerFrame!,
           turnedFrame: _turnedFrame!,
+          flashFrames: _flashFrames,
+          flashColors: _flashColors,
           challengeNonce: nonce,
           sessionId: sessionId,
         );
 
-        // If backend returns a head turn angle warning, auto-retry smoothly instead of failing user
         if (!result.success) {
           final msg = result.message.toLowerCase();
-          if (msg.contains('turn') || msg.contains('angle') || msg.contains('liveness')) {
+          if (msg.contains('turn') ||
+              msg.contains('angle') ||
+              msg.contains('liveness')) {
             setState(() {
               _hint = 'Retrying angle adjustment...';
             });
@@ -328,7 +495,9 @@ class _RegistrationFaceVerificationScreenState
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: _overlayFlashColor != Colors.transparent
+          ? _overlayFlashColor
+          : AppColors.background,
       appBar: AppBar(
         backgroundColor: AppColors.navy,
         foregroundColor: Colors.white,

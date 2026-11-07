@@ -6,7 +6,7 @@ import 'package:file_selector/file_selector.dart' as fs;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
-import 'package:image_picker/image_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../core/app_colors.dart';
 import '../../services/registration_service.dart';
@@ -35,10 +35,8 @@ class _RegisterTabState extends State<RegisterTab> {
   final confirmPasswordController = TextEditingController();
 
   // --------------------------------------------------------------------------
-  // FILES & PICKER
+  // FILES
   // --------------------------------------------------------------------------
-
-  final ImagePicker imagePicker = ImagePicker();
 
   XFile? profilePhoto;
   XFile? form5;
@@ -75,7 +73,7 @@ class _RegisterTabState extends State<RegisterTab> {
   }
 
   // --------------------------------------------------------------------------
-  // PICK & FAST VALIDATE PROFILE PHOTO
+  // INSTRUCTION -> CAMERA PERMISSION -> CAMERA CAPTURE
   // --------------------------------------------------------------------------
 
   Future<void> pickProfilePhoto() async {
@@ -83,73 +81,122 @@ class _RegisterTabState extends State<RegisterTab> {
       return;
     }
 
-    final ImageSource? selectedSource = await showModalBottomSheet<ImageSource>(
+    // 1. Show Instructions Modal first
+    final bool? proceed = await showDialog<bool>(
       context: context,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (BuildContext ctx) {
-        return SafeArea(
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          backgroundColor: Colors.white,
           child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Container(
-                  width: 36,
-                  height: 4,
-                  margin: const EdgeInsets.only(bottom: 16),
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade400,
-                    borderRadius: BorderRadius.circular(2),
+                  width: 60,
+                  height: 60,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFEFF6FF),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.camera_front_rounded,
+                    color: AppColors.navy,
+                    size: 32,
                   ),
                 ),
+                const SizedBox(height: 18),
                 const Text(
-                  'Select Profile Picture Source',
+                  'Profile Photo Instructions',
+                  textAlign: TextAlign.center,
                   style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
+                    fontSize: 19,
+                    fontWeight: FontWeight.w800,
                     color: AppColors.navy,
                   ),
                 ),
-                const SizedBox(height: 20),
-                ListTile(
-                  leading: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: AppColors.gold.withValues(alpha: 0.15),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.photo_library_rounded,
-                      color: AppColors.gold,
-                    ),
+                const SizedBox(height: 12),
+                const Text(
+                  'To register your account, you must take a live reference photo of your face using your camera.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.black87,
+                    height: 1.4,
                   ),
-                  title: const Text(
-                    'Choose from Photo Library',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  onTap: () => Navigator.pop(ctx, ImageSource.gallery),
                 ),
-                const SizedBox(height: 8),
-                ListTile(
-                  leading: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: AppColors.navy.withValues(alpha: 0.15),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.camera_alt_rounded,
-                      color: AppColors.navy,
-                    ),
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: const Color(0xFFE2E8F0)),
                   ),
-                  title: const Text(
-                    'Take Photo directly',
-                    style: TextStyle(fontWeight: FontWeight.w600),
+                  child: const Column(
+                    children: [
+                      _InstructionRow(
+                        icon: Icons.light_mode_outlined,
+                        text: 'Ensure your face is brightly and evenly lit.',
+                      ),
+                      SizedBox(height: 8),
+                      _InstructionRow(
+                        icon: Icons.face_retouching_natural_outlined,
+                        text: 'Remove hats, heavy glasses, or face coverings.',
+                      ),
+                      SizedBox(height: 8),
+                      _InstructionRow(
+                        icon: Icons.center_focus_strong_outlined,
+                        text: 'Keep your face centered inside the circle.',
+                      ),
+                    ],
                   ),
-                  onTap: () => Navigator.pop(ctx, ImageSource.camera),
+                ),
+                const SizedBox(height: 22),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextButton(
+                        onPressed: () => Navigator.of(dialogContext).pop(false),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        child: const Text(
+                          'Cancel',
+                          style: TextStyle(
+                            color: Colors.grey,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      flex: 2,
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.of(dialogContext).pop(true),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.navy,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                        child: const Text(
+                          'Allow Camera & Continue',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -158,27 +205,26 @@ class _RegisterTabState extends State<RegisterTab> {
       },
     );
 
-    if (selectedSource == null) {
+    if (proceed != true || !mounted) return;
+
+    // 2. Request Camera Permission
+    final cameraStatus = await Permission.camera.request();
+    if (!cameraStatus.isGranted) {
+      if (!mounted) return;
+      await showSimpleError(
+        title: 'Camera Permission Required',
+        message: 'Camera access is required to take your live profile photo. Please enable camera permission in your settings.',
+      );
       return;
     }
 
+    // 3. Open Camera Screen
     try {
-      XFile? image;
-
-      if (selectedSource == ImageSource.camera) {
-        image = await Navigator.of(context).push<XFile>(
-          MaterialPageRoute(
-            builder: (_) => const ProfileCameraScreen(),
-          ),
-        );
-      } else {
-        image = await imagePicker.pickImage(
-          source: ImageSource.gallery,
-          imageQuality: 78,
-          maxWidth: 1024,
-          maxHeight: 1024,
-        );
-      }
+      final XFile? image = await Navigator.of(context).push<XFile>(
+        MaterialPageRoute(
+          builder: (_) => const ProfileCameraScreen(),
+        ),
+      );
 
       if (image == null || !mounted) {
         return;
@@ -217,7 +263,7 @@ class _RegisterTabState extends State<RegisterTab> {
             type: AppDialogType.error,
             title: 'Photo Not Accepted',
             message: result.message,
-            primaryText: 'Choose Another Photo',
+            primaryText: 'Retake Photo',
             primaryAction: () => Navigator.of(dialogContext).pop(),
           );
         },
@@ -229,12 +275,12 @@ class _RegisterTabState extends State<RegisterTab> {
 
       setState(() {
         facePhotoValid = false;
-        photoValidationMessage = 'Unable to process selected photo.';
+        photoValidationMessage = 'Unable to process captured photo.';
       });
 
       await showSimpleError(
         title: 'Photo Error',
-        message: 'Unable to process the selected photo. Please try another image.',
+        message: 'Unable to process the captured photo. Please try retaking the image.',
       );
     } finally {
       if (mounted) {
@@ -361,7 +407,7 @@ class _RegisterTabState extends State<RegisterTab> {
       !registering;
 
   // --------------------------------------------------------------------------
-  // SUBMIT REGISTRATION (WITH GUARANTEED STATE UNLOCK)
+  // SUBMIT REGISTRATION
   // --------------------------------------------------------------------------
 
   Future<void> submitRegistration() async {
@@ -800,7 +846,7 @@ class _RegisterTabState extends State<RegisterTab> {
                             ),
                           )
                         : Icon(
-                            facePhotoValid ? Icons.check_circle_rounded : Icons.file_upload_outlined,
+                            facePhotoValid ? Icons.check_circle_rounded : Icons.camera_alt_rounded,
                             size: 24,
                             color: facePhotoValid ? AppColors.success : AppColors.navy,
                           ),
@@ -811,7 +857,7 @@ class _RegisterTabState extends State<RegisterTab> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          profilePhoto?.name ?? 'Upload Profile Picture',
+                          profilePhoto?.name ?? 'Take Profile Photo',
                           style: const TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.bold,
@@ -824,7 +870,7 @@ class _RegisterTabState extends State<RegisterTab> {
                         Text(
                           validatingPhoto
                               ? 'Scanning reference photo...'
-                              : photoValidationMessage ?? 'Clear, well-lit headshot (JPG, JPEG, PNG)',
+                              : photoValidationMessage ?? 'Take a clear, well-lit live headshot',
                           style: TextStyle(
                             fontSize: 11,
                             color: facePhotoValid ? AppColors.success : AppColors.textMuted,
@@ -992,6 +1038,36 @@ class _RegisterTabState extends State<RegisterTab> {
   }
 }
 
+class _InstructionRow extends StatelessWidget {
+  final IconData icon;
+  final String text;
+
+  const _InstructionRow({
+    required this.icon,
+    required this.text,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: AppColors.navy),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            text,
+            style: const TextStyle(
+              fontSize: 12,
+              color: Colors.black87,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _PasswordRequirement extends StatelessWidget {
   final bool passed;
   final String text;
@@ -1067,7 +1143,6 @@ class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
         orElse: () => cameras.first,
       );
 
-      // Using ResolutionPreset.medium ensures high speed and prevents buffer blocking on budget phones
       final controller = CameraController(
         frontCamera,
         ResolutionPreset.medium,
@@ -1096,7 +1171,6 @@ class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
     }
   }
 
-  /// High-speed background Isolate compression to minimize server upload payloads
   static Uint8List _compressAndFlipImage(Uint8List bytes) {
     img.Image? decoded = img.decodeImage(bytes);
     if (decoded == null) return bytes;
