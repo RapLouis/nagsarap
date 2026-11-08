@@ -17,25 +17,40 @@ class EventItem {
 
   String get eventDate => _readString(['event_date', 'date']) ?? '';
 
-  String _toMilitaryTime(String? value) {
+  String _toMilitaryTime(String? value, {bool takeLast = false}) {
     if (value == null) return '';
     final text = value.trim();
     if (text.isEmpty) return '';
 
     try {
       final uppercase = text.toUpperCase();
-      if (uppercase.contains('AM') || uppercase.contains('PM')) {
-        final parsed = DateFormat('h:mm a').parse(uppercase);
-        return DateFormat('HH:mm:ss').format(parsed);
-      } else if (uppercase.contains(':')) {
-        final parts = uppercase.split(':');
-        if (parts.length == 2) {
-          final parsed = DateFormat('HH:mm').parse(uppercase);
-          return DateFormat('HH:mm:ss').format(parsed);
-        } else if (parts.length >= 3) {
-          final parsed = DateFormat('HH:mm:ss').parse(uppercase);
-          return DateFormat('HH:mm:ss').format(parsed);
-        }
+
+      // Handle Range Strings (e.g. "8:00 AM - 11:10 PM")
+      final amPmRegex = RegExp(r'(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)', caseSensitive: false);
+      final matches = amPmRegex.allMatches(uppercase).toList();
+
+      if (matches.isNotEmpty) {
+        final match = takeLast ? matches.last : matches.first;
+        int hour = int.parse(match.group(1)!);
+        final minute = int.parse(match.group(2)!);
+        final second = match.group(3) != null ? int.parse(match.group(3)!) : 0;
+        final period = match.group(4)!.toUpperCase();
+
+        if (period == 'PM' && hour < 12) hour += 12;
+        if (period == 'AM' && hour == 12) hour = 0;
+
+        return '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}';
+      }
+
+      final h24Regex = RegExp(r'\b([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?\b');
+      final h24Matches = h24Regex.allMatches(uppercase).toList();
+
+      if (h24Matches.isNotEmpty) {
+        final match = takeLast ? h24Matches.last : h24Matches.first;
+        final hour = int.parse(match.group(1)!);
+        final minute = int.parse(match.group(2)!);
+        final second = match.group(3) != null ? int.parse(match.group(3)!) : 0;
+        return '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}';
       }
     } catch (_) {}
 
@@ -43,11 +58,11 @@ class EventItem {
   }
 
   String get startTime {
-    return _toMilitaryTime(_readString(['start_time', 'time_in', 'attendance_start']));
+    return _toMilitaryTime(_readString(['start_time', 'time_in', 'attendance_start']), takeLast: false);
   }
 
   String get endTime {
-    return _toMilitaryTime(_readString(['end_time', 'time_out', 'attendance_end']));
+    return _toMilitaryTime(_readString(['end_time', 'time_out', 'attendance_end']), takeLast: true);
   }
 
   String? get formattedTimeRange {
@@ -56,7 +71,7 @@ class EventItem {
     if (start.isEmpty && end.isEmpty) {
       return null;
     }
-    if (start.isNotEmpty && end.isNotEmpty) {
+    if (start.isNotEmpty && end.isNotEmpty && start != end) {
       return '$start - $end';
     }
     return start.isNotEmpty ? start : end;

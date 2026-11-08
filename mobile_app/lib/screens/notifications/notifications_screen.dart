@@ -23,15 +23,15 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   String? _error;
 
   List<NotificationItem> _notifications = const [];
-  int _unreadCount = 0;
   bool _showUnreadOnly = false;
-  int _visibleLimit = 15;
 
   @override
   void initState() {
     super.initState();
     _loadNotifications();
   }
+
+  int get _unreadCount => _notifications.where((n) => !n.isRead).length;
 
   Future<void> _loadNotifications() async {
     if (mounted) {
@@ -47,13 +47,18 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     setState(() {
       _loading = false;
       if (result.success) {
-        _notifications = result.notifications;
-        _unreadCount = result.unreadCount;
-        _visibleLimit = 15;
+        // Sort notifications: Latest (newest timestamp) on top
+        final sortedList = List<NotificationItem>.from(result.notifications);
+        sortedList.sort((a, b) {
+          final first = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          final second = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          return second.compareTo(first); // Descending order
+        });
+
+        _notifications = sortedList;
         _error = null;
       } else {
         _notifications = const [];
-        _unreadCount = 0;
         _error = result.message;
       }
     });
@@ -61,21 +66,20 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
   Future<void> _markRead(NotificationItem notification) async {
     if (!notification.isRead) {
-      final result = await NotificationService.instance.markAsRead(notification.id);
-      if (result.success) {
-        setState(() {
-          _notifications = _notifications.map((item) {
-            if (item.id == notification.id) {
-              return item.copyWith(isRead: true, readAt: DateTime.now());
-            }
-            return item;
-          }).toList();
+      // Optimistic local update while preserving list order
+      setState(() {
+        _notifications = _notifications.map((item) {
+          if (item.id == notification.id) {
+            return item.copyWith(isRead: true, readAt: DateTime.now());
+          }
+          return item;
+        }).toList();
+      });
 
-          if (_unreadCount > 0) _unreadCount--;
-        });
-      }
+      // Background API call
+      await NotificationService.instance.markAsRead(notification.id);
     }
-    
+
     if (!mounted) return;
     _showCenteredNotificationModal(notification);
   }
@@ -84,20 +88,25 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     if (_markingAll || _unreadCount == 0) return;
     setState(() => _markingAll = true);
 
+    final now = DateTime.now();
+
+    // Optimistically mark all as read locally
+    setState(() {
+      _notifications = _notifications.map((item) {
+        return item.copyWith(isRead: true, readAt: now);
+      }).toList();
+    });
+
     final result = await NotificationService.instance.markAllAsRead();
     if (!mounted) return;
 
     setState(() => _markingAll = false);
-    if (!result.success) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(result.message)));
-      return;
-    }
 
-    final now = DateTime.now();
-    setState(() {
-      _notifications = _notifications.map((item) => item.copyWith(isRead: true, readAt: now)).toList();
-      _unreadCount = 0;
-    });
+    if (!result.success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result.message)),
+      );
+    }
   }
 
   void _showCenteredNotificationModal(NotificationItem notification) {
@@ -114,7 +123,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       builder: (BuildContext ctx) {
         return Dialog(
           backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
-          elevation: 8,
+          elevation: 6,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
             side: BorderSide(
@@ -131,83 +140,53 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 Row(
                   children: [
                     Container(
-                      width: 40,
-                      height: 40,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                       decoration: BoxDecoration(
-                        color: isDark ? parsed.config.iconBgDark : parsed.config.iconBgLight,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: parsed.config.color.withValues(alpha: 0.3),
-                          width: 1.0,
-                        ),
+                        color: isDark ? parsed.badgeBgDark : parsed.badgeBgLight,
+                        borderRadius: BorderRadius.circular(6),
                       ),
-                      child: Icon(parsed.config.icon, color: parsed.config.color, size: 20),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
-                        decoration: BoxDecoration(
-                          color: isDark ? parsed.config.badgeBgDark : parsed.config.badgeBgLight,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          parsed.sessionLabel,
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 0.4,
-                            color: isDark ? parsed.config.badgeTextDark : parsed.config.badgeTextLight,
-                          ),
+                      child: Text(
+                        parsed.badgeLabel,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.3,
+                          color: isDark ? parsed.badgeTextDark : parsed.badgeTextColor,
                         ),
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      visualDensity: VisualDensity.compact,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                      icon: const Icon(Icons.close_rounded, size: 20, color: muted),
+                    const Spacer(),
+                    GestureDetector(
+                      onTap: () => Navigator.pop(ctx),
+                      child: Text(
+                        'Close',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: isDark ? gold : navy,
+                        ),
+                      ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 16),
                 Divider(height: 1, color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
-                const SizedBox(height: 16),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
-                      width: 1.0,
-                    ),
-                  ),
-                  child: Column(
-                    children: [
-                      _buildInfoRow('Recorded Date', dateStr, isDark),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        child: Divider(
-                          height: 1,
-                          color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
-                        ),
-                      ),
-                      _buildInfoRow('Event Session', parsed.eventSessionType, isDark),
-                    ],
+                const SizedBox(height: 14),
+                Text(
+                  dateStr,
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    color: muted,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 8),
                 Text(
                   notification.title,
                   style: TextStyle(
-                    fontSize: 15,
+                    fontSize: 16,
                     fontWeight: FontWeight.w700,
                     color: isDark ? Colors.white : navy,
-                    letterSpacing: -0.2,
                   ),
                 ),
                 const SizedBox(height: 6),
@@ -219,10 +198,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     color: isDark ? const Color(0xFFCBD5E1) : const Color(0xFF475569),
                   ),
                 ),
-                const SizedBox(height: 22),
+                const SizedBox(height: 20),
                 SizedBox(
                   width: double.infinity,
-                  height: 42,
+                  height: 40,
                   child: ElevatedButton(
                     onPressed: () => Navigator.pop(ctx),
                     style: ElevatedButton.styleFrom(
@@ -234,7 +213,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       ),
                     ),
                     child: const Text(
-                      'Close Notice',
+                      'Done',
                       style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                     ),
                   ),
@@ -244,33 +223,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           ),
         );
       },
-    );
-  }
-
-  Widget _buildInfoRow(String label, String value, bool isDark) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 11,
-            color: muted,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        Flexible(
-          child: Text(
-            value,
-            textAlign: TextAlign.end,
-            style: TextStyle(
-              fontSize: 11.5,
-              fontWeight: FontWeight.w700,
-              color: isDark ? Colors.white : const Color(0xFF0F172A),
-            ),
-          ),
-        ),
-      ],
     );
   }
 
@@ -300,7 +252,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             color: Colors.white,
             fontSize: 18,
             fontWeight: FontWeight.w700,
-            letterSpacing: -0.3,
           ),
         ),
         actions: [
@@ -309,7 +260,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               onPressed: _markingAll ? null : _markAllRead,
               style: TextButton.styleFrom(
                 foregroundColor: gold,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               ),
               child: _markingAll
                   ? const SizedBox(
@@ -380,7 +331,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         if (filtered.isEmpty)
           _buildEmptyState()
         else
-          ..._buildNotificationList(filtered.take(_visibleLimit).toList()),
+          ..._buildNotificationList(filtered),
       ],
     );
   }
@@ -402,10 +353,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         children: [
           Expanded(
             child: GestureDetector(
-              onTap: () => setState(() {
-                _showUnreadOnly = false;
-                _visibleLimit = 15;
-              }),
+              onTap: () => setState(() => _showUnreadOnly = false),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 150),
                 padding: const EdgeInsets.symmetric(vertical: 8),
@@ -415,15 +363,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       ? (isDark ? const Color(0xFF0F172A) : Colors.white)
                       : Colors.transparent,
                   borderRadius: BorderRadius.circular(8),
-                  boxShadow: !_showUnreadOnly
-                      ? [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.04),
-                            blurRadius: 4,
-                            offset: const Offset(0, 1),
-                          )
-                        ]
-                      : null,
                 ),
                 child: Text(
                   'All (${_notifications.length})',
@@ -440,10 +379,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           ),
           Expanded(
             child: GestureDetector(
-              onTap: () => setState(() {
-                _showUnreadOnly = true;
-                _visibleLimit = 15;
-              }),
+              onTap: () => setState(() => _showUnreadOnly = true),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 150),
                 padding: const EdgeInsets.symmetric(vertical: 8),
@@ -453,15 +389,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       ? (isDark ? const Color(0xFF0F172A) : Colors.white)
                       : Colors.transparent,
                   borderRadius: BorderRadius.circular(8),
-                  boxShadow: _showUnreadOnly
-                      ? [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.04),
-                            blurRadius: 4,
-                            offset: const Offset(0, 1),
-                          )
-                        ]
-                      : null,
                 ),
                 child: Text(
                   'Unread ($_unreadCount)',
@@ -526,101 +453,79 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         onTap: () => _markRead(notification),
         borderRadius: BorderRadius.circular(10),
         child: Container(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
             color: isDark ? const Color(0xFF1E293B) : Colors.white,
             borderRadius: BorderRadius.circular(10),
             border: Border.all(
               color: notification.isRead
                   ? (isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0))
-                  : parsed.config.color.withValues(alpha: 0.4),
+                  : parsed.borderColor,
               width: notification.isRead ? 1.0 : 1.2,
             ),
           ),
-          child: Row(
+          child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: 38,
-                height: 38,
-                decoration: BoxDecoration(
-                  color: isDark ? parsed.config.iconBgDark : parsed.config.iconBgLight,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: parsed.config.color.withValues(alpha: 0.25),
-                    width: 1.0,
-                  ),
-                ),
-                child: Icon(parsed.config.icon, color: parsed.config.color, size: 19),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
-                          decoration: BoxDecoration(
-                            color: isDark ? parsed.config.badgeBgDark : parsed.config.badgeBgLight,
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            parsed.sessionLabel,
-                            style: TextStyle(
-                              fontSize: 9.5,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 0.4,
-                              color: isDark ? parsed.config.badgeTextDark : parsed.config.badgeTextLight,
-                            ),
-                          ),
-                        ),
-                        const Spacer(),
-                        if (notification.createdAt != null)
-                          Text(
-                            DateFormat('h:mm a').format(notification.createdAt!.toLocal()),
-                            style: const TextStyle(
-                              fontSize: 11,
-                              color: Color(0xFF94A3B8),
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        if (!notification.isRead) ...[
-                          const SizedBox(width: 6),
-                          Container(
-                            width: 6,
-                            height: 6,
-                            decoration: BoxDecoration(
-                              color: parsed.config.color,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                        ],
-                      ],
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: isDark ? parsed.badgeBgDark : parsed.badgeBgLight,
+                      borderRadius: BorderRadius.circular(4),
                     ),
-                    const SizedBox(height: 6),
-                    Text(
-                      notification.title,
+                    child: Text(
+                      parsed.badgeLabel,
                       style: TextStyle(
-                        fontSize: 13.5,
-                        fontWeight: notification.isRead ? FontWeight.w600 : FontWeight.w700,
-                        color: isDark ? Colors.white : const Color(0xFF0F172A),
-                        height: 1.2,
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.3,
+                        color: isDark ? parsed.badgeTextDark : parsed.badgeTextColor,
                       ),
                     ),
-                    const SizedBox(height: 4),
+                  ),
+                  const Spacer(),
+                  if (notification.createdAt != null)
                     Text(
-                      notification.message,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        height: 1.4,
-                        color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF475569),
+                      DateFormat('h:mm a').format(notification.createdAt!.toLocal()),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: muted,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  if (!notification.isRead) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      width: 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        color: parsed.borderColor,
+                        shape: BoxShape.circle,
                       ),
                     ),
                   ],
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                notification.title,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: notification.isRead ? FontWeight.w600 : FontWeight.w700,
+                  color: isDark ? Colors.white : const Color(0xFF0F172A),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                notification.message,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1.4,
+                  color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF475569),
                 ),
               ),
             ],
@@ -638,24 +543,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       alignment: Alignment.center,
       child: Column(
         children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(
-              Icons.notifications_none_rounded,
-              size: 32,
-              color: muted.withValues(alpha: 0.7),
-            ),
-          ),
-          const SizedBox(height: 12),
           Text(
             'All caught up',
             style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w700,
+              fontSize: 15,
+              fontWeight: FontWeight.bold,
               color: isDark ? Colors.white : navy,
             ),
           ),
@@ -683,8 +575,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       ),
       child: Column(
         children: [
-          const Icon(Icons.error_outline_rounded, color: Color(0xFFDC2626), size: 28),
-          const SizedBox(height: 8),
           Text(
             _error ?? 'Failed to load notifications.',
             style: const TextStyle(fontSize: 12, color: muted),
@@ -713,141 +603,80 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     final type = notification.type.trim().toLowerCase();
     final combined = '$title $message $type';
 
-    if (combined.contains('fail') || combined.contains('error') || combined.contains('absent') || combined.contains('already checked out')) {
+    // 1. Attendance Record Error / Failure
+    if (type.contains('error') || type.contains('fail') || combined.contains('error') || combined.contains('failed') || combined.contains('absent')) {
       return const _ParsedNotification(
-        sessionLabel: 'ATTENDANCE FAILED',
-        eventSessionType: 'Failed / Disqualified',
-        config: _NotificationConfig(
-          color: Color(0xFFDC2626),
-          badgeBgLight: Color(0xFFFEE2E2),
-          badgeTextLight: Color(0xFFB91C1C),
-          iconBgLight: Color(0xFFFEF2F2),
-          badgeBgDark: Color(0xFF7F1D1D),
-          badgeTextDark: Color(0xFFFECACA),
-          iconBgDark: Color(0xFF450A0A),
-          icon: Icons.cancel_outlined,
-        ),
+        badgeLabel: 'RECORD ERROR',
+        badgeTextColor: Color(0xFFB91C1C),
+        badgeBgLight: Color(0xFFFEE2E2),
+        borderColor: Color(0xFFEF4444),
+        badgeBgDark: Color(0xFF7F1D1D),
+        badgeTextDark: Color(0xFFFECACA),
       );
     }
 
-    bool isTimeIn = combined.contains('time-in') || combined.contains('time in') || combined.contains('timein') || combined.contains('check-in') || combined.contains('check in');
-    bool isTimeOut = combined.contains('time-out') || combined.contains('time out') || combined.contains('timeout') || combined.contains('check-out') || combined.contains('check out');
-
-    if (isTimeIn && !isTimeOut) {
+    // 2. New Event Creation
+    if (type.contains('event_created') || combined.contains('new event') || combined.contains('created a new event') || combined.contains('event scheduled')) {
       return const _ParsedNotification(
-        sessionLabel: 'TIME-IN RECORDED',
-        eventSessionType: 'Time-In Session',
-        config: _NotificationConfig(
-          color: Color(0xFF16A34A),
-          badgeBgLight: Color(0xFFDCFCE7),
-          badgeTextLight: Color(0xFF15803D),
-          iconBgLight: Color(0xFFF0FDF4),
-          badgeBgDark: Color(0xFF064E3B),
-          badgeTextDark: Color(0xFF86EFAC),
-          iconBgDark: Color(0xFF022C22),
-          icon: Icons.login_rounded,
-        ),
+        badgeLabel: 'NEW EVENT',
+        badgeTextColor: Color(0xFF4338CA),
+        badgeBgLight: Color(0xFFE0E7FF),
+        borderColor: Color(0xFF6366F1),
+        badgeBgDark: Color(0xFF312E81),
+        badgeTextDark: Color(0xFFC7D2FE),
       );
     }
 
-    if (isTimeOut && !isTimeIn) {
+    // 3. Admin Event Update / Reschedule
+    if (type.contains('event_updated') || combined.contains('event updated') || combined.contains('rescheduled') || combined.contains('updated event') || combined.contains('admin updated')) {
       return const _ParsedNotification(
-        sessionLabel: 'TIME-OUT RECORDED',
-        eventSessionType: 'Time-Out Session',
-        config: _NotificationConfig(
-          color: Color(0xFF2563EB),
-          badgeBgLight: Color(0xFFDBEAFE),
-          badgeTextLight: Color(0xFF1D4ED8),
-          iconBgLight: Color(0xFFEFF6FF),
-          badgeBgDark: Color(0xFF1E3A8A),
-          badgeTextDark: Color(0xFF93C5FD),
-          iconBgDark: Color(0xFF172554),
-          icon: Icons.logout_rounded,
-        ),
+        badgeLabel: 'EVENT UPDATED',
+        badgeTextColor: Color(0xFFC2410C),
+        badgeBgLight: Color(0xFFFFEDD5),
+        borderColor: Color(0xFFF97316),
+        badgeBgDark: Color(0xFF7C2D12),
+        badgeTextDark: Color(0xFFFDBA74),
       );
     }
 
-    if (combined.contains('update') || combined.contains('reschedule') || combined.contains('change')) {
+    // 4. Sanction / Warning
+    if (type.contains('sanction') || combined.contains('sanction') || combined.contains('warning') || combined.contains('penalty')) {
       return const _ParsedNotification(
-        sessionLabel: 'EVENT UPDATED',
-        eventSessionType: 'Schedule Update',
-        config: _NotificationConfig(
-          color: Color(0xFFD97706),
-          badgeBgLight: Color(0xFFFEF3C7),
-          badgeTextLight: Color(0xFFB45309),
-          iconBgLight: Color(0xFFFFFBEB),
-          badgeBgDark: Color(0xFF78350F),
-          badgeTextDark: Color(0xFFFDE68A),
-          iconBgDark: Color(0xFF451A03),
-          icon: Icons.update_rounded,
-        ),
+        badgeLabel: 'SANCTION NOTICE',
+        badgeTextColor: Color(0xFFBE123C),
+        badgeBgLight: Color(0xFFFFE4E6),
+        borderColor: Color(0xFFF43F5E),
+        badgeBgDark: Color(0xFF881337),
+        badgeTextDark: Color(0xFFFDA4AF),
       );
     }
 
-    if (combined.contains('sanction') || combined.contains('warning') || combined.contains('penalty')) {
-      return const _ParsedNotification(
-        sessionLabel: 'SANCTION NOTICE',
-        eventSessionType: 'Warning / Sanction',
-        config: _NotificationConfig(
-          color: Color(0xFFE11D48),
-          badgeBgLight: Color(0xFFFFE4E6),
-          badgeTextLight: Color(0xFFBE123C),
-          iconBgLight: Color(0xFFFFF1F2),
-          badgeBgDark: Color(0xFF881337),
-          badgeTextDark: Color(0xFFFDA4AF),
-          iconBgDark: Color(0xFF4C0519),
-          icon: Icons.gpp_maybe_outlined,
-        ),
-      );
-    }
-
+    // 5. Default: Attendance Success
     return const _ParsedNotification(
-      sessionLabel: 'VERIFIED PRESENT',
-      eventSessionType: 'General Attendance',
-      config: _NotificationConfig(
-        color: Color(0xFF16A34A),
-        badgeBgLight: Color(0xFFDCFCE7),
-        badgeTextLight: Color(0xFF15803D),
-        iconBgLight: Color(0xFFF0FDF4),
-        badgeBgDark: Color(0xFF064E3B),
-        badgeTextDark: Color(0xFF86EFAC),
-        iconBgDark: Color(0xFF022C22),
-        icon: Icons.check_circle_outline_rounded,
-      ),
+      badgeLabel: 'ATTENDANCE SUCCESS',
+      badgeTextColor: Color(0xFF15803D),
+      badgeBgLight: Color(0xFFDCFCE7),
+      borderColor: Color(0xFF22C55E),
+      badgeBgDark: Color(0xFF064E3B),
+      badgeTextDark: Color(0xFF86EFAC),
     );
   }
 }
 
 class _ParsedNotification {
-  final String sessionLabel;
-  final String eventSessionType;
-  final _NotificationConfig config;
-
-  const _ParsedNotification({
-    required this.sessionLabel,
-    required this.eventSessionType,
-    required this.config,
-  });
-}
-
-class _NotificationConfig {
-  final Color color;
+  final String badgeLabel;
+  final Color badgeTextColor;
   final Color badgeBgLight;
-  final Color badgeTextLight;
-  final Color iconBgLight;
+  final Color borderColor;
   final Color badgeBgDark;
   final Color badgeTextDark;
-  final Color iconBgDark;
-  final IconData icon;
 
-  const _NotificationConfig({
-    required this.color,
+  const _ParsedNotification({
+    required this.badgeLabel,
+    required this.badgeTextColor,
     required this.badgeBgLight,
-    required this.badgeTextLight,
-    required this.iconBgLight,
+    required this.borderColor,
     required this.badgeBgDark,
     required this.badgeTextDark,
-    required this.iconBgDark,
-    required this.icon,
   });
 }
