@@ -1,11 +1,52 @@
 import 'package:flutter/material.dart';
+import 'package:workmanager/workmanager.dart';
+
 import 'controllers/theme_controller.dart';
 import 'screens/splash/app_splash_screen.dart';
+import 'services/attendance_service.dart';
 
 final ThemeController themeController = ThemeController();
 
-void main() {
+/// Top-level background entry point required by Flutter WorkManager.
+/// Marked with `@pragma('vm:entry-point')` to prevent tree-shaking in release builds.
+@pragma('vm:entry-point')
+void callbackDispatcher() {
+  Workmanager().executeTask((taskName, inputData) async {
+    try {
+      debugPrint('[WORKMANAGER] Starting background offline attendance sync...');
+
+      // Process pending SQLite attendance records silently
+      final syncResult = await AttendanceService.instance.syncPendingOfflineAttendance();
+
+      debugPrint('[WORKMANAGER] Sync complete: ${syncResult.message}');
+      return Future.value(true);
+    } catch (e) {
+      debugPrint('[WORKMANAGER ERROR] Background sync failed: $e');
+      return Future.value(false);
+    }
+  });
+}
+
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize WorkManager for background execution
+  await Workmanager().initialize(
+    callbackDispatcher,
+    isInDebugMode: false,
+  );
+
+  // Register a 15-minute periodic task that triggers when internet is connected
+  await Workmanager().registerPeriodicTask(
+    'attendance_offline_sync_task',
+    'syncOfflineAttendanceTask',
+    frequency: const Duration(minutes: 15),
+    constraints: Constraints(
+      networkType: NetworkType.connected,
+    ),
+    existingWorkPolicy: ExistingWorkPolicy.keep,
+  );
+
   runApp(const MyApp());
 }
 

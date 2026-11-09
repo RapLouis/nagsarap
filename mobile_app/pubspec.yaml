@@ -13,6 +13,12 @@ dependencies:
 
   cupertino_icons: ^1.0.8
 
+  # Native High-Speed Image Compression
+  flutter_image_compress: ^2.3.0
+
+  # Background Tasks
+  workmanager: ^0.6.0
+
   # API
   dio: ^5.11.1
 
@@ -48,7 +54,7 @@ dependencies:
   # UI
   google_fonts: ^8.2.1
   path_provider: ^2.1.6
-  flutter_image_compress: ^2.5.1
+  flutter_easyloading: ^3.0.5
 
 dev_dependencies:
   flutter_test:

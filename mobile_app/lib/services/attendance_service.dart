@@ -406,6 +406,11 @@ class AttendanceService {
     }
   }
 
+  /// Alias for WorkManager background isolate tasks
+  Future<OfflineSyncResult> syncPendingOfflineAttendance() {
+    return syncPendingAttendances();
+  }
+
   Future<OfflineSyncResult> syncPendingAttendances() {
     final existing = _activeOfflineSync;
 
@@ -436,7 +441,12 @@ class AttendanceService {
     final records = await _offlineStorage.getPendingAttendances();
 
     if (records.isEmpty) {
-      return const OfflineSyncResult(total: 0, synced: 0, remaining: 0);
+      return const OfflineSyncResult(
+        total: 0,
+        synced: 0,
+        remaining: 0,
+        message: 'No pending offline attendance records to sync.',
+      );
     }
 
     var synced = 0;
@@ -450,9 +460,17 @@ class AttendanceService {
         continue;
       }
 
+      // Stop processing if internet connection dropped
       if (result.networkUnavailable) {
         break;
       }
+
+      // Deletes permanently rejected offline records from SQLite
+      // so the yellow pending banner disappears cleanly upon sync.
+      debugPrint(
+        'OFFLINE SYNC REJECTED BY SERVER (${result.message}). Cleaning up SQLite.',
+      );
+      await _offlineStorage.deletePending(record);
     }
 
     final remaining = await _offlineStorage.pendingCount();
@@ -461,6 +479,8 @@ class AttendanceService {
       total: records.length,
       synced: synced,
       remaining: remaining,
+      message:
+          'Processed $synced of ${records.length} records. Remaining: $remaining',
     );
   }
 
@@ -533,7 +553,7 @@ class AttendanceService {
       case 429:
         return 'Too many requests. Please wait.';
       default:
-        return 'Server Error (${response.statusCode}):${response.statusMessage ?? "Attendance verification failed."}';
+        return 'Server Error (${response.statusCode}): ${response.statusMessage ?? "Attendance verification failed."}';
     }
   }
 }
@@ -603,9 +623,11 @@ class OfflineSyncResult {
     required this.total,
     required this.synced,
     required this.remaining,
+    this.message = 'Offline sync completed.',
   });
 
   final int total;
   final int synced;
   final int remaining;
+  final String message;
 }
