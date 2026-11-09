@@ -603,10 +603,18 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     final type = notification.type.trim().toLowerCase();
     final combined = '$title $message $type';
 
-    // 1. Attendance Record Error / Failure
-    if (type.contains('error') || type.contains('fail') || combined.contains('error') || combined.contains('failed') || combined.contains('absent')) {
+    // 1. Missed Attendance / Absent / Record Error
+    if (type.contains('missed') ||
+        type.contains('absent') ||
+        combined.contains('missed attendance') ||
+        combined.contains('did not attend') ||
+        type.contains('error') ||
+        type.contains('fail') ||
+        combined.contains('error') ||
+        combined.contains('failed') ||
+        combined.contains('absent')) {
       return const _ParsedNotification(
-        badgeLabel: 'RECORD ERROR',
+        badgeLabel: 'MISSED ATTENDANCE',
         badgeTextColor: Color(0xFFB91C1C),
         badgeBgLight: Color(0xFFFEE2E2),
         borderColor: Color(0xFFEF4444),
@@ -616,7 +624,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     }
 
     // 2. New Event Creation
-    if (type.contains('event_created') || combined.contains('new event') || combined.contains('created a new event') || combined.contains('event scheduled')) {
+    if (type.contains('event_created') ||
+        combined.contains('new event') ||
+        combined.contains('created a new event') ||
+        combined.contains('event scheduled')) {
       return const _ParsedNotification(
         badgeLabel: 'NEW EVENT',
         badgeTextColor: Color(0xFF4338CA),
@@ -628,7 +639,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     }
 
     // 3. Admin Event Update / Reschedule
-    if (type.contains('event_updated') || combined.contains('event updated') || combined.contains('rescheduled') || combined.contains('updated event') || combined.contains('admin updated')) {
+    if (type.contains('event_updated') ||
+        combined.contains('event updated') ||
+        combined.contains('rescheduled') ||
+        combined.contains('updated event') ||
+        combined.contains('admin updated')) {
       return const _ParsedNotification(
         badgeLabel: 'EVENT UPDATED',
         badgeTextColor: Color(0xFFC2410C),
@@ -640,7 +655,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     }
 
     // 4. Sanction / Warning
-    if (type.contains('sanction') || combined.contains('sanction') || combined.contains('warning') || combined.contains('penalty')) {
+    if (type.contains('sanction') ||
+        combined.contains('sanction') ||
+        combined.contains('warning') ||
+        combined.contains('penalty')) {
       return const _ParsedNotification(
         badgeLabel: 'SANCTION NOTICE',
         badgeTextColor: Color(0xFFBE123C),
