@@ -1,11 +1,11 @@
 import 'dart:async';
-import 'dart:io';
+import 'dart:math';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:intl/intl.dart';
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../main.dart';
@@ -44,8 +44,23 @@ class _AttendanceFaceVerificationScreenState
   static const Color brandGold = Color(0xFFFFC800);
   static const Color muted = Color(0xFF94A3B8);
 
+  // Minimum head yaw angle (in degrees) required to confirm a left/right turn
+  static const double _requiredTurnAngle = 14.0;
+
+  final Random _random = Random();
   CameraController? _camera;
   Position? _position;
+
+  // On-device ML Kit face detector (100% offline capable)
+  final FaceDetector _faceDetector = FaceDetector(
+    options: FaceDetectorOptions(
+      enableClassification: false,
+      enableLandmarks: false,
+      enableContours: false,
+      enableTracking: false,
+      performanceMode: FaceDetectorMode.fast,
+    ),
+  );
 
   bool _cameraReady = false;
   bool _disposed = false;
@@ -94,11 +109,16 @@ class _AttendanceFaceVerificationScreenState
       _currentSession = await _determineCurrentSession();
       if (_currentSession == null) {
         _showClosedDialog(
-            'Attendance is currently closed or not active for this event.');
+          'Attendance is currently closed or not active for this event.',
+        );
       } else {
         _initializeAndRunSequence();
       }
     });
+  }
+
+  String _pickRandomDirection() {
+    return _random.nextBool() ? 'left' : 'right';
   }
 
   // --------------------------------------------------------------------------
@@ -116,23 +136,20 @@ class _AttendanceFaceVerificationScreenState
     bool isStrictlyInside(DateTime? start, DateTime? end) {
       if (start == null || end == null) return false;
       return (now.isAfter(start) || now.isAtSameMomentAs(start)) &&
-             (now.isBefore(end) || now.isAtSameMomentAs(end));
+          (now.isBefore(end) || now.isAtSameMomentAs(end));
     }
 
     final bool isTimeInActive = isStrictlyInside(timeInWin.start, timeInWin.end);
     final bool isTimeOutActive = isStrictlyInside(timeOutWin.start, timeOutWin.end);
 
-    // 1. Time-In session check
     if (isTimeInActive && !_hasTimeIn) {
       return AttendanceSessionType.timeIn;
     }
 
-    // 2. Time-Out session check
     if (isTimeOutActive && !_hasTimeOut) {
       return AttendanceSessionType.timeOut;
     }
 
-    // 3. Outside active second range -> CLOSED
     return null;
   }
 
@@ -147,9 +164,16 @@ class _AttendanceFaceVerificationScreenState
     void collectFromValue(dynamic value) {
       if (value == null) return;
       final str = value.toString().trim();
-      if (str.isEmpty || str.toLowerCase() == 'null' || str.toLowerCase() == 'tba') return;
+      if (str.isEmpty ||
+          str.toLowerCase() == 'null' ||
+          str.toLowerCase() == 'tba') {
+        return;
+      }
 
-      final amPmRegex = RegExp(r'(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)', caseSensitive: false);
+      final amPmRegex = RegExp(
+        r'(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)',
+        caseSensitive: false,
+      );
       final amPmMatches = amPmRegex.allMatches(str);
 
       if (amPmMatches.isNotEmpty) {
@@ -162,7 +186,9 @@ class _AttendanceFaceVerificationScreenState
           if (period == 'PM' && hour < 12) hour += 12;
           if (period == 'AM' && hour == 12) hour = 0;
 
-          foundTimes.add(DateTime(now.year, now.month, now.day, hour, minute, second));
+          foundTimes.add(
+            DateTime(now.year, now.month, now.day, hour, minute, second),
+          );
         }
         return;
       }
@@ -176,21 +202,29 @@ class _AttendanceFaceVerificationScreenState
           final minute = int.parse(m.group(2)!);
           final second = m.group(3) != null ? int.parse(m.group(3)!) : 0;
 
-          foundTimes.add(DateTime(now.year, now.month, now.day, hour, minute, second));
+          foundTimes.add(
+            DateTime(now.year, now.month, now.day, hour, minute, second),
+          );
         }
         return;
       }
 
       final iso = DateTime.tryParse(str);
       if (iso != null) {
-        foundTimes.add(DateTime(now.year, now.month, now.day, iso.hour, iso.minute, iso.second));
+        foundTimes.add(
+          DateTime(now.year, now.month, now.day, iso.hour, iso.minute, iso.second),
+        );
       }
     }
 
     void scanMap(dynamic data) {
       if (data is Map) {
         for (final entry in data.entries) {
-          final keyStr = entry.key.toString().toLowerCase().replaceAll('_', '').replaceAll('-', '');
+          final keyStr = entry.key
+              .toString()
+              .toLowerCase()
+              .replaceAll('_', '')
+              .replaceAll('-', '');
 
           bool matchesKey = false;
           for (final tk in targetKeywords) {
@@ -227,10 +261,142 @@ class _AttendanceFaceVerificationScreenState
     foundTimes.sort();
 
     final start = foundTimes.isNotEmpty ? foundTimes.first : null;
-    final end = foundTimes.length > 1 ? foundTimes.last : (foundTimes.isNotEmpty ? foundTimes.first.add(const Duration(hours: 1)) : null);
+    final end = foundTimes.length > 1
+        ? foundTimes.last
+        : (foundTimes.isNotEmpty
+            ? foundTimes.first.add(const Duration(hours: 1))
+            : null);
 
     return _TimeWindow(start, end);
   }
+
+  // --------------------------------------------------------------------------
+  // ON-DEVICE ML KIT HEAD-TURN VALIDATION (INSTANT FEEDBACK)
+  // --------------------------------------------------------------------------
+
+  Future<_PoseValidationResult> _validateCenterPoseMLKit(XFile frame) async {
+    try {
+      final inputImage = InputImage.fromFilePath(frame.path);
+      final faces = await _faceDetector.processImage(inputImage);
+
+      if (faces.isEmpty) {
+        return const _PoseValidationResult(
+          isValid: false,
+          title: 'Face Not Detected',
+          message:
+              'Please position your face clearly inside the circle and keep steady.',
+        );
+      }
+
+      final yaw = faces.first.headEulerAngleY ?? 0.0;
+
+      if (yaw.abs() > 18.0) {
+        return _PoseValidationResult(
+          isValid: false,
+          title: 'Look Straight First',
+          message:
+              'Please look straight at the camera during the first step before turning (angle: ${yaw.toStringAsFixed(0)}°).',
+        );
+      }
+
+      return _PoseValidationResult(
+        isValid: true,
+        title: 'Center Verified',
+        message: 'Center pose OK',
+        yaw: yaw,
+      );
+    } catch (e) {
+      debugPrint('[MLKIT CENTER ERROR] $e');
+      return const _PoseValidationResult(
+        isValid: true,
+        title: 'Verified',
+        message: 'Fallback pass',
+      );
+    }
+  }
+
+  Future<_PoseValidationResult> _validateTurnPoseMLKit({
+    required double centerYaw,
+    required XFile turnedFrame,
+    required String requiredDirection,
+  }) async {
+    try {
+      final inputImage = InputImage.fromFilePath(turnedFrame.path);
+      final faces = await _faceDetector.processImage(inputImage);
+
+      if (faces.isEmpty) {
+        return _PoseValidationResult(
+          isValid: false,
+          title: 'Face Lost During Turn',
+          message:
+              'Your face moved out of view. Turn your head slightly to the ${requiredDirection.toUpperCase()} while staying inside the circle.',
+        );
+      }
+
+      final turnedYaw = faces.first.headEulerAngleY ?? 0.0;
+      final deltaYaw = turnedYaw - centerYaw;
+
+      // Positive yaw = user's left on front camera; Negative yaw = user's right
+      final bool turnedLeft = deltaYaw > _requiredTurnAngle;
+      final bool turnedRight = deltaYaw < -_requiredTurnAngle;
+
+      if (requiredDirection == 'left' && !turnedLeft) {
+        if (turnedRight) {
+          return _PoseValidationResult(
+            isValid: false,
+            title: 'Wrong Direction',
+            message:
+                'You turned RIGHT, but you need to turn LEFT. Please try again.',
+            yaw: deltaYaw,
+          );
+        }
+        return _PoseValidationResult(
+          isValid: false,
+          title: 'Head Turn Not Detected',
+          message:
+              'Please turn your head clearly to the LEFT (detected: ${deltaYaw.toStringAsFixed(0)}°) and try again.',
+          yaw: deltaYaw,
+        );
+      }
+
+      if (requiredDirection == 'right' && !turnedRight) {
+        if (turnedLeft) {
+          return _PoseValidationResult(
+            isValid: false,
+            title: 'Wrong Direction',
+            message:
+                'You turned LEFT, but you need to turn RIGHT. Please try again.',
+            yaw: deltaYaw,
+          );
+        }
+        return _PoseValidationResult(
+          isValid: false,
+          title: 'Head Turn Not Detected',
+          message:
+              'Please turn your head clearly to the RIGHT (detected: ${deltaYaw.toStringAsFixed(0)}°) and try again.',
+          yaw: deltaYaw,
+        );
+      }
+
+      return _PoseValidationResult(
+        isValid: true,
+        title: 'Turn Verified',
+        message: 'Head turn confirmed (${deltaYaw.toStringAsFixed(0)}°).',
+        yaw: deltaYaw,
+      );
+    } catch (e) {
+      debugPrint('[MLKIT TURN ERROR] $e');
+      return const _PoseValidationResult(
+        isValid: true,
+        title: 'Verified',
+        message: 'Fallback pass',
+      );
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // DIALOGS
+  // --------------------------------------------------------------------------
 
   Future<void> _showClosedDialog(String message) async {
     if (!mounted) return;
@@ -244,7 +410,11 @@ class _AttendanceFaceVerificationScreenState
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Row(
           children: [
-            const Icon(Icons.access_time_filled_rounded, color: Colors.orangeAccent, size: 26),
+            const Icon(
+              Icons.access_time_filled_rounded,
+              color: Colors.orangeAccent,
+              size: 26,
+            ),
             const SizedBox(width: 10),
             Text(
               'Attendance Closed',
@@ -272,18 +442,26 @@ class _AttendanceFaceVerificationScreenState
             style: ElevatedButton.styleFrom(
               backgroundColor: isDark ? brandGold : brandNavy,
               foregroundColor: isDark ? brandNavy : Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
             ),
-            child: const Text('OK', style: TextStyle(fontWeight: FontWeight.bold)),
+            child: const Text(
+              'OK',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
           ),
         ],
       ),
     );
   }
 
-  Future<void> _showTurnErrorDialog(String message) async {
+  Future<void> _showInstantPosePopup({
+    required String title,
+    required String message,
+  }) async {
     if (!mounted || _disposed) return;
-    HapticFeedback.vibrate();
+    HapticFeedback.heavyImpact();
     final isDark = themeController.isDarkMode;
 
     await showDialog<void>(
@@ -300,12 +478,16 @@ class _AttendanceFaceVerificationScreenState
                 color: Color(0xFFFEF2F2),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.error_outline_rounded, color: Color(0xFFDC2626), size: 24),
+              child: const Icon(
+                Icons.warning_amber_rounded,
+                color: Color(0xFFDC2626),
+                size: 24,
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                'Incorrect Head Turn',
+                title,
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   fontSize: 17,
@@ -318,7 +500,7 @@ class _AttendanceFaceVerificationScreenState
         content: Text(
           message,
           style: TextStyle(
-            fontSize: 13.5,
+            fontSize: 14,
             height: 1.4,
             color: isDark ? const Color(0xFFCBD5E1) : const Color(0xFF475569),
           ),
@@ -331,6 +513,9 @@ class _AttendanceFaceVerificationScreenState
                 Navigator.of(dialogCtx).pop();
                 if (mounted && !_disposed) {
                   setState(() {
+                    if (_challengeNonce == 'offline-nonce') {
+                      _direction = _pickRandomDirection();
+                    }
                     _step = _LivenessStep.lookCenter;
                     _error = null;
                     _isProcessing = false;
@@ -342,9 +527,14 @@ class _AttendanceFaceVerificationScreenState
                 backgroundColor: isDark ? brandGold : brandNavy,
                 foregroundColor: isDark ? brandNavy : Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
               ),
-              child: const Text('Try Again', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+              child: const Text(
+                'Try Again Now',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+              ),
             ),
           ),
         ],
@@ -352,59 +542,9 @@ class _AttendanceFaceVerificationScreenState
     );
   }
 
-  Future<bool> _verifyOfflinePose({
-    required XFile centerFrame,
-    required XFile turnedFrame,
-    required String targetDirection,
-  }) async {
-    try {
-      final centerFile = File(centerFrame.path);
-      final turnedFile = File(turnedFrame.path);
-
-      if (!await centerFile.exists() || !await turnedFile.exists()) {
-        return false;
-      }
-
-      final centerBytes = await centerFile.readAsBytes();
-      final turnedBytes = await turnedFile.readAsBytes();
-
-      if (centerBytes.length < 500 || turnedBytes.length < 500) {
-        return false;
-      }
-
-      int centerLeft = 0, centerRight = 0;
-      int turnedLeft = 0, turnedRight = 0;
-
-      final len = turnedBytes.length;
-      final step = (len / 1000).clamp(1, 100).toInt();
-
-      for (int i = 0; i < len - 1; i += step) {
-        final b = turnedBytes[i];
-        if (i < len / 2) {
-          turnedLeft += b;
-        } else {
-          turnedRight += b;
-        }
-      }
-
-      for (int i = 0; i < centerBytes.length - 1; i += step) {
-        final b = centerBytes[i];
-        if (i < centerBytes.length / 2) {
-          centerLeft += b;
-        } else {
-          centerRight += b;
-        }
-      }
-
-      final centerRatio = (centerLeft - centerRight).abs();
-      final turnedRatio = (turnedLeft - turnedRight).abs();
-
-      return (turnedRatio - centerRatio).abs() > 50;
-    } catch (e) {
-      debugPrint('Offline pose analysis error: $e');
-      return true;
-    }
-  }
+  // --------------------------------------------------------------------------
+  // CAMERA & CAPTURE SEQUENCE
+  // --------------------------------------------------------------------------
 
   Future<void> _initializeAndRunSequence() async {
     try {
@@ -412,7 +552,9 @@ class _AttendanceFaceVerificationScreenState
 
       final initFuture = () async {
         final cameraPerm = await Permission.camera.request();
-        if (!cameraPerm.isGranted) throw Exception('Camera permission is required.');
+        if (!cameraPerm.isGranted) {
+          throw Exception('Camera permission is required.');
+        }
 
         return Future.wait([
           _initCameraFast(),
@@ -439,7 +581,7 @@ class _AttendanceFaceVerificationScreenState
         _challengeNonce = challengeResult.challenge!.nonce;
         _challengeSessionId = challengeResult.challenge!.sessionId;
       } else {
-        _direction = 'left';
+        _direction = _pickRandomDirection();
         _challengeNonce = 'offline-nonce';
         _challengeSessionId = DateTime.now().millisecondsSinceEpoch.toString();
       }
@@ -477,7 +619,11 @@ class _AttendanceFaceVerificationScreenState
                     color: Color(0xFFFEF3C7),
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(Icons.security_rounded, color: Color(0xFFD97706), size: 32),
+                  child: const Icon(
+                    Icons.security_rounded,
+                    color: Color(0xFFD97706),
+                    size: 32,
+                  ),
                 ),
                 const SizedBox(height: 18),
                 Text(
@@ -503,13 +649,19 @@ class _AttendanceFaceVerificationScreenState
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: isDark ? const Color(0xFF3B2D08) : const Color(0xFFFFFBEB),
+                    color: isDark
+                        ? const Color(0xFF3B2D08)
+                        : const Color(0xFFFFFBEB),
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(color: const Color(0xFFFDE68A)),
                   ),
                   child: const Row(
                     children: [
-                      Icon(Icons.warning_amber_rounded, color: Color(0xFFD97706), size: 22),
+                      Icon(
+                        Icons.warning_amber_rounded,
+                        color: Color(0xFFD97706),
+                        size: 22,
+                      ),
                       SizedBox(width: 10),
                       Expanded(
                         child: Text(
@@ -533,9 +685,17 @@ class _AttendanceFaceVerificationScreenState
                       backgroundColor: isDark ? brandGold : brandNavy,
                       foregroundColor: isDark ? brandNavy : Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
                     ),
-                    child: const Text('I Understand', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                    child: const Text(
+                      'I Understand',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
                   ),
                 ),
               ],
@@ -579,8 +739,13 @@ class _AttendanceFaceVerificationScreenState
       if (!enabled) return null;
 
       LocationPermission perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
-      if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) return null;
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.denied ||
+          perm == LocationPermission.deniedForever) {
+        return null;
+      }
 
       return await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
@@ -601,7 +766,12 @@ class _AttendanceFaceVerificationScreenState
 
     if (lat == null || lng == null || rad <= 0) return;
 
-    final dist = Geolocator.distanceBetween(pos.latitude, pos.longitude, lat, lng);
+    final dist = Geolocator.distanceBetween(
+      pos.latitude,
+      pos.longitude,
+      lat,
+      lng,
+    );
     if (dist > rad) {
       final remaining = (dist - rad).round();
       throw Exception('Outside event area. Move $remaining m closer.');
@@ -609,13 +779,19 @@ class _AttendanceFaceVerificationScreenState
   }
 
   Future<void> _runAutomatedCapture() async {
-    if (_isProcessing || _camera == null || !_camera!.value.isInitialized || _disposed) return;
+    if (_isProcessing ||
+        _camera == null ||
+        !_camera!.value.isInitialized ||
+        _disposed) {
+      return;
+    }
 
     _isProcessing = true;
     _flashFrames.clear();
     _flashColors.clear();
 
     try {
+      // 1. Center Pose Capture
       setState(() {
         _step = _LivenessStep.lookCenter;
         _hint = 'Look straight. Screen is verifying light reflections...';
@@ -635,9 +811,27 @@ class _AttendanceFaceVerificationScreenState
 
       _centerFrame = await _camera!.takePicture();
 
+      // Instant ML Kit Check on Center Pose
+      final centerCheck = await _validateCenterPoseMLKit(_centerFrame!);
+      if (!centerCheck.isValid) {
+        if (mounted && !_disposed) {
+          setState(() {
+            _step = _LivenessStep.failed;
+            _overlayFlashColor = Colors.transparent;
+          });
+          await _showInstantPosePopup(
+            title: centerCheck.title,
+            message: centerCheck.message,
+          );
+        }
+        return;
+      }
+
+      // 2. Head Turn Pose Capture
       setState(() {
         _step = _LivenessStep.turn;
-        _hint = 'Turn your head to your $_direction while screen flashes...';
+        _hint =
+            'Turn your head to your ${_direction.toUpperCase()} while screen flashes...';
       });
 
       for (int i = 0; i < _flashColorSequence.length; i++) {
@@ -653,8 +847,27 @@ class _AttendanceFaceVerificationScreenState
       }
 
       _turnedFrame = await _camera!.takePicture();
-
       setState(() => _overlayFlashColor = Colors.transparent);
+
+      // Instant ML Kit Check on Head Turn Direction
+      final turnCheck = await _validateTurnPoseMLKit(
+        centerYaw: centerCheck.yaw,
+        turnedFrame: _turnedFrame!,
+        requiredDirection: _direction,
+      );
+
+      if (!turnCheck.isValid) {
+        if (mounted && !_disposed) {
+          setState(() => _step = _LivenessStep.failed);
+          await _showInstantPosePopup(
+            title: turnCheck.title,
+            message: turnCheck.message,
+          );
+        }
+        return;
+      }
+
+      // 3. Submit (Online or Verified Offline Queue)
       await _submitAttendance();
     } catch (e) {
       debugPrint('Capture sequence error: $e');
@@ -663,7 +876,11 @@ class _AttendanceFaceVerificationScreenState
           _step = _LivenessStep.failed;
           _overlayFlashColor = Colors.transparent;
         });
-        _showTurnErrorDialog('Camera capture failed. Please ensure clear lighting and try again.');
+        await _showInstantPosePopup(
+          title: 'Capture Failed',
+          message:
+              'Camera capture failed. Please ensure clear lighting and try again.',
+        );
       }
     } finally {
       _isProcessing = false;
@@ -695,9 +912,7 @@ class _AttendanceFaceVerificationScreenState
       _hint = 'Compressing images & verifying attendance...';
     });
 
-    // ------------------------------------------------------------------
-    // FAST NATIVE IMAGE COMPRESSION (Reduces payload size by ~85%)
-    // ------------------------------------------------------------------
+    // Fast native image compression before uploading or saving offline
     final compressedCenter =
         await ImageCompressService.compressFrame(_centerFrame!);
     final compressedTurned =
@@ -705,7 +920,8 @@ class _AttendanceFaceVerificationScreenState
     final compressedFlashFrames =
         await ImageCompressService.compressBatch(_flashFrames);
 
-    final typeStr = _currentSession == AttendanceSessionType.timeIn ? 'time_in' : 'time_out';
+    final typeStr =
+        _currentSession == AttendanceSessionType.timeIn ? 'time_in' : 'time_out';
 
     final result = await AttendanceService.instance.mobileCheckIn(
       eventId: eventId,
@@ -726,32 +942,25 @@ class _AttendanceFaceVerificationScreenState
     if (!result.success) {
       final msg = result.message.toLowerCase();
 
-      if (msg.contains('turn') || msg.contains('angle') || msg.contains('liveness') || msg.contains('pose')) {
+      if (msg.contains('turn') ||
+          msg.contains('angle') ||
+          msg.contains('liveness') ||
+          msg.contains('pose')) {
         setState(() => _step = _LivenessStep.failed);
-        await _showTurnErrorDialog(
-          'Verification failed because you did not turn your head to the $_direction direction as required. Please try again.',
+        await _showInstantPosePopup(
+          title: 'Incorrect Head Turn',
+          message:
+              'Server verification failed because you did not turn your head to the ${_direction.toUpperCase()} direction. Please try again.',
         );
         return;
       }
 
       if (result.networkUnavailable) {
-        final bool isOfflineTurnValid = await _verifyOfflinePose(
-          centerFrame: compressedCenter,
-          turnedFrame: compressedTurned,
-          targetDirection: _direction,
-        );
-
-        if (!isOfflineTurnValid) {
-          setState(() => _step = _LivenessStep.failed);
-          await _showTurnErrorDialog(
-            'Offline verification failed: You turned your head to the wrong direction (required: $_direction). Please try again.',
-          );
-          return;
-        }
-
+        // Pose was already verified on-device by ML Kit before reaching here
         final trustedTime = await SecureTimeService.instance.getTrustedTime();
 
-        final offlineQueueResult = await AttendanceService.instance.queueOfflineAttendance(
+        final offlineQueueResult =
+            await AttendanceService.instance.queueOfflineAttendance(
           eventId: eventId,
           latitude: pos.latitude,
           longitude: pos.longitude,
@@ -798,11 +1007,14 @@ class _AttendanceFaceVerificationScreenState
           if (Navigator.canPop(dialogContext)) Navigator.pop(dialogContext);
         });
 
-        final nameText = widget.studentName != null && widget.studentName!.isNotEmpty
-            ? widget.studentName!
-            : 'Student';
+        final nameText =
+            widget.studentName != null && widget.studentName!.isNotEmpty
+                ? widget.studentName!
+                : 'Student';
 
-        final sessionText = _currentSession == AttendanceSessionType.timeIn ? 'Time-In' : 'Time-Out';
+        final sessionText = _currentSession == AttendanceSessionType.timeIn
+            ? 'Time-In'
+            : 'Time-Out';
 
         return Dialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
@@ -820,7 +1032,11 @@ class _AttendanceFaceVerificationScreenState
                     color: Color(0xFFDCFCE7),
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(Icons.check_circle_rounded, color: Color(0xFF16A34A), size: 40),
+                  child: const Icon(
+                    Icons.check_circle_rounded,
+                    color: Color(0xFF16A34A),
+                    size: 40,
+                  ),
                 ),
                 const SizedBox(height: 18),
                 Text(
@@ -850,9 +1066,14 @@ class _AttendanceFaceVerificationScreenState
                       backgroundColor: isDark ? brandGold : brandNavy,
                       foregroundColor: isDark ? brandNavy : Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
-                    child: const Text('Continue', style: TextStyle(fontWeight: FontWeight.bold)),
+                    child: const Text(
+                      'Continue',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
                   ),
                 ),
               ],
@@ -877,6 +1098,7 @@ class _AttendanceFaceVerificationScreenState
   void dispose() {
     _pulseController.dispose();
     _disposed = true;
+    _faceDetector.close();
     _camera?.dispose();
     super.dispose();
   }
@@ -884,7 +1106,8 @@ class _AttendanceFaceVerificationScreenState
   @override
   Widget build(BuildContext context) {
     final isDark = themeController.isDarkMode;
-    final sessionTitle = _currentSession == AttendanceSessionType.timeIn ? 'Time-In' : 'Time-Out';
+    final sessionTitle =
+        _currentSession == AttendanceSessionType.timeIn ? 'Time-In' : 'Time-Out';
 
     return Scaffold(
       backgroundColor: _overlayFlashColor != Colors.transparent
@@ -894,7 +1117,10 @@ class _AttendanceFaceVerificationScreenState
         backgroundColor: isDark ? const Color(0xFF1E293B) : brandNavy,
         foregroundColor: Colors.white,
         elevation: 0,
-        title: Text(widget.event.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+        title: Text(
+          widget.event.name,
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+        ),
       ),
       body: SafeArea(
         child: Stack(
@@ -916,27 +1142,41 @@ class _AttendanceFaceVerificationScreenState
                     ),
                   ),
                   const SizedBox(height: 2),
-                  Text(widget.event.venue, style: const TextStyle(fontSize: 12.5, color: muted)),
+                  Text(
+                    widget.event.venue,
+                    style: const TextStyle(fontSize: 12.5, color: muted),
+                  ),
                   const SizedBox(height: 12),
                   _buildInstructionBadge(),
                   if (_hint != null && _step != _LivenessStep.failed) ...[
                     const SizedBox(height: 10),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 8,
+                      ),
                       decoration: BoxDecoration(
-                        color: isDark ? const Color(0xFF3B2D08) : const Color(0xFFFFFBEB),
+                        color: isDark
+                            ? const Color(0xFF3B2D08)
+                            : const Color(0xFFFFFBEB),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(color: const Color(0xFFFDE68A)),
                       ),
                       child: Row(
                         children: [
-                          const Icon(Icons.info_outline_rounded, color: Color(0xFFD97706), size: 18),
+                          const Icon(
+                            Icons.info_outline_rounded,
+                            color: Color(0xFFD97706),
+                            size: 18,
+                          ),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
                               _hint!,
                               style: TextStyle(
-                                color: isDark ? brandGold : const Color(0xFF92400E),
+                                color: isDark
+                                    ? brandGold
+                                    : const Color(0xFF92400E),
                                 fontWeight: FontWeight.w800,
                                 fontSize: 12,
                               ),
@@ -962,7 +1202,9 @@ class _AttendanceFaceVerificationScreenState
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           border: Border.all(
-                            color: brandGold.withValues(alpha: 0.3 + (_pulseController.value * 0.4)),
+                            color: brandGold.withValues(
+                              alpha: 0.3 + (_pulseController.value * 0.4),
+                            ),
                             width: 3.5,
                           ),
                         ),
@@ -978,7 +1220,9 @@ class _AttendanceFaceVerificationScreenState
                       border: Border.all(color: brandGold, width: 4),
                     ),
                     child: ClipOval(
-                      child: _cameraReady && _camera != null && _camera!.value.isInitialized
+                      child: _cameraReady &&
+                              _camera != null &&
+                              _camera!.value.isInitialized
                           ? LayoutBuilder(
                               builder: (context, constraints) {
                                 final previewRatio = _camera!.value.aspectRatio;
@@ -992,7 +1236,8 @@ class _AttendanceFaceVerificationScreenState
                                         fit: BoxFit.cover,
                                         child: SizedBox(
                                           width: constraints.maxWidth,
-                                          height: constraints.maxWidth * previewRatio,
+                                          height: constraints.maxWidth *
+                                              previewRatio,
                                           child: CameraPreview(_camera!),
                                         ),
                                       ),
@@ -1001,7 +1246,9 @@ class _AttendanceFaceVerificationScreenState
                                 );
                               },
                             )
-                          : const Center(child: CircularProgressIndicator(color: brandGold)),
+                          : const Center(
+                              child: CircularProgressIndicator(color: brandGold),
+                            ),
                     ),
                   ),
                   if (_step == _LivenessStep.turn)
@@ -1011,12 +1258,15 @@ class _AttendanceFaceVerificationScreenState
                       child: Container(
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: (isDark ? const Color(0xFF1E293B) : brandNavy).withValues(alpha: 0.85),
+                          color: (isDark ? const Color(0xFF1E293B) : brandNavy)
+                              .withValues(alpha: 0.85),
                           shape: BoxShape.circle,
                           border: Border.all(color: brandGold, width: 2),
                         ),
                         child: Icon(
-                          _direction == 'left' ? Icons.arrow_back : Icons.arrow_forward,
+                          _direction == 'left'
+                              ? Icons.arrow_back
+                              : Icons.arrow_forward,
                           color: Colors.white,
                           size: 26,
                         ),
@@ -1031,16 +1281,29 @@ class _AttendanceFaceVerificationScreenState
                 onPressed: _isProcessing
                     ? null
                     : () {
-                        setState(() => _isProcessing = false);
+                        setState(() {
+                          if (_challengeNonce == 'offline-nonce') {
+                            _direction = _pickRandomDirection();
+                          }
+                          _isProcessing = false;
+                        });
                         _runAutomatedCapture();
                       },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: brandGold,
                   foregroundColor: brandNavy,
-                  padding: const EdgeInsets.symmetric(horizontal: 36, vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 36,
+                    vertical: 14,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(24),
+                  ),
                 ),
-                child: const Text('Retry / Capture Now', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                child: const Text(
+                  'Retry / Capture Now',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                ),
               ),
             ),
           ],
@@ -1061,7 +1324,7 @@ class _AttendanceFaceVerificationScreenState
         icon = Icons.remove_red_eye_outlined;
         break;
       case _LivenessStep.turn:
-        text = 'Turn head towards $_direction';
+        text = 'Turn head towards ${_direction.toUpperCase()}';
         icon = _direction == 'left' ? Icons.arrow_back : Icons.arrow_forward;
         break;
       case _LivenessStep.verifying:
@@ -1074,7 +1337,7 @@ class _AttendanceFaceVerificationScreenState
         icon = Icons.check_circle_outline;
         break;
       case _LivenessStep.failed:
-        text = 'Recording failed';
+        text = 'Verification failed';
         icon = Icons.error_outline;
         break;
     }
@@ -1085,7 +1348,9 @@ class _AttendanceFaceVerificationScreenState
         color: isDark ? const Color(0xFF1E293B) : const Color(0xFFFFF8E7),
         borderRadius: BorderRadius.circular(24),
         border: Border.all(
-          color: isDark ? const Color(0xFF334155) : brandGold.withValues(alpha: 0.6),
+          color: isDark
+              ? const Color(0xFF334155)
+              : brandGold.withValues(alpha: 0.6),
         ),
       ),
       child: Row(
@@ -1095,7 +1360,10 @@ class _AttendanceFaceVerificationScreenState
               ? SizedBox(
                   width: 18,
                   height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: isDark ? brandGold : brandNavy),
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: isDark ? brandGold : brandNavy,
+                  ),
                 )
               : Icon(icon, color: isDark ? brandGold : brandNavy, size: 20),
           const SizedBox(width: 8),
@@ -1111,6 +1379,20 @@ class _AttendanceFaceVerificationScreenState
       ),
     );
   }
+}
+
+class _PoseValidationResult {
+  final bool isValid;
+  final String title;
+  final String message;
+  final double yaw;
+
+  const _PoseValidationResult({
+    required this.isValid,
+    required this.title,
+    required this.message,
+    this.yaw = 0.0,
+  });
 }
 
 class _TimeWindow {

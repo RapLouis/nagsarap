@@ -28,6 +28,9 @@ dependencies:
   # Offline/local storage
   shared_preferences: ^2.5.5
 
+  # On-Device Offline Head-Turn & Face Verification
+  google_mlkit_face_detection: ^0.13.1
+  
   # Network
   connectivity_plus: ^7.3.1
 
