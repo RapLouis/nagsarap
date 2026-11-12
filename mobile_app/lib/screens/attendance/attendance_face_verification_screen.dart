@@ -25,12 +25,16 @@ class AttendanceFaceVerificationScreen extends StatefulWidget {
     this.studentName,
     this.hasTimeIn = false,
     this.hasTimeOut = false,
+    this.timeInWindow,
+    this.timeOutWindow,
   });
 
   final EventItem event;
   final String? studentName;
   final bool hasTimeIn;
   final bool hasTimeOut;
+  final String? timeInWindow;
+  final String? timeOutWindow;
 
   @override
   State<AttendanceFaceVerificationScreen> createState() =>
@@ -65,6 +69,7 @@ class _AttendanceFaceVerificationScreenState
   bool _cameraReady = false;
   bool _disposed = false;
   bool _isProcessing = false;
+  bool _checkingSession = true;
 
   late bool _hasTimeIn;
   late bool _hasTimeOut;
@@ -106,8 +111,15 @@ class _AttendanceFaceVerificationScreenState
     )..repeat(reverse: true);
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      _currentSession = await _determineCurrentSession();
-      if (_currentSession == null) {
+      final resolved = await _determineCurrentSession();
+      if (!mounted || _disposed) return;
+
+      setState(() {
+        _currentSession = resolved;
+        _checkingSession = false;
+      });
+
+      if (resolved == null) {
         _showClosedDialog(
           'Attendance is currently closed or not active for this event.',
         );
@@ -122,35 +134,142 @@ class _AttendanceFaceVerificationScreenState
   }
 
   // --------------------------------------------------------------------------
-  // ABSOLUTE SECOND TIME WINDOW EVALUATION (ZERO MARGINS / ZERO FALLBACKS)
+  // AUTOMATIC SESSION DETECTION (TIME-IN VS TIME-OUT)
   // --------------------------------------------------------------------------
+
+  Future<DateTime> _getNormalizedLocalNow() async {
+    final deviceNow = DateTime.now();
+    try {
+      final trusted = await SecureTimeService.instance.getTrustedTime();
+      final localTrusted = trusted.toLocal();
+      // Guard against uninitialized/epoch or skewed clocks
+      if (localTrusted.year >= 2025 &&
+          localTrusted.difference(deviceNow).abs() < const Duration(hours: 2)) {
+        return localTrusted;
+      }
+    } catch (_) {}
+    return deviceNow;
+  }
 
   Future<AttendanceSessionType?> _determineCurrentSession() async {
     if (_hasTimeIn && _hasTimeOut) return null;
 
-    final now = await SecureTimeService.instance.getTrustedTime();
+    final now = await _getNormalizedLocalNow();
 
-    final timeInWin = _extractWindow(isTimeOut: false, now: now);
-    final timeOutWin = _extractWindow(isTimeOut: true, now: now);
+    final _TimeWindow timeInWin = (widget.timeInWindow != null &&
+            widget.timeInWindow!.trim().isNotEmpty)
+        ? _parseWindowString(widget.timeInWindow!, now)
+        : _extractWindow(isTimeOut: false, now: now);
 
-    bool isStrictlyInside(DateTime? start, DateTime? end) {
+    final _TimeWindow timeOutWin = (widget.timeOutWindow != null &&
+            widget.timeOutWindow!.trim().isNotEmpty)
+        ? _parseWindowString(widget.timeOutWindow!, now)
+        : _extractWindow(isTimeOut: true, now: now);
+
+    const margin = Duration(minutes: 15);
+
+    bool isInsideWindow(_TimeWindow win) {
+      final start = win.start;
+      final end = win.end;
       if (start == null || end == null) return false;
-      return (now.isAfter(start) || now.isAtSameMomentAs(start)) &&
-          (now.isBefore(end) || now.isAtSameMomentAs(end));
+
+      final startBound = start.subtract(margin);
+      DateTime adjustedEnd = end;
+      if (adjustedEnd.isBefore(start)) {
+        adjustedEnd = adjustedEnd.add(const Duration(days: 1));
+      }
+      final endBound = adjustedEnd.add(margin);
+
+      return (now.isAfter(startBound) || now.isAtSameMomentAs(startBound)) &&
+          (now.isBefore(endBound) || now.isAtSameMomentAs(endBound));
     }
 
-    final bool isTimeInActive = isStrictlyInside(timeInWin.start, timeInWin.end);
-    final bool isTimeOutActive = isStrictlyInside(timeOutWin.start, timeOutWin.end);
+    final bool isTimeInActive = isInsideWindow(timeInWin);
+    final bool isTimeOutActive = isInsideWindow(timeOutWin);
 
+    // 1. Prioritize Time-In if its window is active and student hasn't timed in yet
     if (isTimeInActive && !_hasTimeIn) {
       return AttendanceSessionType.timeIn;
     }
 
+    // 2. Otherwise check Time-Out if its window is active and student hasn't timed out yet
     if (isTimeOutActive && !_hasTimeOut) {
       return AttendanceSessionType.timeOut;
     }
 
+    // 3. Fallback: if event is today and Time-In is not done yet, check if we are before Time-Out
+    if (widget.event.isToday && !_hasTimeIn && timeInWin.start != null) {
+      final startBound = timeInWin.start!.subtract(margin);
+      final outStart = timeOutWin.start;
+      if ((now.isAfter(startBound) || now.isAtSameMomentAs(startBound)) &&
+          (outStart == null || now.isBefore(outStart))) {
+        return AttendanceSessionType.timeIn;
+      }
+    }
+
     return null;
+  }
+
+  DateTime? _parseSingleTime(String input, DateTime now) {
+    final str = input.trim();
+    if (str.isEmpty ||
+        str.toLowerCase() == 'null' ||
+        str.toLowerCase() == 'tba') {
+      return null;
+    }
+
+    final amPmMatch = RegExp(
+      r'(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)',
+      caseSensitive: false,
+    ).firstMatch(str);
+
+    if (amPmMatch != null) {
+      int hour = int.parse(amPmMatch.group(1)!);
+      final minute = int.parse(amPmMatch.group(2)!);
+      final second =
+          amPmMatch.group(3) != null ? int.parse(amPmMatch.group(3)!) : 0;
+      final period = amPmMatch.group(4)!.toUpperCase();
+
+      if (period == 'PM' && hour < 12) hour += 12;
+      if (period == 'AM' && hour == 12) hour = 0;
+
+      return DateTime(now.year, now.month, now.day, hour, minute, second);
+    }
+
+    final h24Match = RegExp(
+      r'\b([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?\b',
+    ).firstMatch(str);
+
+    if (h24Match != null) {
+      final hour = int.parse(h24Match.group(1)!);
+      final minute = int.parse(h24Match.group(2)!);
+      final second =
+          h24Match.group(3) != null ? int.parse(h24Match.group(3)!) : 0;
+
+      return DateTime(now.year, now.month, now.day, hour, minute, second);
+    }
+
+    final iso = DateTime.tryParse(str);
+    if (iso != null) {
+      final local = iso.toLocal();
+      return DateTime(
+        now.year,
+        now.month,
+        now.day,
+        local.hour,
+        local.minute,
+        local.second,
+      );
+    }
+
+    return null;
+  }
+
+  _TimeWindow _parseWindowString(String windowStr, DateTime now) {
+    final parts = windowStr.split(RegExp(r'[-–]')).map((s) => s.trim()).toList();
+    final start = parts.isNotEmpty ? _parseSingleTime(parts[0], now) : null;
+    final end = parts.length > 1 ? _parseSingleTime(parts[1], now) : null;
+    return _TimeWindow(start, end);
   }
 
   _TimeWindow _extractWindow({required bool isTimeOut, required DateTime now}) {
@@ -170,50 +289,18 @@ class _AttendanceFaceVerificationScreenState
         return;
       }
 
-      final amPmRegex = RegExp(
-        r'(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)',
-        caseSensitive: false,
-      );
-      final amPmMatches = amPmRegex.allMatches(str);
-
-      if (amPmMatches.isNotEmpty) {
-        for (final m in amPmMatches) {
-          int hour = int.parse(m.group(1)!);
-          final minute = int.parse(m.group(2)!);
-          final second = m.group(3) != null ? int.parse(m.group(3)!) : 0;
-          final period = m.group(4)!.toUpperCase();
-
-          if (period == 'PM' && hour < 12) hour += 12;
-          if (period == 'AM' && hour == 12) hour = 0;
-
-          foundTimes.add(
-            DateTime(now.year, now.month, now.day, hour, minute, second),
-          );
+      if (str.contains(RegExp(r'[-–]'))) {
+        final parts = str.split(RegExp(r'[-–]'));
+        for (final part in parts) {
+          final parsed = _parseSingleTime(part, now);
+          if (parsed != null) foundTimes.add(parsed);
         }
         return;
       }
 
-      final h24Regex = RegExp(r'\b([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?\b');
-      final h24Matches = h24Regex.allMatches(str);
-
-      if (h24Matches.isNotEmpty) {
-        for (final m in h24Matches) {
-          final hour = int.parse(m.group(1)!);
-          final minute = int.parse(m.group(2)!);
-          final second = m.group(3) != null ? int.parse(m.group(3)!) : 0;
-
-          foundTimes.add(
-            DateTime(now.year, now.month, now.day, hour, minute, second),
-          );
-        }
-        return;
-      }
-
-      final iso = DateTime.tryParse(str);
-      if (iso != null) {
-        foundTimes.add(
-          DateTime(now.year, now.month, now.day, iso.hour, iso.minute, iso.second),
-        );
+      final parsed = _parseSingleTime(str, now);
+      if (parsed != null) {
+        foundTimes.add(parsed);
       }
     }
 
@@ -250,22 +337,43 @@ class _AttendanceFaceVerificationScreenState
 
     scanMap(rawMap);
 
+    final eventStart = _parseSingleTime(widget.event.startTime, now);
+    final eventEnd = _parseSingleTime(widget.event.endTime, now);
+
     if (foundTimes.isEmpty) {
-      if (!isTimeOut && widget.event.startTime.isNotEmpty) {
-        collectFromValue(widget.event.startTime);
-      } else if (isTimeOut && widget.event.endTime.isNotEmpty) {
-        collectFromValue(widget.event.endTime);
+      if (!isTimeOut && eventStart != null) {
+        foundTimes.add(eventStart);
+      } else if (isTimeOut && eventEnd != null) {
+        foundTimes.add(eventEnd);
       }
     }
 
     foundTimes.sort();
 
-    final start = foundTimes.isNotEmpty ? foundTimes.first : null;
-    final end = foundTimes.length > 1
-        ? foundTimes.last
-        : (foundTimes.isNotEmpty
-            ? foundTimes.first.add(const Duration(hours: 1))
-            : null);
+    DateTime? start = foundTimes.isNotEmpty ? foundTimes.first : null;
+    DateTime? end = foundTimes.length > 1 ? foundTimes.last : null;
+
+    if (start != null && end == null) {
+      if (!isTimeOut) {
+        final outWin = _extractWindow(isTimeOut: true, now: now);
+        if (outWin.start != null && outWin.start!.isAfter(start)) {
+          end = outWin.start;
+        } else if (eventEnd != null && eventEnd.isAfter(start)) {
+          final midSeconds = eventEnd.difference(start).inSeconds ~/ 2;
+          end = start.add(Duration(seconds: midSeconds));
+        } else {
+          end = start.add(const Duration(hours: 4));
+        }
+      } else {
+        if (eventStart != null && start.isAfter(eventStart)) {
+          final midSeconds = start.difference(eventStart).inSeconds ~/ 2;
+          end = start;
+          start = eventStart.add(Duration(seconds: midSeconds));
+        } else {
+          end = start.add(const Duration(hours: 4));
+        }
+      }
+    }
 
     return _TimeWindow(start, end);
   }
@@ -957,7 +1065,7 @@ class _AttendanceFaceVerificationScreenState
 
       if (result.networkUnavailable) {
         // Pose was already verified on-device by ML Kit before reaching here
-        final trustedTime = await SecureTimeService.instance.getTrustedTime();
+        final trustedTime = await _getNormalizedLocalNow();
 
         final offlineQueueResult =
             await AttendanceService.instance.queueOfflineAttendance(
@@ -1106,8 +1214,13 @@ class _AttendanceFaceVerificationScreenState
   @override
   Widget build(BuildContext context) {
     final isDark = themeController.isDarkMode;
-    final sessionTitle =
-        _currentSession == AttendanceSessionType.timeIn ? 'Time-In' : 'Time-Out';
+    final String sessionTitle = _checkingSession
+        ? 'Checking Schedule...'
+        : (_currentSession == AttendanceSessionType.timeIn
+            ? 'Face Verification (Time-In)'
+            : (_currentSession == AttendanceSessionType.timeOut
+                ? 'Face Verification (Time-Out)'
+                : 'Face Verification'));
 
     return Scaffold(
       backgroundColor: _overlayFlashColor != Colors.transparent
@@ -1134,7 +1247,7 @@ class _AttendanceFaceVerificationScreenState
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    'Face Verification ($sessionTitle)',
+                    sessionTitle,
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -1278,7 +1391,7 @@ class _AttendanceFaceVerificationScreenState
             Positioned(
               bottom: 30,
               child: ElevatedButton(
-                onPressed: _isProcessing
+                onPressed: (_isProcessing || _currentSession == null)
                     ? null
                     : () {
                         setState(() {
