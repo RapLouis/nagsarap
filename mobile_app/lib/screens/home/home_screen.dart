@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 import '../../main.dart';
@@ -208,6 +209,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             )
           : null,
     );
+  }
+
+  Future<void> _reloadPage() async {
+    HapticFeedback.lightImpact();
+    await Future.wait([
+      _loadDashboard(showMainLoader: true),
+      _restoreIdentity(),
+      _loadProfilePhoto(),
+    ]);
   }
 
   Future<void> _loadDashboard({bool showMainLoader = true}) async {
@@ -935,7 +945,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (clean.isEmpty || clean.toLowerCase() == 'tba') return null;
     final now = DateTime.now();
 
-    // 1. Explicitly match 12-hour AM/PM strings first so parseLoose never misreads them as 24-hour
     final amPmMatch = RegExp(
       r'(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)',
       caseSensitive: false,
@@ -954,7 +963,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return DateTime(now.year, now.month, now.day, hour, minute, second);
     }
 
-    // 2. Match 24-hour strings (HH:mm or HH:mm:ss)
     final h24Match = RegExp(
       r'\b([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?\b',
     ).firstMatch(clean);
@@ -1247,24 +1255,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Row(
                 children: [
-                  SizedBox(
-                    width: 48,
-                    height: 48,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: gold.withValues(alpha: 0.8),
-                          width: 1.5,
-                        ),
-                      ),
-                      clipBehavior: Clip.antiAlias,
-                      child: Transform.scale(
-                        scale: 1.45,
-                        child: Image.asset(
-                          'lib/screens/images/logo.jpeg',
-                          fit: BoxFit.cover,
+                  Material(
+                    color: Colors.transparent,
+                    shape: const CircleBorder(),
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: _dashboardBusy ? null : _reloadPage,
+                      child: SizedBox(
+                        width: 48,
+                        height: 48,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: gold.withValues(alpha: 0.8),
+                              width: 1.5,
+                            ),
+                          ),
+                          clipBehavior: Clip.antiAlias,
+                          child: Transform.scale(
+                            scale: 1.45,
+                            child: Image.asset(
+                              'lib/screens/images/logo.jpeg',
+                              fit: BoxFit.cover,
+                            ),
+                          ),
                         ),
                       ),
                     ),

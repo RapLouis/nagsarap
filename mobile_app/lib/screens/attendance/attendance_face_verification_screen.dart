@@ -83,6 +83,7 @@ class _AttendanceFaceVerificationScreenState
 
   Color _overlayFlashColor = Colors.transparent;
   final List<XFile> _flashFrames = [];
+  final List<Future<XFile>> _flashCompressFutures = [];
   final List<String> _flashColors = [];
 
   final List<Color> _flashColorSequence = [
@@ -95,7 +96,9 @@ class _AttendanceFaceVerificationScreenState
   _LivenessStep _step = _LivenessStep.lookCenter;
 
   XFile? _centerFrame;
+  Future<XFile>? _centerCompressFuture;
   XFile? _turnedFrame;
+  Future<XFile>? _turnedCompressFuture;
 
   late final AnimationController _pulseController;
 
@@ -142,7 +145,6 @@ class _AttendanceFaceVerificationScreenState
     try {
       final trusted = await SecureTimeService.instance.getTrustedTime();
       final localTrusted = trusted.toLocal();
-      // Guard against uninitialized/epoch or skewed clocks
       if (localTrusted.year >= 2025 &&
           localTrusted.difference(deviceNow).abs() < const Duration(hours: 2)) {
         return localTrusted;
@@ -187,17 +189,14 @@ class _AttendanceFaceVerificationScreenState
     final bool isTimeInActive = isInsideWindow(timeInWin);
     final bool isTimeOutActive = isInsideWindow(timeOutWin);
 
-    // 1. Prioritize Time-In if its window is active and student hasn't timed in yet
     if (isTimeInActive && !_hasTimeIn) {
       return AttendanceSessionType.timeIn;
     }
 
-    // 2. Otherwise check Time-Out if its window is active and student hasn't timed out yet
     if (isTimeOutActive && !_hasTimeOut) {
       return AttendanceSessionType.timeOut;
     }
 
-    // 3. Fallback: if event is today and Time-In is not done yet, check if we are before Time-Out
     if (widget.event.isToday && !_hasTimeIn && timeInWin.start != null) {
       final startBound = timeInWin.start!.subtract(margin);
       final outStart = timeOutWin.start;
@@ -396,6 +395,15 @@ class _AttendanceFaceVerificationScreenState
         );
       }
 
+      if (faces.length > 1) {
+        return const _PoseValidationResult(
+          isValid: false,
+          title: 'Multiple Faces Detected',
+          message:
+              'Please ensure only your face is visible inside the camera frame.',
+        );
+      }
+
       final yaw = faces.first.headEulerAngleY ?? 0.0;
 
       if (yaw.abs() > 18.0) {
@@ -444,7 +452,6 @@ class _AttendanceFaceVerificationScreenState
       final turnedYaw = faces.first.headEulerAngleY ?? 0.0;
       final deltaYaw = turnedYaw - centerYaw;
 
-      // Positive yaw = user's left on front camera; Negative yaw = user's right
       final bool turnedLeft = deltaYaw > _requiredTurnAngle;
       final bool turnedRight = deltaYaw < -_requiredTurnAngle;
 
@@ -858,7 +865,7 @@ class _AttendanceFaceVerificationScreenState
       return await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.low,
-          timeLimit: Duration(seconds: 2),
+          timeLimit: Duration(seconds: 5),
         ),
       );
     } catch (_) {
@@ -896,10 +903,13 @@ class _AttendanceFaceVerificationScreenState
 
     _isProcessing = true;
     _flashFrames.clear();
+    _flashCompressFutures.clear();
     _flashColors.clear();
+    _centerCompressFuture = null;
+    _turnedCompressFuture = null;
 
     try {
-      // 1. Center Pose Capture
+      // 1. Center Pose Capture (compress each frame in background immediately)
       setState(() {
         _step = _LivenessStep.lookCenter;
         _hint = 'Look straight. Screen is verifying light reflections...';
@@ -909,15 +919,17 @@ class _AttendanceFaceVerificationScreenState
         if (!mounted || _disposed) return;
 
         setState(() => _overlayFlashColor = _flashColorSequence[i]);
-        await Future.delayed(const Duration(milliseconds: 300));
+        await Future.delayed(const Duration(milliseconds: 280));
         if (!mounted || _disposed) return;
 
         final frame = await _camera!.takePicture();
         _flashFrames.add(frame);
         _flashColors.add(_flashColorNames[i]);
+        _flashCompressFutures.add(ImageCompressService.compressFrame(frame));
       }
 
       _centerFrame = await _camera!.takePicture();
+      _centerCompressFuture = ImageCompressService.compressFrame(_centerFrame!);
 
       // Instant ML Kit Check on Center Pose
       final centerCheck = await _validateCenterPoseMLKit(_centerFrame!);
@@ -935,7 +947,7 @@ class _AttendanceFaceVerificationScreenState
         return;
       }
 
-      // 2. Head Turn Pose Capture
+      // 2. Head Turn Pose Capture (compress each frame in background immediately)
       setState(() {
         _step = _LivenessStep.turn;
         _hint =
@@ -946,15 +958,17 @@ class _AttendanceFaceVerificationScreenState
         if (!mounted || _disposed) return;
 
         setState(() => _overlayFlashColor = _flashColorSequence[i]);
-        await Future.delayed(const Duration(milliseconds: 350));
+        await Future.delayed(const Duration(milliseconds: 320));
         if (!mounted || _disposed) return;
 
         final frame = await _camera!.takePicture();
         _flashFrames.add(frame);
         _flashColors.add(_flashColorNames[i]);
+        _flashCompressFutures.add(ImageCompressService.compressFrame(frame));
       }
 
       _turnedFrame = await _camera!.takePicture();
+      _turnedCompressFuture = ImageCompressService.compressFrame(_turnedFrame!);
       setState(() => _overlayFlashColor = Colors.transparent);
 
       // Instant ML Kit Check on Head Turn Direction
@@ -1017,16 +1031,27 @@ class _AttendanceFaceVerificationScreenState
 
     setState(() {
       _step = _LivenessStep.verifying;
-      _hint = 'Compressing images & verifying attendance...';
+      _hint = 'Finalizing verification...';
     });
 
-    // Fast native image compression before uploading or saving offline
-    final compressedCenter =
-        await ImageCompressService.compressFrame(_centerFrame!);
-    final compressedTurned =
-        await ImageCompressService.compressFrame(_turnedFrame!);
-    final compressedFlashFrames =
-        await ImageCompressService.compressBatch(_flashFrames);
+    // Await already-running background compressions in parallel instead of sequentially
+    final compressedResults = await Future.wait([
+      _centerCompressFuture ?? ImageCompressService.compressFrame(_centerFrame!),
+      _turnedCompressFuture ?? ImageCompressService.compressFrame(_turnedFrame!),
+      _flashCompressFutures.isNotEmpty
+          ? Future.wait(_flashCompressFutures)
+          : ImageCompressService.compressBatch(_flashFrames),
+    ]);
+
+    if (!mounted || _disposed) return;
+
+    final compressedCenter = compressedResults[0] as XFile;
+    final compressedTurned = compressedResults[1] as XFile;
+    final compressedFlashFrames = compressedResults[2] as List<XFile>;
+
+    setState(() {
+      _hint = 'Verifying face with server...';
+    });
 
     final typeStr =
         _currentSession == AttendanceSessionType.timeIn ? 'time_in' : 'time_out';
@@ -1064,7 +1089,6 @@ class _AttendanceFaceVerificationScreenState
       }
 
       if (result.networkUnavailable) {
-        // Pose was already verified on-device by ML Kit before reaching here
         final trustedTime = await _getNormalizedLocalNow();
 
         final offlineQueueResult =
