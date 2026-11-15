@@ -137,7 +137,7 @@ class _AttendanceFaceVerificationScreenState
   }
 
   // --------------------------------------------------------------------------
-  // AUTOMATIC SESSION DETECTION (TIME-IN VS TIME-OUT)
+  // AUTOMATIC SESSION DETECTION (TIME-IN VS TIME-OUT — NO HARDCODED MARGIN)
   // --------------------------------------------------------------------------
 
   Future<DateTime> _getNormalizedLocalNow() async {
@@ -168,42 +168,30 @@ class _AttendanceFaceVerificationScreenState
         ? _parseWindowString(widget.timeOutWindow!, now)
         : _extractWindow(isTimeOut: true, now: now);
 
-    const margin = Duration(minutes: 15);
-
     bool isInsideWindow(_TimeWindow win) {
       final start = win.start;
       final end = win.end;
       if (start == null || end == null) return false;
 
-      final startBound = start.subtract(margin);
       DateTime adjustedEnd = end;
       if (adjustedEnd.isBefore(start)) {
         adjustedEnd = adjustedEnd.add(const Duration(days: 1));
       }
-      final endBound = adjustedEnd.add(margin);
 
-      return (now.isAfter(startBound) || now.isAtSameMomentAs(startBound)) &&
-          (now.isBefore(endBound) || now.isAtSameMomentAs(endBound));
+      return (now.isAfter(start) || now.isAtSameMomentAs(start)) &&
+          (now.isBefore(adjustedEnd) || now.isAtSameMomentAs(adjustedEnd));
     }
 
-    final bool isTimeInActive = isInsideWindow(timeInWin);
     final bool isTimeOutActive = isInsideWindow(timeOutWin);
+    final bool isTimeInActive = isInsideWindow(timeInWin);
 
-    if (isTimeInActive && !_hasTimeIn) {
-      return AttendanceSessionType.timeIn;
-    }
-
+    // Go to Time-Out if Time-Out window is active, even if there is no Time-In record
     if (isTimeOutActive && !_hasTimeOut) {
       return AttendanceSessionType.timeOut;
     }
 
-    if (widget.event.isToday && !_hasTimeIn && timeInWin.start != null) {
-      final startBound = timeInWin.start!.subtract(margin);
-      final outStart = timeOutWin.start;
-      if ((now.isAfter(startBound) || now.isAtSameMomentAs(startBound)) &&
-          (outStart == null || now.isBefore(outStart))) {
-        return AttendanceSessionType.timeIn;
-      }
+    if (isTimeInActive && !_hasTimeIn) {
+      return AttendanceSessionType.timeIn;
     }
 
     return null;
@@ -361,7 +349,7 @@ class _AttendanceFaceVerificationScreenState
           final midSeconds = eventEnd.difference(start).inSeconds ~/ 2;
           end = start.add(Duration(seconds: midSeconds));
         } else {
-          end = start.add(const Duration(hours: 4));
+          end = eventEnd;
         }
       } else {
         if (eventStart != null && start.isAfter(eventStart)) {
@@ -369,7 +357,7 @@ class _AttendanceFaceVerificationScreenState
           end = start;
           start = eventStart.add(Duration(seconds: midSeconds));
         } else {
-          end = start.add(const Duration(hours: 4));
+          end = eventEnd;
         }
       }
     }
@@ -673,7 +661,7 @@ class _AttendanceFaceVerificationScreenState
 
         return Future.wait([
           _initCameraFast(),
-          _getFastPosition(),
+          _getAccuratePosition(),
           AttendanceService.instance.requestLivenessChallenge(
             eventId: widget.event.id!,
           ),
@@ -688,7 +676,6 @@ class _AttendanceFaceVerificationScreenState
       if (_disposed || !mounted) return;
 
       _position = results[1] as Position?;
-      if (_position != null) _checkGeofence(_position!);
 
       final challengeResult = results[2] as LivenessChallengeResult;
       if (challengeResult.success && challengeResult.challenge != null) {
@@ -701,12 +688,54 @@ class _AttendanceFaceVerificationScreenState
         _challengeSessionId = DateTime.now().millisecondsSinceEpoch.toString();
       }
 
+      if (_position != null) {
+        _checkGeofence(_position!);
+      } else if (widget.event.geofenceEnabled) {
+        throw Exception(
+          'Unable to get your GPS location. Please enable Location Services and try again.',
+        );
+      }
+
       await _runAutomatedCapture();
     } catch (e) {
       if (!mounted || _disposed) return;
+      HapticFeedback.heavyImpact();
       setState(() {
         _step = _LivenessStep.failed;
         _error = e.toString().replaceFirst('Exception: ', '');
+      });
+    }
+  }
+
+  Future<void> _verifyLocationAndCapture() async {
+    if (!mounted || _disposed) return;
+    setState(() {
+      _step = _LivenessStep.lookCenter;
+      _error = null;
+      _hint = 'Checking GPS location...';
+    });
+
+    try {
+      final pos = await _getAccuratePosition();
+      if (!mounted || _disposed) return;
+      _position = pos;
+
+      if (pos != null) {
+        _checkGeofence(pos);
+      } else if (widget.event.geofenceEnabled) {
+        throw Exception(
+          'Unable to get your GPS location. Please enable Location Services and try again.',
+        );
+      }
+
+      await _runAutomatedCapture();
+    } catch (e) {
+      if (!mounted || _disposed) return;
+      HapticFeedback.heavyImpact();
+      setState(() {
+        _step = _LivenessStep.failed;
+        _error = e.toString().replaceFirst('Exception: ', '');
+        _hint = null;
       });
     }
   }
@@ -848,7 +877,7 @@ class _AttendanceFaceVerificationScreenState
     if (mounted) setState(() => _cameraReady = true);
   }
 
-  Future<Position?> _getFastPosition() async {
+  Future<Position?> _getAccuratePosition() async {
     try {
       bool enabled = await Geolocator.isLocationServiceEnabled();
       if (!enabled) return null;
@@ -864,8 +893,8 @@ class _AttendanceFaceVerificationScreenState
 
       return await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.low,
-          timeLimit: Duration(seconds: 5),
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 12),
         ),
       );
     } catch (_) {
@@ -889,7 +918,12 @@ class _AttendanceFaceVerificationScreenState
     );
     if (dist > rad) {
       final remaining = (dist - rad).round();
-      throw Exception('Outside event area. Move $remaining m closer.');
+      final distanceText = remaining >= 1000
+          ? '${(remaining / 1000).toStringAsFixed(2)} km'
+          : '$remaining m';
+      throw Exception(
+        'You are outside the allowed venue radius ($distanceText away; allowed radius: ${rad.round()} m). Move closer and try again.',
+      );
     }
   }
 
@@ -1238,13 +1272,12 @@ class _AttendanceFaceVerificationScreenState
   @override
   Widget build(BuildContext context) {
     final isDark = themeController.isDarkMode;
+    final bool isTimeOut = _currentSession == AttendanceSessionType.timeOut;
     final String sessionTitle = _checkingSession
         ? 'Checking Schedule...'
         : (_currentSession == AttendanceSessionType.timeIn
-            ? 'Face Verification (Time-In)'
-            : (_currentSession == AttendanceSessionType.timeOut
-                ? 'Face Verification (Time-Out)'
-                : 'Face Verification'));
+            ? 'Verify Time-In'
+            : (isTimeOut ? 'Verify Time-Out' : 'Face Verification'));
 
     return Scaffold(
       backgroundColor: _overlayFlashColor != Colors.transparent
@@ -1270,22 +1303,87 @@ class _AttendanceFaceVerificationScreenState
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                    sessionTitle,
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: isDark ? Colors.white : brandNavy,
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: isTimeOut
+                          ? const Color(0xFFFEE2E2)
+                          : const Color(0xFFDCFCE7),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: isTimeOut
+                            ? const Color(0xFFFCA5A5)
+                            : const Color(0xFF86EFAC),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          isTimeOut ? Icons.logout_rounded : Icons.login_rounded,
+                          size: 16,
+                          color: isTimeOut
+                              ? const Color(0xFFDC2626)
+                              : const Color(0xFF16A34A),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          sessionTitle,
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                            color: isTimeOut
+                                ? const Color(0xFF991B1B)
+                                : const Color(0xFF166534),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 2),
+                  const SizedBox(height: 4),
                   Text(
                     widget.event.venue,
                     style: const TextStyle(fontSize: 12.5, color: muted),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                   _buildInstructionBadge(),
-                  if (_hint != null && _step != _LivenessStep.failed) ...[
+                  if (_error != null && _step == _LivenessStep.failed) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFEF2F2),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFFECACA)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.error_outline_rounded,
+                            color: Color(0xFFDC2626),
+                            size: 18,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _error!,
+                              style: const TextStyle(
+                                color: Color(0xFF991B1B),
+                                fontWeight: FontWeight.w700,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ] else if (_hint != null && _step != _LivenessStep.failed) ...[
                     const SizedBox(height: 10),
                     Container(
                       padding: const EdgeInsets.symmetric(
@@ -1424,7 +1522,7 @@ class _AttendanceFaceVerificationScreenState
                           }
                           _isProcessing = false;
                         });
-                        _runAutomatedCapture();
+                        _verifyLocationAndCapture();
                       },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: brandGold,

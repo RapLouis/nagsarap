@@ -371,63 +371,48 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _hasTimeOutForEvent(EventItem event) =>
       _hasRawTimeOut(event) || _getAttendanceCountForEvent(event) >= 2;
 
-  bool _isEventWindowActive(EventItem event) {
+  AttendanceSessionType? _getActiveSessionForEvent(EventItem event) {
+    if (!event.isToday) return null;
+
+    final hasTimeIn = _hasTimeInForEvent(event);
+    final hasTimeOut = _hasTimeOutForEvent(event);
+    if (hasTimeIn && hasTimeOut) return null;
+
     final now = DateTime.now();
 
-    final timeInStr = _getTimeInWindow(event);
-    final timeOutStr = _getTimeOutWindow(event);
+    bool isInsideWindow(String windowStr) {
+      final parts =
+          windowStr.split(RegExp(r'[-–]')).map((s) => s.trim()).toList();
+      if (parts.length < 2) return false;
 
-    final timeInParts = timeInStr.split('–').map((s) => s.trim()).toList();
-    final timeOutParts = timeOutStr.split('–').map((s) => s.trim()).toList();
+      final start = _parseTimeToDateTime(parts[0]);
+      final end = _parseTimeToDateTime(parts[1]);
+      if (start == null || end == null) return false;
 
-    final inStart =
-        timeInParts.isNotEmpty ? _parseTimeToDateTime(timeInParts[0]) : null;
-    final inEnd =
-        timeInParts.length > 1 ? _parseTimeToDateTime(timeInParts[1]) : null;
-
-    final outStart =
-        timeOutParts.isNotEmpty ? _parseTimeToDateTime(timeOutParts[0]) : null;
-    final outEnd =
-        timeOutParts.length > 1 ? _parseTimeToDateTime(timeOutParts[1]) : null;
-
-    final count = _getAttendanceCountForEvent(event);
-    if (count >= 2) return false;
-
-    const margin = Duration(minutes: 15);
-
-    // 1. Check Time-Out Window (if Time-Out not yet completed)
-    if (count < 2 && outStart != null) {
-      final startBound = outStart.subtract(margin);
-      DateTime rawEnd = outEnd ?? outStart.add(const Duration(hours: 4));
-      if (rawEnd.isBefore(outStart)) {
-        rawEnd = rawEnd.add(const Duration(days: 1));
+      DateTime adjustedEnd = end;
+      if (adjustedEnd.isBefore(start)) {
+        adjustedEnd = adjustedEnd.add(const Duration(days: 1));
       }
-      final endBound = rawEnd.add(margin);
 
-      if ((now.isAfter(startBound) || now.isAtSameMomentAs(startBound)) &&
-          (now.isBefore(endBound) || now.isAtSameMomentAs(endBound))) {
-        return true;
-      }
+      return (now.isAfter(start) || now.isAtSameMomentAs(start)) &&
+          (now.isBefore(adjustedEnd) || now.isAtSameMomentAs(adjustedEnd));
     }
 
-    // 2. Check Time-In Window (if Time-In not yet completed)
-    if (count == 0 && inStart != null) {
-      final startBound = inStart.subtract(margin);
-      DateTime rawEnd =
-          inEnd ?? outStart ?? inStart.add(const Duration(hours: 4));
-      if (rawEnd.isBefore(inStart)) {
-        rawEnd = rawEnd.add(const Duration(days: 1));
-      }
-      final endBound = rawEnd.add(margin);
-
-      if ((now.isAfter(startBound) || now.isAtSameMomentAs(startBound)) &&
-          (now.isBefore(endBound) || now.isAtSameMomentAs(endBound))) {
-        return true;
-      }
+    // Check Time-Out window first (even if there is no Time-In record)
+    if (!hasTimeOut && isInsideWindow(_getTimeOutWindow(event))) {
+      return AttendanceSessionType.timeOut;
     }
 
-    return false;
+    // Check Time-In window
+    if (!hasTimeIn && isInsideWindow(_getTimeInWindow(event))) {
+      return AttendanceSessionType.timeIn;
+    }
+
+    return null;
   }
+
+  bool _isEventWindowActive(EventItem event) =>
+      _getActiveSessionForEvent(event) != null;
 
   Future<void> _openHistory() async {
     await Navigator.of(context).push(
@@ -539,9 +524,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   for (final event in today) ...[
                     Builder(
                       builder: (ctx) {
-                        final isActive = _isEventWindowActive(event);
+                        final activeSession = _getActiveSessionForEvent(event);
+                        final isActive = activeSession != null;
                         final count = _getAttendanceCountForEvent(event);
                         final isCompleted = count >= 2;
+
+                        final subtitleText = isCompleted
+                            ? 'Completed (2/2)'
+                            : (activeSession == AttendanceSessionType.timeOut
+                                ? 'Time-Out open now'
+                                : (activeSession ==
+                                        AttendanceSessionType.timeIn
+                                    ? 'Time-In open now'
+                                    : 'Outside attendance window'));
 
                         return Opacity(
                           opacity: isActive ? 1.0 : 0.6,
@@ -595,11 +590,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 ),
                               ),
                               subtitle: Text(
-                                isCompleted
-                                    ? 'Completed (2/2)'
-                                    : (isActive
-                                        ? 'Open now for verification'
-                                        : 'Outside attendance window'),
+                                subtitleText,
                                 style: TextStyle(
                                   fontSize: 11.5,
                                   color: isActive
@@ -644,7 +635,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final count = _getAttendanceCountForEvent(event);
     final isCompleted = count >= 2;
     final isTimeInDone = count == 1;
-    final isWindowActive = _isEventWindowActive(event);
+    final activeSession = _getActiveSessionForEvent(event);
+    final isWindowActive = activeSession != null;
     final isDark = themeController.isDarkMode;
 
     final timeInWindow = _getTimeInWindow(event);
@@ -820,7 +812,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         size: 19,
                       ),
                       label: Text(
-                        isTimeInDone
+                        activeSession == AttendanceSessionType.timeOut
                             ? 'Verify Time-Out Now'
                             : 'Verify Time-In Now',
                         style: const TextStyle(
@@ -1699,13 +1691,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     final count = _getAttendanceCountForEvent(event);
     final isCompleted = count >= 2;
-    final isLiveNow = today && !isCompleted && _isEventWindowActive(event);
+    final activeSession = today ? _getActiveSessionForEvent(event) : null;
+    final isLiveNow = !isCompleted && activeSession != null;
 
     final String statusLabel = isCompleted
         ? 'Completed'
-        : (isLiveNow
-            ? 'Open Now'
-            : (count == 1 ? '1/2 Recorded' : '0/2'));
+        : (activeSession == AttendanceSessionType.timeOut
+            ? 'Time-Out Open'
+            : (activeSession == AttendanceSessionType.timeIn
+                ? 'Time-In Open'
+                : (count == 1 ? '1/2 Recorded' : '0/2')));
 
     final Color statusBg = isCompleted
         ? (isDark ? const Color(0xFF064E3B) : const Color(0xFFDCFCE7))
