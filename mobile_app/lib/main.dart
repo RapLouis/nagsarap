@@ -13,39 +13,42 @@ final ThemeController themeController = ThemeController();
 void callbackDispatcher() {
   Workmanager().executeTask((taskName, inputData) async {
     try {
+      WidgetsFlutterBinding.ensureInitialized();
       debugPrint('[WORKMANAGER] Starting background offline attendance sync...');
 
-      // Process pending SQLite attendance records silently
-      final syncResult = await AttendanceService.instance.syncPendingOfflineAttendance();
+      final syncResult =
+          await AttendanceService.instance.syncPendingOfflineAttendance();
 
       debugPrint('[WORKMANAGER] Sync complete: ${syncResult.message}');
-      return Future.value(true);
+      return true;
     } catch (e) {
       debugPrint('[WORKMANAGER ERROR] Background sync failed: $e');
-      return Future.value(false);
+      return false;
     }
   });
 }
 
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize WorkManager for background execution
-  await Workmanager().initialize(
-    callbackDispatcher,
-    isInDebugMode: false,
-  );
+  try {
+    await Workmanager().initialize(
+      callbackDispatcher,
+      isInDebugMode: false,
+    );
 
-  // Register a 15-minute periodic task that triggers when internet is connected
-  await Workmanager().registerPeriodicTask(
-    'attendance_offline_sync_task',
-    'syncOfflineAttendanceTask',
-    frequency: const Duration(minutes: 15),
-    constraints: Constraints(
-      networkType: NetworkType.connected,
-    ),
-    existingWorkPolicy: ExistingWorkPolicy.keep,
-  );
+    await Workmanager().registerPeriodicTask(
+      'attendance_offline_sync_task',
+      'syncOfflineAttendanceTask',
+      frequency: const Duration(minutes: 15),
+      constraints: Constraints(
+        networkType: NetworkType.connected,
+      ),
+      existingWorkPolicy: ExistingWorkPolicy.keep,
+    );
+  } catch (e, stack) {
+    debugPrint('[STARTUP WORKMANAGER ERROR] $e\n$stack');
+  }
 
   runApp(const MyApp());
 }
@@ -80,8 +83,6 @@ class _MyAppState extends State<MyApp> {
       title: 'Attend',
       debugShowCheckedModeBanner: false,
       themeMode: themeController.isDarkMode ? ThemeMode.dark : ThemeMode.light,
-
-      // Light Mode Configuration
       theme: ThemeData(
         brightness: Brightness.light,
         scaffoldBackgroundColor: const Color(0xFFF8F9FC),
@@ -98,8 +99,6 @@ class _MyAppState extends State<MyApp> {
           surface: Colors.white,
         ),
       ),
-
-      // Dark Mode Configuration
       darkTheme: ThemeData(
         brightness: Brightness.dark,
         scaffoldBackgroundColor: const Color(0xFF0F172A),
@@ -116,7 +115,6 @@ class _MyAppState extends State<MyApp> {
           surface: Color(0xFF1E293B),
         ),
       ),
-
       home: const AppSplashScreen(),
     );
   }

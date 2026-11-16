@@ -6,10 +6,7 @@ plugins {
 
 android {
     namespace = "edu.mmsu.ccis.ccis_attendance"
-
-
     compileSdk = 37
-
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -19,10 +16,8 @@ android {
 
     defaultConfig {
         applicationId = "edu.mmsu.ccis.ccis_attendance"
-
         minSdk = flutter.minSdkVersion
-        targetSdk = 37
-
+        targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
