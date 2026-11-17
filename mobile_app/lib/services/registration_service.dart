@@ -3,9 +3,11 @@ import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
 
+import '../core/api_config.dart';
 import '../core/api_endpoints.dart';
 import '../models/liveness_challenge.dart';
 import 'api_service.dart';
+import 'image_compress_service.dart';
 
 class LivenessChallengeResult {
   final LivenessChallenge? challenge;
@@ -108,10 +110,17 @@ class RegistrationService {
     required XFile profilePhoto,
   }) async {
     try {
+      final compressedPhoto = await ImageCompressService.compressFrame(
+        profilePhoto,
+        quality: 75,
+        minWidth: 640,
+        minHeight: 640,
+      );
+
       final formData = FormData.fromMap({
         'profile_photo': await MultipartFile.fromFile(
-          profilePhoto.path,
-          filename: profilePhoto.name,
+          compressedPhoto.path,
+          filename: compressedPhoto.name,
         ),
       });
 
@@ -120,8 +129,8 @@ class RegistrationService {
         data: formData,
         options: Options(
           contentType: 'multipart/form-data',
-          sendTimeout: const Duration(seconds: 15),
-          receiveTimeout: const Duration(seconds: 15),
+          sendTimeout: ApiConfig.sendTimeout,
+          receiveTimeout: ApiConfig.receiveTimeout,
         ),
       );
 
@@ -140,6 +149,9 @@ class RegistrationService {
         message: map['message']?.toString() ?? 'Photo validation completed.',
       );
     } on DioException catch (e) {
+      debugPrint(
+        'VALIDATE PHOTO DIO ERROR [${e.type}]: ${e.message} | URL: ${e.requestOptions.uri}',
+      );
       return ReferencePhotoValidationResult(
         success: false,
         code: _extractCode(e),
@@ -168,6 +180,24 @@ class RegistrationService {
     required XFile form5,
   }) async {
     try {
+      final compressedPhoto = await ImageCompressService.compressFrame(
+        profilePhoto,
+        quality: 78,
+        minWidth: 720,
+        minHeight: 720,
+      );
+
+      final files = await Future.wait([
+        MultipartFile.fromFile(
+          compressedPhoto.path,
+          filename: compressedPhoto.name,
+        ),
+        MultipartFile.fromFile(
+          form5.path,
+          filename: form5.name,
+        ),
+      ]);
+
       final formData = FormData.fromMap({
         'student_number': studentNumber.trim(),
         'surname': surname.trim(),
@@ -178,14 +208,8 @@ class RegistrationService {
         'password': password,
         'password_confirmation': passwordConfirmation,
         'device_name': 'Flutter Android',
-        'profile_photo': await MultipartFile.fromFile(
-          profilePhoto.path,
-          filename: profilePhoto.name,
-        ),
-        'form_5': await MultipartFile.fromFile(
-          form5.path,
-          filename: form5.name,
-        ),
+        'profile_photo': files[0],
+        'form_5': files[1],
       });
 
       final response = await _api.dio.post(
@@ -193,8 +217,8 @@ class RegistrationService {
         data: formData,
         options: Options(
           contentType: 'multipart/form-data',
-          sendTimeout: const Duration(seconds: 45),
-          receiveTimeout: const Duration(seconds: 45),
+          sendTimeout: ApiConfig.sendTimeout,
+          receiveTimeout: ApiConfig.receiveTimeout,
         ),
       );
 
@@ -249,8 +273,8 @@ class RegistrationService {
         ApiEndpoints.registrationLivenessChallenge,
         data: {'session_id': sessionId},
         options: Options(
-          sendTimeout: const Duration(seconds: 10),
-          receiveTimeout: const Duration(seconds: 10),
+          sendTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 15),
         ),
       );
 
@@ -307,9 +331,16 @@ class RegistrationService {
     required XFile frame,
   }) async {
     try {
+      final compressedFrame = await ImageCompressService.compressFrame(
+        frame,
+        quality: 65,
+        minWidth: 480,
+        minHeight: 640,
+      );
+
       final formData = FormData.fromMap({
         'frame': await MultipartFile.fromFile(
-          frame.path,
+          compressedFrame.path,
           filename: 'liveness-frame.jpg',
         ),
       });
@@ -319,8 +350,8 @@ class RegistrationService {
         data: formData,
         options: Options(
           contentType: 'multipart/form-data',
-          sendTimeout: const Duration(seconds: 12),
-          receiveTimeout: const Duration(seconds: 12),
+          sendTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 20),
         ),
       );
 
@@ -380,32 +411,66 @@ class RegistrationService {
     required String sessionId,
   }) async {
     try {
+      final compressedResults = await Future.wait([
+        ImageCompressService.compressFrame(
+          centerFrame,
+          quality: 75,
+          minWidth: 640,
+          minHeight: 640,
+        ),
+        ImageCompressService.compressFrame(
+          turnedFrame,
+          quality: 75,
+          minWidth: 640,
+          minHeight: 640,
+        ),
+      ]);
+
+      final compressedCenter = compressedResults[0];
+      final compressedTurned = compressedResults[1];
+      final compressedFlashFrames = await ImageCompressService.compressBatch(
+        flashFrames,
+        quality: 60,
+      );
+
+      final multipartCenterA = await MultipartFile.fromFile(
+        compressedCenter.path,
+        filename: 'center.jpg',
+      );
+      final multipartTurnedA = await MultipartFile.fromFile(
+        compressedTurned.path,
+        filename: 'turned.jpg',
+      );
+      final multipartCenterB = await MultipartFile.fromFile(
+        compressedCenter.path,
+        filename: 'center.jpg',
+      );
+      final multipartTurnedB = await MultipartFile.fromFile(
+        compressedTurned.path,
+        filename: 'turned.jpg',
+      );
+
+      final flashMultiparts = await Future.wait(
+        List.generate(
+          compressedFlashFrames.length,
+          (i) => MultipartFile.fromFile(
+            compressedFlashFrames[i].path,
+            filename: 'flash_$i.jpg',
+          ),
+        ),
+      );
+
       final Map<String, dynamic> formMap = {
         'challenge_nonce': challengeNonce,
         'session_id': sessionId,
-        'frontal_image_base64': await MultipartFile.fromFile(
-          centerFrame.path,
-          filename: 'center.jpg',
-        ),
-        'turn_peak_image_base64': await MultipartFile.fromFile(
-          turnedFrame.path,
-          filename: 'turned.jpg',
-        ),
-        'center_frame': await MultipartFile.fromFile(
-          centerFrame.path,
-          filename: 'center.jpg',
-        ),
-        'turned_frame': await MultipartFile.fromFile(
-          turnedFrame.path,
-          filename: 'turned.jpg',
-        ),
+        'frontal_image_base64': multipartCenterA,
+        'turn_peak_image_base64': multipartTurnedA,
+        'center_frame': multipartCenterB,
+        'turned_frame': multipartTurnedB,
       };
 
-      for (int i = 0; i < flashFrames.length; i++) {
-        formMap['flash_images_base64[$i]'] = await MultipartFile.fromFile(
-          flashFrames[i].path,
-          filename: 'flash_$i.jpg',
-        );
+      for (int i = 0; i < flashMultiparts.length; i++) {
+        formMap['flash_images_base64[$i]'] = flashMultiparts[i];
         formMap['flash_colors[$i]'] = flashColors[i];
       }
 
@@ -416,8 +481,8 @@ class RegistrationService {
         data: formData,
         options: Options(
           contentType: 'multipart/form-data',
-          sendTimeout: const Duration(seconds: 60),
-          receiveTimeout: const Duration(seconds: 120),
+          sendTimeout: ApiConfig.sendTimeout,
+          receiveTimeout: ApiConfig.receiveTimeout,
         ),
       );
 
@@ -489,7 +554,20 @@ class RegistrationService {
     final response = exception.response;
 
     if (response == null) {
-      return 'Unable to connect to the server. Make sure Laravel and the Python biometric service are running.';
+      switch (exception.type) {
+        case DioExceptionType.connectionTimeout:
+          return 'Connection timed out while reaching ${ApiConfig.baseUrl}. Check your internet connection and try again.';
+        case DioExceptionType.sendTimeout:
+          return 'Photo upload timed out. Please check your network speed and try again.';
+        case DioExceptionType.receiveTimeout:
+          return 'The server took too long to analyze the photo. Please try again.';
+        case DioExceptionType.badCertificate:
+          return 'SSL certificate verification failed for ${ApiConfig.baseUrl}.';
+        case DioExceptionType.cancel:
+          return 'Request was cancelled.';
+        default:
+          return 'Unable to connect to ${ApiConfig.baseUrl}. Check your phone internet connection or verify Laravel and Python are running.';
+      }
     }
 
     final raw = response.data;

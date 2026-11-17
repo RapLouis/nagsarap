@@ -3,12 +3,11 @@ import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:file_selector/file_selector.dart' as fs;
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:image/image.dart' as img;
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../core/app_colors.dart';
+import '../../services/image_compress_service.dart';
 import '../../services/registration_service.dart';
 import '../../widgets/app_dialog.dart';
 import 'registration_face_verification_screen.dart';
@@ -209,8 +208,9 @@ class _RegisterTabState extends State<RegisterTab> {
 
     // 2. Request Camera Permission
     final cameraStatus = await Permission.camera.request();
+    if (!mounted) return;
+
     if (!cameraStatus.isGranted) {
-      if (!mounted) return;
       await showSimpleError(
         title: 'Camera Permission Required',
         message: 'Camera access is required to take your live profile photo. Please enable camera permission in your settings.',
@@ -614,10 +614,10 @@ class _RegisterTabState extends State<RegisterTab> {
           _buildRoundedInputField(
             label: 'Student Number',
             isRequired: true,
-            hint: 'e.g. 23-140040',
+            hint: 'e.g. 23-123456',
             controller: studentNumberController,
             keyboardType: TextInputType.number,
-            helperText: 'Format: YY-NNNNNN (e.g. 23-140040)',
+            helperText: 'Format: YY-NNNNNN (e.g. 23-123456)',
             prefixIcon: const Icon(
               Icons.tag_rounded,
               size: 18,
@@ -1171,27 +1171,10 @@ class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
     }
   }
 
-  static Uint8List _compressAndFlipImage(Uint8List bytes) {
-    img.Image? decoded = img.decodeImage(bytes);
-    if (decoded == null) return bytes;
-
-    decoded = img.bakeOrientation(decoded);
-    final flipped = img.flipHorizontal(decoded);
-
-    img.Image resized = flipped;
-    if (flipped.width > 1024 || flipped.height > 1024) {
-      resized = img.copyResize(
-        flipped,
-        width: flipped.width > flipped.height ? 1024 : null,
-        height: flipped.height >= flipped.width ? 1024 : null,
-      );
-    }
-
-    return Uint8List.fromList(img.encodeJpg(resized, quality: 78));
-  }
-
   Future<void> _capturePhoto() async {
-    if (_isCapturing || _cameraController == null || !_cameraController!.value.isInitialized) {
+    if (_isCapturing ||
+        _cameraController == null ||
+        !_cameraController!.value.isInitialized) {
       return;
     }
 
@@ -1201,18 +1184,16 @@ class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
 
     try {
       final rawFile = await _cameraController!.takePicture();
-      final bytes = await rawFile.readAsBytes();
-
-      final processedBytes = await compute(_compressAndFlipImage, bytes);
-
-      final tempDir = Directory.systemTemp;
-      final targetPath = '${tempDir.path}/profile_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      final fixedFile = File(targetPath);
-      await fixedFile.writeAsBytes(processedBytes);
+      final compressedFile = await ImageCompressService.compressFrame(
+        rawFile,
+        quality: 75,
+        minWidth: 640,
+        minHeight: 640,
+      );
 
       if (mounted) {
         setState(() {
-          _capturedImage = XFile(fixedFile.path);
+          _capturedImage = compressedFile;
         });
       }
     } catch (e) {
@@ -1323,9 +1304,12 @@ class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
                 ),
                 child: ClipOval(
                   child: _capturedImage != null
-                      ? Image.file(
-                          File(_capturedImage!.path),
-                          fit: BoxFit.cover,
+                      ? Transform.flip(
+                          flipX: true,
+                          child: Image.file(
+                            File(_capturedImage!.path),
+                            fit: BoxFit.cover,
+                          ),
                         )
                       : (_isInitialized && _cameraController != null
                           ? Builder(

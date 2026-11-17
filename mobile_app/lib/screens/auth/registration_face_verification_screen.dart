@@ -70,18 +70,22 @@ class _RegistrationFaceVerificationScreenState
   }
 
   Future<void> _initLivenessChallengeAndCamera() async {
-    final challengeResult =
-        await RegistrationService.instance.requestLivenessChallenge();
-
-    if (!mounted || _disposed) return;
-
-    if (challengeResult.success && challengeResult.challenge != null) {
-      _challenge = challengeResult.challenge;
-      _direction = _challenge!.direction;
-    }
-
     try {
-      final cameras = await availableCameras();
+      final results = await Future.wait([
+        RegistrationService.instance.requestLivenessChallenge(),
+        availableCameras(),
+      ]);
+
+      if (!mounted || _disposed) return;
+
+      final challengeResult = results[0] as LivenessChallengeResult;
+      final cameras = results[1] as List<CameraDescription>;
+
+      if (challengeResult.success && challengeResult.challenge != null) {
+        _challenge = challengeResult.challenge;
+        _direction = _challenge!.direction;
+      }
+
       if (cameras.isEmpty) {
         throw Exception('No camera available.');
       }
@@ -265,7 +269,7 @@ class _RegistrationFaceVerificationScreenState
           _overlayFlashColor = _flashColorSequence[i];
         });
 
-        await Future.delayed(const Duration(milliseconds: 300));
+        await Future.delayed(const Duration(milliseconds: 160));
         if (!mounted || _disposed) return;
 
         final frame = await _camera!.takePicture();
@@ -298,7 +302,7 @@ class _RegistrationFaceVerificationScreenState
           _overlayFlashColor = _flashColorSequence[i];
         });
 
-        await Future.delayed(const Duration(milliseconds: 350));
+        await Future.delayed(const Duration(milliseconds: 220));
         if (!mounted || _disposed) return;
 
         final frame = await _camera!.takePicture();
@@ -362,7 +366,7 @@ class _RegistrationFaceVerificationScreenState
             setState(() {
               _hint = 'Retrying angle adjustment...';
             });
-            await Future.delayed(const Duration(milliseconds: 800));
+            await Future.delayed(const Duration(milliseconds: 600));
             if (mounted && !_disposed) {
               await _runAutomatedCapture();
             }
