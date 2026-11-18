@@ -365,20 +365,20 @@ class _RegisterTabState extends State<RegisterTab> {
   // --------------------------------------------------------------------------
 
   void formatStudentNumber(String value) {
-    final digits = value.replaceAll(RegExp(r'[^0-9]'), '');
-    final limitedDigits = digits.length > 8 ? digits.substring(0, 8) : digits;
+    var sanitized = value.replaceAll(RegExp(r'[^0-9-]'), '');
 
-    String formatted;
-    if (limitedDigits.length <= 2) {
-      formatted = limitedDigits;
-    } else {
-      formatted = '${limitedDigits.substring(0, 2)}-${limitedDigits.substring(2)}';
+    if (sanitized.length > 9) {
+      sanitized = sanitized.substring(0, 9);
     }
 
-    if (studentNumberController.text != formatted) {
+    if (studentNumberController.text != sanitized) {
+      final offset = studentNumberController.selection.baseOffset;
+      final clampedOffset =
+          offset < 0 ? sanitized.length : offset.clamp(0, sanitized.length);
+
       studentNumberController.value = TextEditingValue(
-        text: formatted,
-        selection: TextSelection.collapsed(offset: formatted.length),
+        text: sanitized,
+        selection: TextSelection.collapsed(offset: clampedOffset),
       );
     }
     setState(() {});
@@ -616,7 +616,7 @@ class _RegisterTabState extends State<RegisterTab> {
             isRequired: true,
             hint: 'e.g. 23-123456',
             controller: studentNumberController,
-            keyboardType: TextInputType.number,
+            keyboardType: TextInputType.datetime,
             helperText: 'Format: YY-NNNNNN (e.g. 23-123456)',
             prefixIcon: const Icon(
               Icons.tag_rounded,
