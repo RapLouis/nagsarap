@@ -11,13 +11,15 @@ use App\Services\BiometricService;
 use App\Services\SlotResolver;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
-use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
 
 class KioskController extends Controller
 {
+    /**
+     * Display the organizer kiosk interface.
+     */
     public function index(Request $request)
     {
         $events = Event::where('user_id', $request->user()->id)
@@ -33,17 +35,56 @@ class KioskController extends Controller
         ]);
     }
 
+    /**
+     * Issue a liveness challenge nonce for the kiosk scan.
+     */
+    public function challenge()
+    {
+        $direction = rand(0, 1) === 0 ? 'left' : 'right';
+        $availableColors = ['red', 'green', 'blue'];
+        shuffle($availableColors);
+        $flashColors = array_slice($availableColors, 0, 3);
+        $nonce = Str::random(40);
+
+        session([
+            'kiosk_liveness_challenge' => [
+                'nonce' => $nonce,
+                'direction' => $direction,
+                'flash_colors' => $flashColors,
+                'expires_at' => now()->addMinutes(2),
+            ]
+        ]);
+
+        return response()->json([
+            'nonce' => $nonce,
+            'direction' => $direction,
+            'flash_colors' => $flashColors,
+        ]);
+    }
+
+    /**
+     * Verify live face scan against database embeddings using liveness anti-spoofing.
+     */
     public function verifyFace(Request $request, BiometricService $biometricService, SlotResolver $slotResolver)
     {
         $request->validate([
             'event_id' => ['required'],
-            'image' => ['required', 'string'], // Base64 data URL from canvas
+            'challenge_nonce' => ['required', 'string'],
+            'live_camera_frame' => ['required', 'file', 'image', 'max:5120'],
+            'flash_frames' => ['required', 'array', 'size:3'],
+            'flash_frames.*' => ['required', 'file', 'image', 'max:5120'],
+            'turn_peak_frame' => ['required', 'file', 'image', 'max:5120'],
         ]);
 
-        // 1. Locate event by primary key
-        $event = Event::where('event_id', $request->event_id)
-            ->orWhere('id', $request->event_id)
-            ->firstOrFail();
+        // 1. Locate event by custom event_id column
+        $event = Event::where('event_id', $request->event_id)->first();
+
+        if (!$event) {
+            return response()->json([
+                'success' => false,
+                'message' => 'The selected event could not be found.',
+            ], 404);
+        }
 
         if (!$event->is_active) {
             return response()->json([
@@ -52,30 +93,35 @@ class KioskController extends Controller
             ], 422);
         }
 
-        // 2. Convert base64 image data URL to a temporary UploadedFile
-        $tempFile = $this->base64ToUploadedFile($request->image);
-        if (!$tempFile) {
+        // Validate Challenge Session Nonce
+        $sessionChallenge = session('kiosk_liveness_challenge');
+        if (!$sessionChallenge || 
+            $sessionChallenge['nonce'] !== $request->input('challenge_nonce') || 
+            now()->isAfter($sessionChallenge['expires_at'])) {
             return response()->json([
                 'success' => false,
-                'message' => 'Invalid or unreadable frame captured from camera.',
+                'message' => 'Liveness session expired. Please restart scan.',
             ], 422);
         }
+        session()->forget('kiosk_liveness_challenge');
 
-        // 3. Extract live facial embedding
+        // 2. Extract live embedding & validate anti-spoofing via BiometricService
         try {
-            $liveEmbedding = $biometricService->profileEmbeddingFromFile($tempFile);
+            $liveEmbedding = $biometricService->verifyLivenessAndExtractEmbedding(
+                $request->file('live_camera_frame'),
+                $request->file('flash_frames'),
+                $request->file('turn_peak_frame'),
+                $sessionChallenge['direction'],
+                $sessionChallenge['flash_colors']
+            );
         } catch (\Throwable $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Could not detect a clear face. Please align face inside frame.',
+                'message' => $e->getMessage() ?: 'Anti-spoofing or liveness check failed.',
             ], 422);
-        } finally {
-            if (file_exists($tempFile->getRealPath())) {
-                @unlink($tempFile->getRealPath());
-            }
         }
 
-        // 4. Match against verified students with registered facial embeddings
+        // 3. Match embedding against verified database students
         $students = Student::where('verification_status', 'verified')
             ->whereNotNull('face_embedding')
             ->get();
@@ -104,23 +150,25 @@ class KioskController extends Controller
             ], 404);
         }
 
-        $now = Carbon::now(config('app.timezone', 'UTC'));
-
-        // 5. Resolve active schedule slot (passing null, null for inferred slot/type)
-        try {
-            $resolved = $slotResolver->resolveOrInfer($event, $now, null, null);
-
-            // Guard against duplicate check-in/check-out for this slot
-            $slotResolver->guard($bestMatch->student_id, $event->event_id, $resolved);
-        } catch (AttendanceException $e) {
-            return response()->json([
-                'success' => false,
-                'message' => $e->getMessage(),
-            ], $e->getCode() ?: 422);
+        // 4. Target Scope check
+        if ($event->target_scope === 'section') {
+            $studentSection = trim("{$bestMatch->degree} - {$bestMatch->year_section}");
+            $allowedSections = $event->target_sections ?? [];
+            if (!in_array($studentSection, $allowedSections)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => "Student {$bestMatch->firstname} is not included in the target section scope for this event.",
+                ], 422);
+            }
         }
 
-        // 6. Record attendance using standard schema
+        $now = Carbon::now(config('app.timezone', 'UTC'));
+
+        // 5. Resolve slot and record attendance
         try {
+            $resolved = $slotResolver->resolveOrInfer($event, $now, null, null);
+            $slotResolver->guard($bestMatch->student_id, $event->event_id, $resolved);
+
             $attendance = DB::transaction(function () use ($bestMatch, $event, $resolved, $highestSimilarity, $now) {
                 return Attendance::create([
                     'attendance_uuid' => (string) Str::uuid(),
@@ -134,22 +182,17 @@ class KioskController extends Controller
                     'sync_time' => $now,
                     'status' => $resolved['status'] ?? 'present',
                     'sync_status' => 'synced',
-                    'source' => 'kiosk',
+                    'source' => 'kiosk_liveness',
                     'confidence_score' => round($highestSimilarity, 4),
                     'liveness_passed' => true,
-                    'liveness_method' => 'kiosk_facial_recognition',
+                    'liveness_method' => 'kiosk_flash_and_turn_challenge',
                 ]);
             });
-        } catch (\Illuminate\Database\QueryException $e) {
-            if (str_starts_with((string) $e->getCode(), '23')) {
-                return response()->json([
-                    'success' => false,
-                    'message' => ($resolved['type'] ?? 'in') === 'out'
-                        ? 'Student has already checked out for this slot.'
-                        : 'Student has already checked in for this slot.',
-                ], 409);
-            }
-            throw $e;
+        } catch (AttendanceException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], $e->getCode() ?: 422);
         }
 
         return response()->json([
@@ -166,23 +209,69 @@ class KioskController extends Controller
     }
 
     /**
-     * Helper to decode Base64 data URL into an UploadedFile instance.
+     * Search students for manual fallback override.
      */
-    private function base64ToUploadedFile(string $base64Data): ?UploadedFile
+    public function searchStudents(Request $request)
     {
-        if (preg_match('/^data:image\/(\w+);base64,/', $base64Data, $type)) {
-            $data = substr($base64Data, strpos($base64Data, ',') + 1);
-            $type = strtolower($type[1]);
+        $query = $request->input('q');
+        $students = Student::where('verification_status', 'verified')
+            ->where(function ($q) use ($query) {
+                $q->where('firstname', 'like', "%{$query}%")
+                  ->orWhere('surname', 'like', "%{$query}%")
+                  ->orWhere('student_number', 'like', "%{$query}%");
+            })
+            ->limit(10)
+            ->get();
 
-            $data = base64_decode($data);
-            if ($data === false) return null;
+        return response()->json(['students' => $students]);
+    }
 
-            $tmpFilePath = sys_get_temp_dir() . '/' . Str::uuid() . '.' . $type;
-            file_put_contents($tmpFilePath, $data);
+    /**
+     * Force check-in a student manually via organizer override.
+     */
+    public function manualOverride(Request $request, SlotResolver $slotResolver)
+    {
+        $request->validate([
+            'event_id' => 'required',
+            'student_id' => 'required|exists:students,student_id',
+        ]);
 
-            return new UploadedFile($tmpFilePath, "kiosk_frame.{$type}", "image/{$type}", null, true);
+        $event = Event::where('event_id', $request->event_id)->first();
+        if (!$event) {
+            return response()->json(['success' => false, 'message' => 'Event not found.'], 404);
         }
 
-        return null;
+        $student = Student::where('student_id', $request->student_id)->firstOrFail();
+        $now = Carbon::now(config('app.timezone', 'UTC'));
+
+        try {
+            $resolved = $slotResolver->resolveOrInfer($event, $now, null, null);
+            $slotResolver->guard($student->student_id, $event->event_id, $resolved);
+
+            Attendance::create([
+                'attendance_uuid' => (string) Str::uuid(),
+                'student_id' => $student->student_id,
+                'event_id' => $event->event_id,
+                'event_date' => $resolved['date'] ?? $now->toDateString(),
+                'slot_index' => $resolved['index'] ?? 0,
+                'type' => $resolved['type'] ?? 'in',
+                'logged_at' => $now,
+                'attendance_time' => $now,
+                'sync_time' => $now,
+                'status' => $resolved['status'] ?? 'present',
+                'sync_status' => 'synced',
+                'source' => 'organizer_manual_override',
+                'confidence_score' => 1.0000,
+                'liveness_passed' => true,
+                'liveness_method' => 'manual_organizer_override',
+            ]);
+        } catch (AttendanceException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => "Successfully force checked-in {$student->firstname} {$student->surname}!",
+        ]);
     }
 }

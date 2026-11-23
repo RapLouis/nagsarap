@@ -81,7 +81,7 @@ class ClearanceController extends Controller
             ];
         }
 
-        return Inertia::render('admin/Clearance', [
+        return Inertia::render('admin/StudentSanctions', [
             'events' => $events,
             'currentEventId' => $currentEvent ? $currentEvent->event_id : null,
             'records' => $records,

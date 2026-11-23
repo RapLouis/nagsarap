@@ -5,9 +5,6 @@ import {
     Clock,
     ShieldCheck,
     ChevronRight,
-    TrendingUp,
-    ListChecks,
-    CalendarClock,
     MapPin,
     History,
     CalendarX,
@@ -18,11 +15,44 @@ import {
     Lock,
     RotateCcw,
     Camera,
+    Sun,
+    Sunset,
 } from 'lucide-react';
 import CheckInModal from '@/components/CheckInModal';
-import { type ScheduleItem, type TimeSlot } from '@/lib/eventValidation';
-import { findSlotRecord, formatTime, windowState, type SlotType } from '@/lib/slots';
-import { SlotStatusBadge, slotBadge } from '@/components/slot-rows';
+import { formatTime } from '@/lib/slots';
+
+export type CheckpointKey =
+    | 'morning_time_in'
+    | 'morning_time_out'
+    | 'afternoon_time_in'
+    | 'afternoon_time_out';
+
+type CheckpointSlot = {
+    slot_index?: number;
+    morning_time_in_start?: string;
+    morning_time_in_end?: string;
+    morning_time_out_start?: string;
+    morning_time_out_end?: string;
+    afternoon_time_in_start?: string;
+    afternoon_time_in_end?: string;
+    afternoon_time_out_start?: string;
+    afternoon_time_out_end?: string;
+    // Legacy fallback fields
+    time_in_start?: string;
+    time_in_end?: string;
+    time_out_start?: string;
+    time_out_end?: string;
+    // Status booleans injected by StudentDashboardController
+    morning_time_in?: boolean;
+    morning_time_out?: boolean;
+    afternoon_time_in?: boolean;
+    afternoon_time_out?: boolean;
+};
+
+type ScheduleItem = {
+    date: string;
+    slots: CheckpointSlot[];
+};
 
 type Event = {
     event_id: number;
@@ -59,6 +89,11 @@ type UpcomingEvent = {
 
 type AttendanceLog = {
     attendance_id: number;
+    event_id: number;
+    event_date: string;
+    slot_index: number;
+    type: 'in' | 'out';
+    checkpoint_key?: CheckpointKey;
     logged_at: string;
     attendance_time: string;
     status: string;
@@ -84,6 +119,13 @@ type DashboardProps = {
     today?: string;
 };
 
+const CHECKPOINT_LABELS: Record<CheckpointKey, string> = {
+    morning_time_in: 'Morning In',
+    morning_time_out: 'Morning Out',
+    afternoon_time_in: 'Afternoon In',
+    afternoon_time_out: 'Afternoon Out',
+};
+
 const localToday = () => {
     const n = new Date();
     const mm = String(n.getMonth() + 1).padStart(2, '0');
@@ -101,14 +143,37 @@ const formatShortDate = (dateStr: string) =>
 
 const formatLongDate = (dateStr: string) =>
     parseDateStr(dateStr).toLocaleDateString('en-US', {
-        weekday: 'long',
-        month: 'long',
+        weekday: 'short',
+        month: 'short',
         day: 'numeric',
         year: 'numeric',
     });
 
 const formatDateRange = (start: string, end: string) =>
     start === end ? formatShortDate(start) : `${formatShortDate(start)} \u2013 ${formatShortDate(end)}`;
+
+function checkpointWindowState(startStr?: string, endStr?: string, dateStr?: string): 'upcoming' | 'open' | 'closed' {
+    if (!startStr || !dateStr) return 'closed';
+    const now = new Date();
+    const [y, m, d] = dateStr.split('-').map(Number);
+
+    const [sh, sm] = startStr.split(':').map(Number);
+    const start = new Date(y, m - 1, d, sh, sm, 0);
+
+    if (now < start) return 'upcoming';
+
+    if (endStr) {
+        const [eh, em] = endStr.split(':').map(Number);
+        const end = new Date(y, m - 1, d, eh, em, 59);
+        if (end <= start) end.setDate(end.getDate() + 1);
+        if (now > end) return 'closed';
+    } else {
+        const endOfDay = new Date(y, m - 1, d, 23, 59, 59);
+        if (now > endOfDay) return 'closed';
+    }
+
+    return 'open';
+}
 
 export default function Dashboard({
     student,
@@ -125,10 +190,11 @@ export default function Dashboard({
 
     const [selectedSlotEvent, setSelectedSlotEvent] = useState<{
         event: Event;
-        slot: TimeSlot;
+        slot: CheckpointSlot;
         slotIndex: number;
         dateStr: string;
         type: 'in' | 'out';
+        checkpointKey: CheckpointKey;
     } | null>(null);
 
     const [currentDate, setCurrentDate] = useState(() => {
@@ -137,8 +203,25 @@ export default function Dashboard({
     });
     const [selectedDateStr, setSelectedDateStr] = useState<string>(today);
 
-    const hasCheckedInSlot = (eventId: number, slotIndex: number, dateStr: string, type: SlotType) =>
-        Boolean(findSlotRecord(student.attendances, eventId, dateStr, slotIndex, type));
+    const hasLoggedCheckpoint = (
+        eventId: number,
+        slotIndex: number,
+        dateStr: string,
+        checkpointKey: CheckpointKey,
+        slotFlag?: boolean
+    ) => {
+        if (typeof slotFlag === 'boolean') return slotFlag;
+        return student.attendances.some(
+            (att) =>
+                att.event_id === eventId &&
+                att.slot_index === slotIndex &&
+                att.event_date?.startsWith(dateStr) &&
+                (att.checkpoint_key === checkpointKey ||
+                    (!att.checkpoint_key &&
+                        ((checkpointKey === 'morning_time_in' && att.type === 'in') ||
+                            (checkpointKey === 'morning_time_out' && att.type === 'out'))))
+        );
+    };
 
     const eventsAttended = student.attendances.length;
     const attendanceRate =
@@ -168,9 +251,9 @@ export default function Dashboard({
     const selectedDateEntries = eventsByDate[selectedDateStr] ?? [];
 
     const filteredUpcomingEvents = useMemo(() => {
-        const inspectedEventIds = new Set(selectedDateEntries.map(entry => entry.event.event_id));
+        const inspectedEventIds = new Set(selectedDateEntries.map((entry) => entry.event.event_id));
 
-        return upcomingEvents.filter(evt => {
+        return upcomingEvents.filter((evt) => {
             if (inspectedEventIds.has(evt.event_id)) return false;
             if (evt.next_date <= selectedDateStr) return false;
             return true;
@@ -196,236 +279,282 @@ export default function Dashboard({
     const handleJumpToToday = () => jumpToDate(today);
 
     return (
-        <>
-            <Head title="Student Dashboard" />
+        <div className="min-h-screen bg-[#F5F6FA] p-3 sm:p-5 font-sans text-gray-900 antialiased">
+            <Head title="Student Dashboard | 4ttnd Attendance System" />
 
-            <div className="min-h-screen bg-gray-50/50 p-6 lg:p-8 space-y-8 text-gray-900">
-
-                {/* HERO WELCOME BANNER WITH RESPONSIVE ORGANIZER PORTAL BUTTON */}
-                <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-[#0b1354] to-[#1B1F5C] p-6 lg:p-8 text-white shadow-md">
-                    <div className="relative z-10 flex flex-col md:flex-row md:items-center md:justify-between gap-6">
-                        
-                        {/* Student Details */}
-                        <div className="flex items-center gap-5">
-                            <div className="h-16 w-16 overflow-hidden rounded-2xl border-2 border-amber-400 bg-indigo-950 shadow-inner shrink-0">
+            <div className="w-full space-y-4">
+                {/* COMPACT HERO BANNER WITH UNIFIED DATA STRIP */}
+                <header className="rounded-2xl bg-[#1B1F5C] p-4 sm:p-5 text-white shadow-xs border border-[#1B1F5C]">
+                    <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                        {/* Student Identity */}
+                        <div className="flex items-center gap-3.5">
+                            <div className="h-12 w-12 overflow-hidden rounded-xl border-2 border-[#F5A623] bg-indigo-950 shrink-0">
                                 {student.face_photo_url ? (
-                                    <img src={student.face_photo_url} alt="Profile" className="h-full w-full object-cover" />
+                                    <img
+                                        src={student.face_photo_url}
+                                        alt={`${student.firstname} ${student.surname}`}
+                                        className="h-full w-full object-cover"
+                                    />
                                 ) : (
-                                    <div className="flex h-full w-full items-center justify-center font-bold text-amber-400 text-xl">
+                                    <div className="flex h-full w-full items-center justify-center font-black text-[#F5A623] text-lg">
                                         {student.firstname[0]}
                                     </div>
                                 )}
                             </div>
-                            <div>
-                                <div className="flex items-center gap-2">
-                                    <span className="rounded-full bg-emerald-500/20 border border-emerald-400/30 px-3 py-0.5 text-xs font-semibold text-emerald-300 flex items-center gap-1">
-                                        <ShieldCheck className="h-3.5 w-3.5" /> Biometrics verified
-                                    </span>
-                                </div>
-                                <h1 className="text-2xl lg:text-3xl font-black tracking-tight mt-1">
-                                    Welcome back, {student.firstname} {student.surname}
+                            <div className="space-y-0.5">
+                                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 border border-emerald-400/30 px-2.5 py-0.5 text-[10px] font-bold text-emerald-300">
+                                    <ShieldCheck className="h-3 w-3" aria-hidden="true" /> Biometrics Verified
+                                </span>
+                                <h1 className="text-lg sm:text-xl font-black tracking-tight text-white">
+                                    Welcome, {student.firstname} {student.surname}
                                 </h1>
-                                <p className="text-xs lg:text-sm text-indigo-200 mt-0.5 font-mono">
-                                    Student ID: {student.student_number}
+                                <p className="text-[11px] text-indigo-200 font-mono">
+                                    Student ID: <span className="font-bold text-white">{student.student_number}</span>
                                 </p>
                             </div>
                         </div>
 
-                        {/* Actions & Stats Row */}
-                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 shrink-0">
-                            
-                            {/* Organizer Portal Button (Visible ONLY if Approved Organizer) */}
-                            {isApprovedOrganizer && (
-                                <Link
-                                    href="/organizer/dashboard"
-                                    className="inline-flex items-center justify-center gap-2 px-4 py-3 bg-[#C9973E] hover:bg-[#b88632] text-slate-950 font-extrabold text-xs rounded-2xl shadow-md transition active:scale-98"
-                                >
-                                    <Camera className="w-4 h-4 text-slate-950" />
-                                    Organizer Portal &rarr;
-                                </Link>
-                            )}
-
-                            {/* Attendance Quick Metrics */}
-                            <div className="flex items-center gap-3 bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/10">
-                                <div>
-                                    <span className="text-[11px] uppercase tracking-wider text-indigo-300 font-semibold block">Attendance Rate</span>
-                                    <span className="text-2xl font-black text-amber-400">
+                        {/* Consolidated KPI Strip & Organizer Action */}
+                        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 shrink-0">
+                            <div className="flex items-center divide-x divide-white/15 bg-white/10 px-3.5 py-2 rounded-xl border border-white/15 text-xs">
+                                <div className="pr-3.5">
+                                    <span className="text-[9px] uppercase tracking-wider text-indigo-200 font-bold block">
+                                        Attendance Rate
+                                    </span>
+                                    <span className="text-base font-black text-[#F5A623]">
                                         {attendanceRate !== null ? `${attendanceRate}%` : '—'}
                                     </span>
                                 </div>
-                                <div className="h-8 w-px bg-white/20 mx-2" />
-                                <div>
-                                    <span className="text-[11px] uppercase tracking-wider text-indigo-300 font-semibold block">Sessions</span>
-                                    <span className="text-2xl font-black text-white">{eventsAttended}</span>
+                                <div className="px-3.5">
+                                    <span className="text-[9px] uppercase tracking-wider text-indigo-200 font-bold block">
+                                        Checkpoints
+                                    </span>
+                                    <span className="text-base font-black text-white">{eventsAttended}</span>
+                                </div>
+                                <div className="pl-3.5">
+                                    <span className="text-[9px] uppercase tracking-wider text-indigo-200 font-bold block">
+                                        Active Today
+                                    </span>
+                                    <span className="text-base font-black text-emerald-300">{activeEvents.length}</span>
                                 </div>
                             </div>
 
+                            {isApprovedOrganizer && (
+                                <Link
+                                    href="/organizer/dashboard"
+                                    className="inline-flex items-center justify-center gap-1.5 min-h-[44px] px-4 py-2 bg-[#F5A623] hover:bg-[#d98e19] text-[#1B1F5C] font-extrabold text-xs rounded-xl shadow-xs transition-all focus-visible:ring-2 focus-visible:ring-white active:scale-98"
+                                >
+                                    <Camera className="w-4 h-4 text-[#1B1F5C]" aria-hidden="true" />
+                                    <span>Organizer Portal →</span>
+                                </Link>
+                            )}
                         </div>
                     </div>
-                </div>
+                </header>
 
-                {/* STAT CARDS ROW */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-                    <StatCard
-                        icon={<TrendingUp className="h-5 w-5 text-[#0b1354]" />}
-                        label="Attendance Rate"
-                        value={attendanceRate !== null ? `${attendanceRate}%` : '—'}
-                        caption={totalExpectedEvents ? `${eventsAttended} of ${totalExpectedEvents} sessions completed` : 'Term progress'}
-                    />
-                    <StatCard
-                        icon={<ListChecks className="h-5 w-5 text-[#0b1354]" />}
-                        label="Sessions Attended"
-                        value={String(eventsAttended)}
-                        caption="Total recorded logs"
-                    />
-                    <StatCard
-                        icon={<CalendarClock className="h-5 w-5 text-[#0b1354]" />}
-                        label="Events Today"
-                        value={String(activeEvents.length)}
-                        caption="Scheduled for today"
-                    />
-                </div>
-
-                {/* MAIN DESKTOP GRID LAYOUT */}
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-
-                    {/* LEFT COLUMN: TODAY'S ACTIVE EVENTS & SLOTS */}
-                    <div className="lg:col-span-2 space-y-6">
-                        <div className="flex items-center justify-between">
-                            <h2 className="text-lg font-bold text-gray-900">Today's Events & Check-In Slots</h2>
-                            <span className="text-xs font-semibold text-gray-400 bg-gray-200/60 px-2.5 py-1 rounded-full">
-                                {activeEvents.length} active
-                            </span>
+                {/* 12-COLUMN ASYMMETRIC BENTO GRID */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+                    {/* LEFT PRIMARY COLUMN (8 Cols): ACTIVE EVENTS & FLATTENED CHECKPOINTS */}
+                    <main className="lg:col-span-8 space-y-4">
+                        <div className="flex items-center justify-between px-0.5">
+                            <h2 className="font-black text-[#1B1F5C] text-xs sm:text-sm uppercase tracking-wider">
+                                Today's Active Check-In Sessions
+                            </h2>
+                            {activeEvents.length > 3 && (
+                                <Link
+                                    href="/check-in"
+                                    className="inline-flex items-center gap-1 text-xs font-bold text-[#1B1F5C] hover:underline focus-visible:ring-2 focus-visible:ring-[#F5A623] rounded-xs"
+                                >
+                                    <span>View All ({activeEvents.length})</span>
+                                    <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
+                                </Link>
+                            )}
                         </div>
 
                         {activeEvents.length === 0 ? (
-                            <div className="bg-white p-12 rounded-3xl shadow-xs border border-gray-100 text-center space-y-3">
-                                <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-[#0b1354]">
-                                    <CalendarX className="h-7 w-7 stroke-[1.5]" />
+                            <div className="bg-white p-8 rounded-2xl shadow-xs border border-gray-200/80 text-center space-y-2">
+                                <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-[#1B1F5C]">
+                                    <CalendarX className="h-5 w-5" aria-hidden="true" />
                                 </div>
-                                <div>
-                                    <h3 className="font-bold text-gray-900 text-base">No activity today</h3>
-                                    <p className="text-xs text-gray-400 mt-1">There are no events scheduled or open for check-in today.</p>
-                                </div>
+                                <h3 className="font-bold text-gray-900 text-sm">No active events scheduled today</h3>
+                                <p className="text-xs text-gray-500 max-w-xs mx-auto">
+                                    Check the calendar sidebar to preview upcoming academic sessions and events.
+                                </p>
                             </div>
                         ) : (
                             <div className="space-y-4">
-                                {activeEvents.map((evt) => (
-                                    <div key={evt.event_id} className="bg-white p-6 lg:p-7 rounded-3xl shadow-xs border border-gray-100 space-y-5 hover:shadow-md transition">
-                                        <div className="flex items-start justify-between gap-4">
-                                            <div className="flex items-center gap-3.5">
-                                                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 text-[#0b1354]">
-                                                    <Clock className="h-6 w-6" />
+                                {activeEvents.slice(0, 3).map((evt) => (
+                                    <article
+                                        key={evt.event_id}
+                                        className="bg-white p-4 sm:p-5 rounded-2xl shadow-xs border border-gray-200/80 space-y-4 hover:border-[#1B1F5C]/30 transition-all"
+                                    >
+                                        {/* Event Header */}
+                                        <div className="flex items-center justify-between gap-3 border-b border-gray-100 pb-3">
+                                            <div className="flex items-center gap-3">
+                                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-[#1B1F5C] border border-indigo-100">
+                                                    <Clock className="h-5 w-5" aria-hidden="true" />
                                                 </div>
                                                 <div>
-                                                    <h3 className="font-bold text-gray-900 text-base lg:text-lg">{evt.title}</h3>
-                                                    <p className="text-xs text-gray-400 flex items-center gap-1 mt-0.5">
-                                                        <MapPin className="h-3.5 w-3.5 text-amber-500" />
-                                                        {evt.location || 'Location TBA'}
+                                                    <h3 className="font-black text-[#1B1F5C] text-base leading-tight">
+                                                        {evt.title}
+                                                    </h3>
+                                                    <p className="text-xs text-gray-500 font-medium flex items-center gap-1 mt-0.5">
+                                                        <MapPin className="h-3.5 w-3.5 text-[#F5A623]" aria-hidden="true" />
+                                                        <span>{evt.location || 'Location TBA'}</span>
                                                     </p>
                                                 </div>
                                             </div>
-                                            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3.5 py-1 text-xs font-bold text-emerald-700 border border-emerald-200/50 shrink-0">
-                                                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                                            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[10px] font-extrabold text-emerald-700 border border-emerald-200 shrink-0">
+                                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" aria-hidden="true" />
                                                 Live Window
                                             </span>
                                         </div>
 
+                                        {/* Flattened Checkpoint Grid (No outer nested wrapper box) */}
                                         {evt.schedules && evt.schedules.length > 0 && (
-                                            <div className="space-y-4 pt-2 border-t border-gray-100">
+                                            <div className="space-y-4">
                                                 {evt.schedules.map((sched, sIdx) => (
                                                     <div key={sIdx} className="space-y-3">
-                                                        <div className="flex items-center justify-between">
-                                                            <span className="text-xs font-bold text-gray-500 bg-gray-100 px-3 py-1 rounded-lg">
-                                                                Date: {sched.date}
-                                                            </span>
-                                                        </div>
-
                                                         {sched.slots?.map((slot, slotIdx) => {
-                                                            const inState = windowState(slot, 'in', sched.date);
-                                                            const outState = windowState(slot, 'out', sched.date);
-                                                            const inDone = hasCheckedInSlot(evt.event_id, slotIdx, sched.date, 'in');
-                                                            const outDone = hasCheckedInSlot(evt.event_id, slotIdx, sched.date, 'out');
+                                                            const mInStart = slot.morning_time_in_start || slot.time_in_start;
+                                                            const mInEnd = slot.morning_time_in_end || slot.time_in_end;
+                                                            const mOutStart = slot.morning_time_out_start || slot.time_out_start;
+                                                            const mOutEnd = slot.morning_time_out_end || slot.time_out_end;
+                                                            const aInStart = slot.afternoon_time_in_start;
+                                                            const aInEnd = slot.afternoon_time_in_end;
+                                                            const aOutStart = slot.afternoon_time_out_start;
+                                                            const aOutEnd = slot.afternoon_time_out_end;
+
+                                                            const checkpoints: {
+                                                                key: CheckpointKey;
+                                                                label: string;
+                                                                session: 'morning' | 'afternoon';
+                                                                type: 'in' | 'out';
+                                                                start?: string;
+                                                                end?: string;
+                                                                done: boolean;
+                                                            }[] = [
+                                                                {
+                                                                    key: 'morning_time_in' as CheckpointKey,
+                                                                    label: 'Morning Time-In',
+                                                                    session: 'morning',
+                                                                    type: 'in',
+                                                                    start: mInStart,
+                                                                    end: mInEnd,
+                                                                    done: hasLoggedCheckpoint(evt.event_id, slotIdx, sched.date, 'morning_time_in', slot.morning_time_in),
+                                                                },
+                                                                {
+                                                                    key: 'morning_time_out' as CheckpointKey,
+                                                                    label: 'Morning Time-Out',
+                                                                    session: 'morning',
+                                                                    type: 'out',
+                                                                    start: mOutStart,
+                                                                    end: mOutEnd,
+                                                                    done: hasLoggedCheckpoint(evt.event_id, slotIdx, sched.date, 'morning_time_out', slot.morning_time_out),
+                                                                },
+                                                                {
+                                                                    key: 'afternoon_time_in' as CheckpointKey,
+                                                                    label: 'Afternoon Time-In',
+                                                                    session: 'afternoon',
+                                                                    type: 'in',
+                                                                    start: aInStart,
+                                                                    end: aInEnd,
+                                                                    done: hasLoggedCheckpoint(evt.event_id, slotIdx, sched.date, 'afternoon_time_in', slot.afternoon_time_in),
+                                                                },
+                                                                {
+                                                                    key: 'afternoon_time_out' as CheckpointKey,
+                                                                    label: 'Afternoon Time-Out',
+                                                                    session: 'afternoon',
+                                                                    type: 'out',
+                                                                    start: aOutStart,
+                                                                    end: aOutEnd,
+                                                                    done: hasLoggedCheckpoint(evt.event_id, slotIdx, sched.date, 'afternoon_time_out', slot.afternoon_time_out),
+                                                                },
+                                                            ].filter((cp) => Boolean(cp.start)) as {
+                                                                key: CheckpointKey;
+                                                                label: string;
+                                                                session: 'morning' | 'afternoon';
+                                                                type: 'in' | 'out';
+                                                                start: string;
+                                                                end?: string;
+                                                                done: boolean;
+                                                            }[];
+
+                                                            const completedCount = checkpoints.filter((c) => c.done).length;
 
                                                             return (
-                                                                <div key={slotIdx} className="bg-gray-50/80 p-5 rounded-2xl border border-gray-200/60 space-y-4">
+                                                                <div key={slotIdx} className="space-y-2.5">
                                                                     <div className="flex items-center justify-between">
-                                                                        <span className="font-extrabold text-[#0b1354] uppercase tracking-wider text-xs">
-                                                                            Slot {slotIdx + 1} Operations
+                                                                        <span className="font-extrabold text-[#1B1F5C] uppercase tracking-wider text-[10px]">
+                                                                            Slot {slotIdx + 1} Checkpoints
                                                                         </span>
-                                                                        <SlotStatusBadge status={slotBadge({ hasIn: Boolean(slot.time_in_start), hasOut: Boolean(slot.time_out_start), inState, outState, inDone, outDone })} />
+                                                                        <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-indigo-50 text-[#1B1F5C] border border-indigo-100">
+                                                                            {completedCount} / {checkpoints.length} Completed
+                                                                        </span>
                                                                     </div>
 
-                                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                                                        {slot.time_in_start && (
-                                                                            <div className={`p-4 rounded-xl border flex flex-col justify-between transition ${
-                                                                                inDone 
-                                                                                    ? 'bg-emerald-50/60 border-emerald-200 text-emerald-900' 
-                                                                                    : inState === 'open' 
-                                                                                    ? 'bg-white border-indigo-200 shadow-xs' 
-                                                                                    : 'bg-gray-100/70 border-gray-200 text-gray-500'
-                                                                            }`}>
-                                                                                <div className="flex items-center justify-between mb-2">
-                                                                                    <span className="text-xs font-bold uppercase tracking-wider">Time-In</span>
-                                                                                    <span className="text-xs font-mono font-semibold">{formatTime(slot.time_in_start)}</span>
+                                                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                                                        {checkpoints.map((cp) => {
+                                                                            const state = checkpointWindowState(cp.start, cp.end, sched.date);
+                                                                            const isMorning = cp.session === 'morning';
+
+                                                                            return (
+                                                                                <div
+                                                                                    key={cp.key}
+                                                                                    className={`p-3 rounded-xl border flex flex-col justify-between transition-all ${
+                                                                                        cp.done
+                                                                                            ? 'bg-emerald-50/60 border-emerald-200 text-emerald-900'
+                                                                                            : state === 'open'
+                                                                                              ? 'bg-amber-50/40 border-[#F5A623] shadow-2xs'
+                                                                                              : 'bg-gray-50/80 border-gray-200/80 text-gray-500'
+                                                                                    }`}
+                                                                                >
+                                                                                    <div className="flex items-center justify-between mb-1.5">
+                                                                                        <span className="inline-flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wider text-[#1B1F5C]">
+                                                                                            {isMorning ? (
+                                                                                                <Sun className="h-3.5 w-3.5 text-sky-500" aria-hidden="true" />
+                                                                                            ) : (
+                                                                                                <Sunset className="h-3.5 w-3.5 text-[#F5A623]" aria-hidden="true" />
+                                                                                            )}
+                                                                                            <span>{cp.label}</span>
+                                                                                        </span>
+                                                                                        <span className="text-[11px] font-mono font-bold text-gray-700">
+                                                                                            {formatTime(cp.start)}
+                                                                                            {cp.end ? ` - ${formatTime(cp.end)}` : ''}
+                                                                                        </span>
+                                                                                    </div>
+
+                                                                                    {cp.done ? (
+                                                                                        <div className="flex items-center gap-1 text-[11px] font-bold text-emerald-700 pt-1">
+                                                                                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
+                                                                                            <span>Logged</span>
+                                                                                        </div>
+                                                                                    ) : state === 'open' ? (
+                                                                                        <button
+                                                                                            type="button"
+                                                                                            onClick={() =>
+                                                                                                setSelectedSlotEvent({
+                                                                                                    event: evt,
+                                                                                                    slot,
+                                                                                                    slotIndex: slotIdx,
+                                                                                                    dateStr: sched.date,
+                                                                                                    type: cp.type,
+                                                                                                    checkpointKey: cp.key,
+                                                                                                })
+                                                                                            }
+                                                                                            className="w-full mt-1.5 min-h-[38px] py-1.5 px-3 rounded-lg bg-[#1B1F5C] text-white text-xs font-bold hover:bg-[#131644] focus-visible:ring-2 focus-visible:ring-[#F5A623] shadow-xs transition-all active:scale-98"
+                                                                                        >
+                                                                                            Log {cp.label} →
+                                                                                        </button>
+                                                                                    ) : (
+                                                                                        <div className="flex items-center gap-1 text-[11px] font-medium text-gray-400 pt-1">
+                                                                                            <Lock className="h-3 w-3" aria-hidden="true" />
+                                                                                            <span>{state === 'upcoming' ? 'Not Open Yet' : 'Window Closed'}</span>
+                                                                                        </div>
+                                                                                    )}
                                                                                 </div>
-
-                                                                                {inDone ? (
-                                                                                    <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 py-2">
-                                                                                        <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                                                                                        <span>Successfully Checked In</span>
-                                                                                    </div>
-                                                                                ) : inState === 'open' ? (
-                                                                                    <button
-                                                                                        type="button"
-                                                                                        onClick={() => setSelectedSlotEvent({ event: evt, slot, slotIndex: slotIdx, dateStr: sched.date, type: 'in' })}
-                                                                                        className="w-full mt-2 py-2.5 px-4 rounded-xl bg-[#0b1354] text-white text-xs font-bold hover:bg-[#151848] shadow-sm transition active:scale-[0.98]"
-                                                                                    >
-                                                                                        Check-In Now &rarr;
-                                                                                    </button>
-                                                                                ) : (
-                                                                                    <div className="flex items-center gap-1.5 text-xs font-medium text-gray-400 py-2">
-                                                                                        <Lock className="h-3.5 w-3.5" />
-                                                                                        <span>{inState === 'upcoming' ? 'Window Not Open Yet' : 'Window Closed'}</span>
-                                                                                    </div>
-                                                                                )}
-                                                                            </div>
-                                                                        )}
-
-                                                                        {slot.time_out_start && (
-                                                                            <div className={`p-4 rounded-xl border flex flex-col justify-between transition ${
-                                                                                outDone 
-                                                                                    ? 'bg-emerald-50/60 border-emerald-200 text-emerald-900' 
-                                                                                    : outState === 'open' 
-                                                                                    ? 'bg-white border-indigo-200 shadow-xs' 
-                                                                                    : 'bg-gray-100/70 border-gray-200 text-gray-500'
-                                                                            }`}>
-                                                                                <div className="flex items-center justify-between mb-2">
-                                                                                    <span className="text-xs font-bold uppercase tracking-wider">Time-Out</span>
-                                                                                    <span className="text-xs font-mono font-semibold">{formatTime(slot.time_out_start)}</span>
-                                                                                </div>
-
-                                                                                {outDone ? (
-                                                                                    <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 py-2">
-                                                                                        <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                                                                                        <span>Successfully Checked Out</span>
-                                                                                    </div>
-                                                                                ) : outState === 'open' ? (
-                                                                                    <button
-                                                                                        type="button"
-                                                                                        onClick={() => setSelectedSlotEvent({ event: evt, slot, slotIndex: slotIdx, dateStr: sched.date, type: 'out' })}
-                                                                                        className="w-full mt-2 py-2.5 px-4 rounded-xl bg-[#0b1354] text-white text-xs font-bold hover:bg-[#151848] shadow-sm transition active:scale-[0.98]"
-                                                                                    >
-                                                                                        Check-Out Now &rarr;
-                                                                                    </button>
-                                                                                ) : (
-                                                                                    <div className="flex items-center gap-1.5 text-xs font-medium text-gray-400 py-2">
-                                                                                        <Lock className="h-3.5 w-3.5" />
-                                                                                        <span>{outState === 'upcoming' ? 'Window Not Open Yet' : 'Window Closed'}</span>
-                                                                                    </div>
-                                                                                )}
-                                                                            </div>
-                                                                        )}
+                                                                            );
+                                                                        })}
                                                                     </div>
                                                                 </div>
                                                             );
@@ -434,48 +563,119 @@ export default function Dashboard({
                                                 ))}
                                             </div>
                                         )}
-                                    </div>
+                                    </article>
                                 ))}
                             </div>
                         )}
-                    </div>
 
-                    {/* RIGHT COLUMN: SIDEBAR */}
-                    <div className="space-y-6">
+                        {/* RECENT ATTENDANCE LOGS (Moved to Left Column for balanced Bento height) */}
+                        <section
+                            aria-label="Recent Attendance History"
+                            className="bg-white p-4 sm:p-5 rounded-2xl shadow-xs border border-gray-200/80 space-y-3"
+                        >
+                            <div className="flex items-center justify-between border-b border-gray-100 pb-2.5">
+                                <h3 className="font-black text-[#1B1F5C] text-sm flex items-center gap-1.5">
+                                    <History className="h-4 w-4 text-[#F5A623]" aria-hidden="true" />
+                                    <span>Recent Biometric Logs</span>
+                                </h3>
+                                <Link
+                                    href="/attendance/history"
+                                    className="text-xs font-bold text-[#1B1F5C] hover:underline flex items-center gap-0.5 focus-visible:ring-2 focus-visible:ring-[#F5A623] rounded-xs"
+                                >
+                                    <span>Full History</span>
+                                    <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+                                </Link>
+                            </div>
 
-                        {/* INTERACTIVE CALENDAR */}
-                        <div className="bg-white p-6 rounded-3xl shadow-xs border border-gray-100 space-y-4">
+                            {recentAttendances.length > 0 ? (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                    {recentAttendances.map((log) => {
+                                        const logDate = new Date(log.logged_at || log.attendance_time);
+                                        const checkpointLabel = log.checkpoint_key
+                                            ? CHECKPOINT_LABELS[log.checkpoint_key]
+                                            : log.type === 'out'
+                                              ? 'Time-Out'
+                                              : 'Time-In';
+
+                                        return (
+                                            <div
+                                                key={log.attendance_id}
+                                                className="flex items-center justify-between p-2.5 rounded-xl bg-gray-50/80 border border-gray-200/70 text-xs"
+                                            >
+                                                <div className="min-w-0 pr-2">
+                                                    <p className="font-extrabold text-gray-900 truncate">
+                                                        {log.event?.title || 'Academic Event'}
+                                                    </p>
+                                                    <p className="text-[11px] text-gray-500 mt-0.5">
+                                                        <span className="font-bold text-[#1B1F5C]">{checkpointLabel}</span> •{' '}
+                                                        {logDate.toLocaleDateString()} {logDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                    </p>
+                                                </div>
+                                                <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5 text-[10px] font-extrabold text-emerald-700 border border-emerald-200 shrink-0">
+                                                    {log.status || 'Present'}
+                                                </span>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <p className="text-xs text-gray-400 text-center py-4 font-medium">
+                                    No biometric attendance logs recorded yet.
+                                </p>
+                            )}
+                        </section>
+                    </main>
+
+                    {/* RIGHT SECONDARY COLUMN (4 Cols): COMPACT CALENDAR & UPCOMING */}
+                    <aside className="lg:col-span-4 space-y-4">
+                        {/* COMPACT CALENDAR */}
+                        <section
+                            aria-label="Event Calendar"
+                            className="bg-white p-4 rounded-2xl shadow-xs border border-gray-200/80 space-y-3"
+                        >
                             <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                    <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">
-                                        <CalendarIcon className="h-5 w-5 text-[#0b1354]" /> Calendar
+                                <div className="flex items-center gap-1.5">
+                                    <h3 className="font-black text-[#1B1F5C] text-sm flex items-center gap-1.5">
+                                        <CalendarIcon className="h-4 w-4 text-[#F5A623]" aria-hidden="true" />
+                                        <span>Calendar</span>
                                     </h3>
                                     {selectedDateStr !== today && (
                                         <button
                                             onClick={handleJumpToToday}
-                                            className="text-[10px] font-bold text-[#0b1354] bg-indigo-50 px-2 py-0.5 rounded-lg hover:bg-indigo-100 transition flex items-center gap-1"
-                                            title="Jump to Today"
+                                            className="text-[10px] font-bold text-[#1B1F5C] bg-indigo-50 px-2 py-0.5 rounded-md hover:bg-indigo-100 transition-colors flex items-center gap-0.5 focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                            title="Jump back to today"
                                         >
-                                            <RotateCcw className="h-2.5 w-2.5" /> Today
+                                            <RotateCcw className="h-2.5 w-2.5" aria-hidden="true" /> Today
                                         </button>
                                     )}
                                 </div>
-                                <div className="flex items-center gap-1">
-                                    <button onClick={handlePrevMonth} className="p-1.5 rounded-xl hover:bg-gray-100 text-gray-600 transition" title="Previous Month">
-                                        <ChevronLeft className="h-4 w-4" />
+                                <div className="flex items-center gap-0.5">
+                                    <button
+                                        onClick={handlePrevMonth}
+                                        aria-label="Previous Month"
+                                        className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-600 transition-colors focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                    >
+                                        <ChevronLeft className="h-3.5 w-3.5" />
                                     </button>
-                                    <span className="text-xs font-bold text-gray-800 min-w-[90px] text-center">
+                                    <span className="text-xs font-extrabold text-gray-800 min-w-[85px] text-center">
                                         {monthName} {year}
                                     </span>
-                                    <button onClick={handleNextMonth} className="p-1.5 rounded-xl hover:bg-gray-100 text-gray-600 transition" title="Next Month">
-                                        <ChevronRight className="h-4 w-4" />
+                                    <button
+                                        onClick={handleNextMonth}
+                                        aria-label="Next Month"
+                                        className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-600 transition-colors focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                    >
+                                        <ChevronRight className="h-3.5 w-3.5" />
                                     </button>
                                 </div>
                             </div>
 
+                            {/* COMPACT DAYS GRID */}
                             <div className="grid grid-cols-7 gap-1 text-center">
-                                {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => (
-                                    <span key={d} className="text-[11px] font-bold uppercase text-gray-400 py-1">{d}</span>
+                                {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((d, i) => (
+                                    <span key={i} className="text-[10px] font-extrabold text-gray-400 py-0.5">
+                                        {d}
+                                    </span>
                                 ))}
                                 {Array.from({ length: startingDay }).map((_, index) => (
                                     <div key={`empty-${index}`} />
@@ -494,166 +694,105 @@ export default function Dashboard({
                                         <button
                                             key={dayNum}
                                             onClick={() => setSelectedDateStr(dateString)}
-                                            className={`relative h-9 w-9 mx-auto rounded-xl flex flex-col items-center justify-center text-xs font-bold transition ${
-                                                isSelected ? 'bg-[#0b1354] text-white shadow-sm' : isToday ? 'bg-amber-400 text-gray-900 font-black' : 'text-gray-700 hover:bg-gray-100'
+                                            className={`relative h-7 w-7 mx-auto rounded-lg flex flex-col items-center justify-center text-[11px] font-bold transition-all focus-visible:ring-2 focus-visible:ring-[#F5A623] ${
+                                                isSelected
+                                                    ? 'bg-[#1B1F5C] text-white shadow-2xs'
+                                                    : isToday
+                                                      ? 'bg-[#F5A623] text-[#1B1F5C] font-black'
+                                                      : 'text-gray-700 hover:bg-gray-100'
                                             }`}
                                         >
                                             <span>{dayNum}</span>
-                                            {hasEvent && <span className={`absolute bottom-1 h-1 w-1 rounded-full ${isSelected ? 'bg-amber-300' : 'bg-amber-500'}`} />}
+                                            {hasEvent && (
+                                                <span
+                                                    className={`absolute bottom-0.5 h-1 w-1 rounded-full ${
+                                                        isSelected ? 'bg-[#F5A623]' : 'bg-[#1B1F5C]'
+                                                    }`}
+                                                />
+                                            )}
                                         </button>
                                     );
                                 })}
                             </div>
 
-                            <div className="pt-3 border-t border-gray-100 space-y-2">
-                                <div className="flex items-center justify-between text-xs gap-2">
-                                    <span className="text-gray-500 font-semibold truncate">{formatLongDate(selectedDateStr)}</span>
-                                    <span className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${selectedDateEntries.length > 0 ? 'bg-indigo-50 text-[#0b1354]' : 'bg-gray-100 text-gray-500'}`}>
-                                        {selectedDateEntries.length} found
+                            {/* SELECTED DATE SUMMARY */}
+                            <div className="pt-2.5 border-t border-gray-100 space-y-2" aria-live="polite">
+                                <div className="flex items-center justify-between text-[11px] gap-2">
+                                    <span className="text-gray-600 font-bold truncate">
+                                        {formatLongDate(selectedDateStr)}
+                                    </span>
+                                    <span className="px-2 py-0.5 rounded-md font-extrabold text-[10px] bg-indigo-50 text-[#1B1F5C]">
+                                        {selectedDateEntries.length} Event{selectedDateEntries.length === 1 ? '' : 's'}
                                     </span>
                                 </div>
 
                                 {selectedDateEntries.length > 0 ? (
-                                    <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                                        {selectedDateEntries.map(({ event, schedule }) => {
-                                            const isPast = schedule.date < today;
-                                            const isTodayDate = schedule.date === today;
-
-                                            const badgeConfig = isPast 
-                                                ? { text: 'Completed', bg: 'bg-gray-100 text-gray-600 border-gray-200' }
-                                                : isTodayDate 
-                                                ? { text: 'Ongoing Today', bg: 'bg-emerald-100 text-emerald-800 border-emerald-200 animate-pulse' }
-                                                : { text: 'Upcoming', bg: 'bg-amber-100 text-amber-800 border-amber-200' };
-
-                                            return (
-                                                <div key={event.event_id} className={`p-3 rounded-2xl bg-indigo-50/50 border border-indigo-100 text-xs space-y-2 ${isPast ? 'opacity-80' : ''}`}>
-                                                    <div className="flex items-start justify-between gap-2">
-                                                        <div>
-                                                            <p className="font-bold text-[#0b1354]">{event.title}</p>
-                                                            <p className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
-                                                                <MapPin className="h-3 w-3 text-amber-500" /> {event.location || 'Location TBA'}
-                                                            </p>
-                                                        </div>
-                                                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border shrink-0 ${badgeConfig.bg}`}>
-                                                            {badgeConfig.text}
-                                                        </span>
-                                                    </div>
-
-                                                    {schedule.slots?.length > 0 && (
-                                                        <div className="pt-2 border-t border-indigo-100/60 space-y-1">
-                                                            {schedule.slots.map((slot, sIdx) => {
-                                                                const inLogged = hasCheckedInSlot(event.event_id, sIdx, schedule.date, 'in');
-                                                                const outLogged = hasCheckedInSlot(event.event_id, sIdx, schedule.date, 'out');
-                                                                return (
-                                                                    <div key={sIdx} className="flex items-center justify-between text-[11px] text-gray-600 bg-white/90 px-2.5 py-1.5 rounded-xl border border-indigo-100/50">
-                                                                        <div className="flex items-center gap-2">
-                                                                            <span className="font-bold text-gray-500 uppercase text-[9px]">Slot {sIdx + 1}</span>
-                                                                            {(inLogged || outLogged) && (
-                                                                                <span className="text-[9px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.2 rounded">
-                                                                                    {inLogged && outLogged ? 'Logged (In/Out)' : inLogged ? 'Checked In' : 'Checked Out'}
-                                                                                </span>
-                                                                            )}
-                                                                        </div>
-                                                                        <span>{slot.time_in_start ? formatTime(slot.time_in_start) : '—'} &rarr; {slot.time_out_start ? formatTime(slot.time_out_start) : '—'}</span>
-                                                                    </div>
-                                                                );
-                                                            })}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            );
-                                        })}
+                                    <div className="space-y-1.5 max-h-48 overflow-y-auto pr-0.5">
+                                        {selectedDateEntries.map(({ event }) => (
+                                            <div
+                                                key={event.event_id}
+                                                className="p-2.5 rounded-xl bg-indigo-50/50 border border-indigo-100 text-xs space-y-0.5"
+                                            >
+                                                <p className="font-extrabold text-[#1B1F5C] truncate">{event.title}</p>
+                                                <p className="text-[11px] text-gray-500 flex items-center gap-1">
+                                                    <MapPin className="h-3 w-3 text-[#F5A623]" /> {event.location || 'Location TBA'}
+                                                </p>
+                                            </div>
+                                        ))}
                                     </div>
                                 ) : (
-                                    <div className="py-4 text-center space-y-1">
-                                        <p className="text-xs text-gray-400 italic">No events scheduled for this date.</p>
-                                        {selectedDateStr !== today && (
-                                            <button
-                                                onClick={handleJumpToToday}
-                                                className="text-[11px] font-bold text-[#0b1354] hover:underline block mx-auto pt-1"
-                                            >
-                                                &larr; Jump back to Today
-                                            </button>
-                                        )}
-                                    </div>
+                                    <p className="text-xs text-gray-400 italic text-center py-2">No events scheduled.</p>
                                 )}
                             </div>
-                        </div>
+                        </section>
 
-                        {/* COMING UP */}
-                        <div className="bg-white p-6 rounded-3xl shadow-xs border border-gray-100 space-y-4">
+                        {/* UPCOMING EVENTS */}
+                        <section
+                            aria-label="Upcoming Events"
+                            className="bg-white p-4 rounded-2xl shadow-xs border border-gray-200/80 space-y-3"
+                        >
                             <div className="flex items-center justify-between">
-                                <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">
-                                    <Sparkles className="h-5 w-5 text-amber-500" /> Coming Up
+                                <h3 className="font-black text-[#1B1F5C] text-sm flex items-center gap-1.5">
+                                    <Sparkles className="h-4 w-4 text-[#F5A623]" aria-hidden="true" />
+                                    <span>Coming Up</span>
                                 </h3>
-                                <Link href="/events" className="text-xs font-bold text-[#0b1354] hover:underline flex items-center gap-0.5">
-                                    View all <ArrowUpRight className="h-3.5 w-3.5" />
+                                <Link
+                                    href="/events"
+                                    className="text-xs font-bold text-[#1B1F5C] hover:underline flex items-center gap-0.5 focus-visible:ring-2 focus-visible:ring-[#F5A623] rounded-xs"
+                                >
+                                    <span>View all</span>
+                                    <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
                                 </Link>
                             </div>
 
                             {filteredUpcomingEvents.length > 0 ? (
-                                <div className="space-y-3">
+                                <div className="space-y-2">
                                     {filteredUpcomingEvents.slice(0, 3).map((evt) => (
                                         <button
                                             key={evt.event_id}
                                             type="button"
                                             onClick={() => jumpToDate(evt.next_date)}
-                                            className="w-full text-left flex items-start gap-3 p-3 rounded-2xl bg-gray-50 border border-gray-100 hover:bg-amber-50/50 transition"
+                                            className="w-full text-left flex items-center gap-2.5 p-2.5 rounded-xl bg-gray-50/80 border border-gray-200/70 hover:bg-amber-50/50 hover:border-amber-200 transition-all focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                         >
-                                            <div className="h-9 w-9 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0 font-bold text-xs">
+                                            <div className="h-8 w-8 rounded-lg bg-amber-50 text-[#1B1F5C] flex items-center justify-center shrink-0 font-black text-xs border border-amber-200/70">
                                                 {evt.next_date.split('-')[2]}
                                             </div>
                                             <div className="min-w-0 flex-1">
-                                                <p className="text-xs font-bold text-gray-900 truncate">{evt.title}</p>
-                                                <p className="text-[11px] text-gray-400 mt-0.5 truncate">
+                                                <p className="text-xs font-extrabold text-gray-900 truncate">{evt.title}</p>
+                                                <p className="text-[11px] text-gray-500 truncate">
                                                     {formatDateRange(evt.start_date, evt.end_date)}
-                                                    {evt.location ? ` \u2022 ${evt.location}` : ''}
                                                 </p>
                                             </div>
                                         </button>
                                     ))}
                                 </div>
                             ) : (
-                                <p className="text-xs text-gray-400 text-center py-6">No further upcoming events scheduled.</p>
+                                <p className="text-xs text-gray-400 text-center py-3 font-medium">
+                                    No further upcoming events.
+                                </p>
                             )}
-                        </div>
-
-                        {/* ATTENDANCE HISTORY */}
-                        <div className="bg-white p-6 rounded-3xl shadow-xs border border-gray-100 space-y-4">
-                            <div className="flex items-center justify-between">
-                                <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">
-                                    <History className="h-5 w-5 text-[#0b1354]" /> Attendance History
-                                </h3>
-                                <Link href="/attendance/history" className="text-xs font-bold text-[#0b1354] hover:underline flex items-center gap-0.5">
-                                    View all <ChevronRight className="h-3.5 w-3.5" />
-                                </Link>
-                            </div>
-
-                            {recentAttendances.length > 0 ? (
-                                <div className="space-y-3">
-                                    {recentAttendances.map((log) => {
-                                        const logDate = new Date(log.logged_at || log.attendance_time);
-                                        return (
-                                            <div key={log.attendance_id} className="flex items-center justify-between p-3 rounded-2xl bg-gray-50 border border-gray-100">
-                                                <div className="min-w-0 pr-2">
-                                                    <p className="text-xs font-bold text-gray-900 truncate">{log.event?.title || 'Event'}</p>
-                                                    <p className="text-[11px] text-gray-400 mt-0.5">
-                                                        {logDate.toLocaleDateString()} &bull; {logDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                                    </p>
-                                                </div>
-                                                <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700 border border-emerald-200">
-                                                    {log.status || 'Present'}
-                                                </span>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            ) : (
-                                <p className="text-xs text-gray-400 text-center py-6">No attendance records found yet.</p>
-                            )}
-                        </div>
-
-                    </div>
+                        </section>
+                    </aside>
                 </div>
             </div>
 
@@ -661,30 +800,14 @@ export default function Dashboard({
             {selectedSlotEvent && (
                 <CheckInModal
                     event={selectedSlotEvent.event as any}
-                    slot={selectedSlotEvent.slot}
+                    slot={selectedSlotEvent.slot as any}
                     slotIndex={selectedSlotEvent.slotIndex}
                     dateStr={selectedSlotEvent.dateStr}
                     type={selectedSlotEvent.type}
+                    checkpointKey={selectedSlotEvent.checkpointKey}
                     onClose={() => setSelectedSlotEvent(null)}
                 />
             )}
-        </>
-    );
-}
-
-function StatCard({ icon, label, value, caption }: { icon: React.ReactNode; label: string; value: string; caption: string }) {
-    return (
-        <div className="rounded-3xl bg-white p-6 shadow-xs border border-gray-100 flex flex-col justify-between">
-            <div className="flex items-center justify-between">
-                <span className="text-xs font-bold uppercase tracking-wider text-gray-400">{label}</span>
-                <div className="h-10 w-10 rounded-2xl bg-indigo-50 flex items-center justify-center">
-                    {icon}
-                </div>
-            </div>
-            <div className="mt-4">
-                <p className="text-3xl font-black text-gray-900 tracking-tight">{value}</p>
-                <p className="text-xs text-gray-400 mt-1">{caption}</p>
-            </div>
         </div>
     );
 }

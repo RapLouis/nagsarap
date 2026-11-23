@@ -5,17 +5,10 @@ namespace App\Services;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 
-/**
- * Issues one-time server-controlled liveness challenges.
- *
- * The direction returned to the mobile app is the same direction consumed by
- * the final verification request. A challenge is single-use and bound to the
- * student, client session id, scope, and optional context (event id).
- */
 class FaceChallengeService
 {
     /**
-     * @return array{nonce: string, direction: string, expires_at: int}
+     * @return array{nonce: string, direction: string, flash_colors: string[], expires_at: int}
      */
     public function issue(
         int $studentId,
@@ -23,20 +16,24 @@ class FaceChallengeService
         string $scope = 'registration',
         ?int $contextId = null,
     ): array {
-        $ttl = (int) config('face_verification.challenge_ttl');
+        $ttl = (int) config('face_verification.challenge_ttl', 120);
+
+        $colors = ['red', 'green', 'blue'];
+        shuffle($colors);
 
         $challenge = [
-            'nonce' => Str::random(40),
-            'direction' => random_int(0, 1) === 0 ? 'left' : 'right',
-            'expires_at' => now()->addSeconds($ttl)->timestamp,
+            'nonce'        => Str::random(40),
+            'direction'    => random_int(0, 1) === 0 ? 'left' : 'right',
+            'flash_colors' => $colors,
+            'expires_at'   => now()->addSeconds($ttl)->timestamp,
         ];
 
         Cache::put(
             $this->key($studentId, $scope, $contextId),
             $challenge + [
                 'session_hash' => hash('sha256', $sessionId),
-                'scope' => $scope,
-                'context_id' => $contextId,
+                'scope'        => $scope,
+                'context_id'   => $contextId,
             ],
             $ttl + 30,
         );
@@ -45,7 +42,7 @@ class FaceChallengeService
     }
 
     /**
-     * @return array{valid: bool, reason: ?string, direction: ?string}
+     * @return array{valid: bool, reason: ?string, direction: ?string, flash_colors: ?string[]}
      */
     public function consume(
         int $studentId,
@@ -70,15 +67,16 @@ class FaceChallengeService
         }
 
         return [
-            'valid' => true,
-            'reason' => null,
-            'direction' => $stored['direction'],
+            'valid'        => true,
+            'reason'       => null,
+            'direction'    => $stored['direction'] ?? 'left',
+            'flash_colors' => $stored['flash_colors'] ?? ['red', 'green', 'blue'],
         ];
     }
 
     private function invalid(string $reason): array
     {
-        return ['valid' => false, 'reason' => $reason, 'direction' => null];
+        return ['valid' => false, 'reason' => $reason, 'direction' => null, 'flash_colors' => null];
     }
 
     private function key(int $studentId, string $scope, ?int $contextId): string

@@ -1,8 +1,15 @@
 <?php
 
-use Illuminate\Foundation\Inspiring;
-use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Schedule;
+use Illuminate\Support\Facades\Storage;
 
-Artisan::command('inspire', function () {
-    $this->comment(Inspiring::quote());
-})->purpose('Display an inspiring quote');
+Schedule::call(function () {
+    $disk = Storage::disk('private');
+    $cutoff = now()->subDays((int) config('face_verification.frame_retention_days', 7))->timestamp;
+
+    foreach ($disk->allFiles('face-attempts') as $file) {
+        if ($disk->lastModified($file) < $cutoff) {
+            $disk->delete($file);
+        }
+    }
+})->daily()->name('purge-face-attempt-frames');

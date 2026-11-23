@@ -1,21 +1,23 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Head, Link } from '@inertiajs/react';
 import AdminLayout from '@/layouts/admin-layout';
-import { 
-    Users, 
-    Filter, 
-    Calendar, 
-    CheckCircle2, 
-    Clock, 
-    FileCheck, 
-    Plus, 
+import {
+    Filter,
+    Calendar,
+    CheckCircle2,
+    Clock,
+    FileCheck,
+    Plus,
     ArrowUpRight,
     TrendingUp,
     ShieldAlert,
     Activity,
     Check,
     Radio,
-    ShieldCheck
+    ShieldCheck,
+    CalendarX,
+    RotateCcw,
+    WifiOff,
 } from 'lucide-react';
 
 type SectionCounts = Record<string, number>;
@@ -62,34 +64,51 @@ type Props = {
 
 const ALL = 'all';
 
-export default function AdminDashboard({ 
-    totalStudents = 0, 
+export default function AdminDashboard({
+    totalStudents = 0,
     degrees = {},
     activeEventsCount = 0,
     todayAttendanceRate = 0,
     pendingClearancesCount = 0,
     ongoingEvents = [],
     recentActivities = [],
-    pendingClearancesList = []
+    pendingClearancesList = [],
 }: Props) {
     const [selectedDegree, setSelectedDegree] = useState<string>(ALL);
     const [selectedSection, setSelectedSection] = useState<string>(ALL);
+    const [isOnline, setIsOnline] = useState<boolean>(
+        typeof navigator !== 'undefined' ? navigator.onLine : true
+    );
+
+    useEffect(() => {
+        const handleOnline = () => setIsOnline(true);
+        const handleOffline = () => setIsOnline(false);
+
+        window.addEventListener('online', handleOnline);
+        window.addEventListener('offline', handleOffline);
+
+        return () => {
+            window.removeEventListener('online', handleOnline);
+            window.removeEventListener('offline', handleOffline);
+        };
+    }, []);
 
     const availableDegrees = useMemo(() => Object.keys(degrees).sort(), [degrees]);
 
     const availableSections = useMemo(() => {
         const sections = new Set<string>();
-        const degreeSource = selectedDegree === ALL
-            ? Object.values(degrees)
-            : degrees[selectedDegree]
-                ? [degrees[selectedDegree]]
-                : [];
+        const degreeSource =
+            selectedDegree === ALL
+                ? Object.values(degrees)
+                : degrees[selectedDegree]
+                  ? [degrees[selectedDegree]]
+                  : [];
 
         degreeSource.forEach((deg) => {
             Object.keys(deg.sections).forEach((sec) => sections.add(sec));
         });
 
-        return Array.from(sections).sort((a, b) => 
+        return Array.from(sections).sort((a, b) =>
             a.localeCompare(b, undefined, { numeric: true })
         );
     }, [degrees, selectedDegree]);
@@ -97,11 +116,12 @@ export default function AdminDashboard({
     const filteredCount = useMemo(() => {
         if (selectedDegree === ALL && selectedSection === ALL) return totalStudents;
 
-        const degreeGroups = selectedDegree === ALL
-            ? Object.values(degrees)
-            : degrees[selectedDegree]
-                ? [degrees[selectedDegree]]
-                : [];
+        const degreeGroups =
+            selectedDegree === ALL
+                ? Object.values(degrees)
+                : degrees[selectedDegree]
+                  ? [degrees[selectedDegree]]
+                  : [];
 
         if (selectedSection === ALL) {
             return degreeGroups.reduce((sum, deg) => sum + deg.total, 0);
@@ -115,312 +135,522 @@ export default function AdminDashboard({
         return sum;
     }, [degrees, totalStudents, selectedDegree, selectedSection]);
 
+    const isFiltered = selectedDegree !== ALL || selectedSection !== ALL;
+
     const handleDegreeChange = (value: string) => {
         setSelectedDegree(value);
         setSelectedSection(ALL);
     };
 
+    const handleResetFilters = () => {
+        setSelectedDegree(ALL);
+        setSelectedSection(ALL);
+    };
+
     return (
         <>
-            <Head title="Executive Command Dashboard" />
+            <Head title="Executive Command Dashboard | 4ttnd Attendance System" />
 
-            <div className="space-y-6 p-6 lg:p-8 bg-gray-50/50 min-h-screen">
-                
-                {/* EXECUTIVE HEADER & QUICK ACTIONS */}
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between bg-white p-6 rounded-3xl border border-gray-100 shadow-xs">
-                    <div>
+            <div className="min-h-screen space-y-4 bg-[#F5F6FA] p-3 font-sans text-gray-900 antialiased sm:p-5">
+                {/* OFFLINE CONNECTIVITY NOTICE */}
+                {!isOnline && (
+                    <div
+                        role="alert"
+                        className="flex items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-xs font-semibold text-amber-900"
+                    >
                         <div className="flex items-center gap-2">
-                            <span className="rounded-full bg-indigo-50 border border-indigo-100 px-3 py-0.5 text-xs font-semibold text-[#1B1F5C] flex items-center gap-1">
-                                <Activity className="h-3 w-3 text-indigo-600 animate-pulse" /> CCIS Executive Command
+                            <WifiOff className="h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
+                            <span>
+                                Connection offline — displaying last synced data snapshot. Live updates will resume automatically when reconnected.
                             </span>
                         </div>
-                        <h1 className="text-2xl font-black tracking-tight text-[#1B1F5C] mt-1">Dashboard Overview</h1>
-                        <p className="text-xs text-gray-500">
-                            Real-time institutional metrics, telemetry, and operational exception management.
+                    </div>
+                )}
+
+                {/* EXECUTIVE HEADER & PRIMARY CTA */}
+                <header className="flex flex-col gap-3 rounded-2xl border border-gray-200/80 bg-white p-4 shadow-xs sm:flex-row sm:items-center sm:justify-between sm:p-5">
+                    <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                            <span className="inline-flex items-center gap-1.5 rounded-full border border-[#1B1F5C]/15 bg-[#1B1F5C]/5 px-2.5 py-0.5 text-[11px] font-bold text-[#1B1F5C]">
+                                <Activity
+                                    className="h-3 w-3 animate-pulse text-[#F5A623] motion-reduce:animate-none"
+                                    aria-hidden="true"
+                                />
+                                CCIS Executive Command
+                            </span>
+                        </div>
+                        <h1 className="text-xl font-black tracking-tight text-[#1B1F5C] sm:text-2xl">
+                            Executive Dashboard
+                        </h1>
+                        <p className="text-xs font-medium text-gray-600">
+                            Real-time institutional metrics, live data, and sanction management.
                         </p>
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex shrink-0 items-center gap-2.5">
                         <Link
                             href="/admin/events"
-                            className="inline-flex items-center gap-2 rounded-2xl bg-[#1B1F5C] px-5 py-3 text-xs font-bold text-white shadow-md transition hover:bg-[#151848] active:scale-[0.98]"
+                            className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl bg-[#1B1F5C] px-4 py-2.5 text-xs font-bold text-white shadow-xs transition-colors hover:bg-[#131644] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] active:scale-[0.99] motion-reduce:transform-none"
                         >
-                            <Plus className="h-4 w-4" />
+                            <Plus className="h-4 w-4 text-[#F5A623]" aria-hidden="true" />
                             <span>Create Event Session</span>
                         </Link>
                     </div>
-                </div>
+                </header>
 
                 {/* TIER 1: EXECUTIVE KPI RIBBON */}
-                <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-4">
-                    
+                <section
+                    aria-label="Executive Key Performance Indicators"
+                    className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4"
+                >
                     {/* KPI 1: Attendance Rate */}
-                    <div className="flex flex-col justify-between rounded-3xl border border-gray-100 bg-white p-6 shadow-xs">
-                        <div className="flex items-center justify-between">
-                            <span className="text-xs font-bold uppercase tracking-wider text-gray-400">Today's Attendance</span>
-                            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600">
-                                <TrendingUp className="h-5 w-5" />
+                    <div className="flex flex-col justify-between rounded-2xl border border-gray-200/80 bg-white p-4 shadow-xs">
+                        <div className="flex items-center justify-between gap-2">
+                            <span className="text-[11px] font-extrabold uppercase tracking-wider text-gray-600">
+                                Today&apos;s Attendance
+                            </span>
+                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-emerald-200/70 bg-emerald-50 text-emerald-700">
+                                <TrendingUp className="h-4 w-4" aria-hidden="true" />
                             </div>
                         </div>
-                        <div className="mt-4">
-                            <div className="flex items-baseline gap-2">
-                                <h3 className="text-3xl font-black text-gray-900 tracking-tight">{todayAttendanceRate}%</h3>
-                                <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">Live telemetry</span>
+                        <div className="mt-2.5">
+                            <div className="flex flex-wrap items-baseline gap-2">
+                                <p className="text-2xl font-black tracking-tight text-gray-900">
+                                    {todayAttendanceRate}%
+                                </p>
+                                <span className="rounded-full border border-emerald-200/80 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
+                                    Live Data
+                                </span>
                             </div>
-                            <p className="mt-1 text-xs text-gray-400">Real-time campus check-in velocity</p>
+                            <p className="mt-1 text-[11px] font-medium text-gray-500">
+                                Real-time campus check-in rate
+                            </p>
                         </div>
-                        <Link href="/admin/analysis" className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-xs font-bold text-[#1B1F5C] hover:text-indigo-900">
+                        <Link
+                            href="/admin/analytics"
+                            className="mt-3 flex min-h-[38px] items-center justify-between border-t border-gray-100 pt-2 text-xs font-bold text-[#1B1F5C] hover:underline focus-visible:rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                        >
                             <span>Deep Dive Analytics</span>
-                            <ArrowUpRight className="h-4 w-4" />
+                            <ArrowUpRight className="h-3.5 w-3.5 text-[#F5A623]" aria-hidden="true" />
                         </Link>
                     </div>
 
                     {/* KPI 2: Active / Upcoming Events */}
-                    <div className="flex flex-col justify-between rounded-3xl border border-gray-100 bg-white p-6 shadow-xs">
-                        <div className="flex items-center justify-between">
-                            <span className="text-xs font-bold uppercase tracking-wider text-gray-400">Scheduled Events</span>
-                            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-50 text-amber-600">
-                                <Calendar className="h-5 w-5" />
+                    <div className="flex flex-col justify-between rounded-2xl border border-gray-200/80 bg-white p-4 shadow-xs">
+                        <div className="flex items-center justify-between gap-2">
+                            <span className="text-[11px] font-extrabold uppercase tracking-wider text-gray-600">
+                                Scheduled Events
+                            </span>
+                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-amber-200/70 bg-amber-50 text-amber-800">
+                                <Calendar className="h-4 w-4" aria-hidden="true" />
                             </div>
                         </div>
-                        <div className="mt-4">
-                            <div className="flex items-baseline gap-2">
-                                <h3 className="text-3xl font-black text-gray-900 tracking-tight">{activeEventsCount}</h3>
-                                <span className="text-xs font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">This week</span>
+                        <div className="mt-2.5">
+                            <div className="flex flex-wrap items-baseline gap-2">
+                                <p className="text-2xl font-black tracking-tight text-gray-900">
+                                    {activeEventsCount}
+                                </p>
+                                <span className="rounded-full border border-amber-200/80 bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-800">
+                                    This Week
+                                </span>
                             </div>
-                            <p className="mt-1 text-xs text-gray-400">Active windows & sessions</p>
+                            <p className="mt-1 text-[11px] font-medium text-gray-500">
+                                Active windows &amp; sessions
+                            </p>
                         </div>
-                        <Link href="/admin/events" className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-xs font-bold text-[#1B1F5C] hover:text-indigo-900">
+                        <Link
+                            href="/admin/events"
+                            className="mt-3 flex min-h-[38px] items-center justify-between border-t border-gray-100 pt-2 text-xs font-bold text-[#1B1F5C] hover:underline focus-visible:rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                        >
                             <span>Manage Schedule</span>
-                            <ArrowUpRight className="h-4 w-4" />
+                            <ArrowUpRight className="h-3.5 w-3.5 text-[#F5A623]" aria-hidden="true" />
                         </Link>
                     </div>
 
                     {/* KPI 3: Pending Clearances */}
-                    <div className="flex flex-col justify-between rounded-3xl border border-gray-100 bg-white p-6 shadow-xs">
-                        <div className="flex items-center justify-between">
-                            <span className="text-xs font-bold uppercase tracking-wider text-gray-400">Pending Sanctions</span>
-                            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
-                                <FileCheck className="h-5 w-5" />
+                    <div className="flex flex-col justify-between rounded-2xl border border-gray-200/80 bg-white p-4 shadow-xs">
+                        <div className="flex items-center justify-between gap-2">
+                            <span className="text-[11px] font-extrabold uppercase tracking-wider text-gray-600">
+                                Pending Sanctions
+                            </span>
+                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-[#1B1F5C]/15 bg-[#1B1F5C]/5 text-[#1B1F5C]">
+                                <FileCheck className="h-4 w-4" aria-hidden="true" />
                             </div>
                         </div>
-                        <div className="mt-4">
-                            <div className="flex items-baseline gap-2">
-                                <h3 className="text-3xl font-black text-gray-900 tracking-tight">{pendingClearancesCount}</h3>
-                                {pendingClearancesCount > 0 && (
-                                    <span className="text-xs font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full flex items-center gap-1">
-                                        <ShieldAlert className="h-3 w-3" /> Action required
+                        <div className="mt-2.5">
+                            <div className="flex flex-wrap items-baseline gap-2">
+                                <p className="text-2xl font-black tracking-tight text-gray-900">
+                                    {pendingClearancesCount}
+                                </p>
+                                {pendingClearancesCount > 0 ? (
+                                    <span className="inline-flex items-center gap-1 rounded-full border border-rose-200/80 bg-rose-50 px-2 py-0.5 text-[10px] font-bold text-rose-800">
+                                        <ShieldAlert className="h-3 w-3" aria-hidden="true" />
+                                        Action Required
+                                    </span>
+                                ) : (
+                                    <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-600">
+                                        All Clear
                                     </span>
                                 )}
                             </div>
-                            <p className="mt-1 text-xs text-gray-400">Awaiting executive sign-off</p>
+                            <p className="mt-1 text-[11px] font-medium text-gray-500">
+                                Awaiting executive sign-off
+                            </p>
                         </div>
-                        <Link href="/admin/clearance" className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-xs font-bold text-[#1B1F5C] hover:text-indigo-900">
+                        <Link
+                            href="/admin/sanctions"
+                            className="mt-3 flex min-h-[38px] items-center justify-between border-t border-gray-100 pt-2 text-xs font-bold text-[#1B1F5C] hover:underline focus-visible:rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                        >
                             <span>Review Queue</span>
-                            <ArrowUpRight className="h-4 w-4" />
+                            <ArrowUpRight className="h-3.5 w-3.5 text-[#F5A623]" aria-hidden="true" />
                         </Link>
                     </div>
 
-                    {/* KPI 4: Interactive Student Filter Widget */}
-                    <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-xs flex flex-col justify-between">
+                    {/* KPI 4: Interactive Student Census Filter Widget */}
+                    <div className="flex flex-col justify-between rounded-2xl border border-gray-200/80 bg-white p-4 shadow-xs">
                         <div>
-                            <div className="flex items-center justify-between mb-3">
-                                <span className="text-xs font-bold uppercase tracking-wider text-gray-400">Student Census</span>
-                                <Filter className="h-4 w-4 text-gray-400" />
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                                <span className="text-[11px] font-extrabold uppercase tracking-wider text-gray-600">
+                                    Student Census
+                                </span>
+                                {isFiltered ? (
+                                    <button
+                                        type="button"
+                                        onClick={handleResetFilters}
+                                        className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-bold text-[#1B1F5C] hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                        aria-label="Reset program and section filters"
+                                    >
+                                        <RotateCcw className="h-3 w-3 text-[#F5A623]" aria-hidden="true" />
+                                        <span>Reset</span>
+                                    </button>
+                                ) : (
+                                    <Filter className="h-3.5 w-3.5 text-[#F5A623]" aria-hidden="true" />
+                                )}
                             </div>
                             <div className="grid grid-cols-2 gap-2">
                                 <select
+                                    aria-label="Filter by Program"
                                     value={selectedDegree}
                                     onChange={(e) => handleDegreeChange(e.target.value)}
-                                    className="w-full rounded-xl border border-gray-200 bg-gray-50 py-1.5 px-2 text-xs font-bold text-[#1B1F5C] focus:border-[#1B1F5C] focus:ring-[#1B1F5C]"
+                                    className="min-h-[38px] w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-xs font-bold text-[#1B1F5C] focus-visible:border-[#F5A623] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                 >
                                     <option value={ALL}>All Programs</option>
                                     {availableDegrees.map((deg) => (
-                                        <option key={deg} value={deg}>{deg}</option>
+                                        <option key={deg} value={deg}>
+                                            {deg}
+                                        </option>
                                     ))}
                                 </select>
 
                                 <select
+                                    aria-label="Filter by Section"
                                     value={selectedSection}
                                     onChange={(e) => setSelectedSection(e.target.value)}
-                                    className="w-full rounded-xl border border-gray-200 bg-gray-50 py-1.5 px-2 text-xs font-bold text-[#1B1F5C] focus:border-[#1B1F5C] focus:ring-[#1B1F5C]"
+                                    className="min-h-[38px] w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-xs font-bold text-[#1B1F5C] focus-visible:border-[#F5A623] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                 >
                                     <option value={ALL}>All Sections</option>
                                     {availableSections.map((sec) => (
-                                        <option key={sec} value={sec}>{sec}</option>
+                                        <option key={sec} value={sec}>
+                                            {sec}
+                                        </option>
                                     ))}
                                 </select>
                             </div>
                         </div>
-                        <div className="mt-4 pt-3 border-t border-gray-100 flex items-baseline justify-between">
-                            <span className="text-xs text-gray-400 uppercase tracking-wider font-bold">Filtered Total</span>
-                            <h3 className="text-2xl font-black text-[#1B1F5C]">
+                        <div
+                            className="mt-3 flex min-h-[38px] items-baseline justify-between border-t border-gray-100 pt-2"
+                            aria-live="polite"
+                        >
+                            <span className="text-[11px] font-extrabold uppercase tracking-wider text-gray-500">
+                                {isFiltered ? 'Filtered Total' : 'Total Enrolled'}
+                            </span>
+                            <p className="text-xl font-black text-[#1B1F5C]">
                                 {filteredCount.toLocaleString()}
-                            </h3>
+                            </p>
                         </div>
                     </div>
+                </section>
 
-                </div>
-
-                {/* TIER 2: DUAL-PANEL OPERATIONAL COMMAND */}
-                <div className="grid grid-cols-1 gap-8 lg:grid-cols-3">
-                    
-                    {/* LEFT PANEL: Multi-Stream Live Operations & Biometric Telemetry (Takes 2 columns) */}
-                    <div className="lg:col-span-2 rounded-3xl border border-gray-100 bg-white p-6 lg:p-8 shadow-xs space-y-6">
-                        <div className="flex items-center justify-between pb-4 border-b border-gray-100">
+                {/* TIER 2: BENTO ASYMMETRIC OPERATIONAL WORKSPACE (8 / 4 SPLIT) */}
+                <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
+                    {/* LEFT PANEL (8 Cols): Multi-Stream Live Operations */}
+                    <main
+                        aria-labelledby="live-operations-heading"
+                        className="space-y-3.5 rounded-2xl border border-gray-200/80 bg-white p-4 shadow-xs sm:p-5 lg:col-span-8"
+                    >
+                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 pb-3">
                             <div>
-                                <h2 className="text-lg font-bold text-gray-900">Live Operations</h2>
-                                <p className="text-xs text-gray-500">Real-time monitoring for all active campus sessions today</p>
+                                <h2
+                                    id="live-operations-heading"
+                                    className="text-base font-black text-[#1B1F5C]"
+                                >
+                                    Live Operations
+                                </h2>
+                                <p className="text-xs font-medium text-gray-500">
+                                    Real-time monitoring for active campus sessions today
+                                </p>
                             </div>
-                            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700 border border-emerald-200/50">
-                                <Radio className="h-3.5 w-3.5 text-emerald-600 animate-pulse" />
-                                {ongoingEvents.length} Active Stream{ongoingEvents.length === 1 ? '' : 's'}
-                            </span>
+                            <div className="flex items-center gap-2">
+                                <span
+                                    role="status"
+                                    className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-extrabold text-emerald-800"
+                                >
+                                    <Radio
+                                        className="h-3 w-3 animate-pulse text-emerald-600 motion-reduce:animate-none"
+                                        aria-hidden="true"
+                                    />
+                                    {ongoingEvents.length} Active Stream
+                                    {ongoingEvents.length === 1 ? '' : 's'}
+                                </span>
+                                {ongoingEvents.length > 3 && (
+                                    <Link
+                                        href="/admin/events"
+                                        className="inline-flex min-h-[38px] items-center gap-1 rounded-lg px-2 text-xs font-bold text-[#1B1F5C] hover:bg-gray-100 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                    >
+                                        <span>View All ({ongoingEvents.length})</span>
+                                        <ArrowUpRight
+                                            className="h-3.5 w-3.5 text-[#F5A623]"
+                                            aria-hidden="true"
+                                        />
+                                    </Link>
+                                )}
+                            </div>
                         </div>
 
                         {ongoingEvents.length > 0 ? (
-                            <div className="space-y-4">
-                                {ongoingEvents.map((evt) => (
-                                    <div key={evt.event_id} className="rounded-2xl border border-indigo-100 bg-indigo-50/40 p-5 space-y-4">
-                                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                                            <div>
-                                                <div className="flex items-center gap-2">
-                                                    <span className="text-[10px] font-black tracking-wider uppercase text-indigo-600 bg-indigo-100/70 px-2.5 py-0.5 rounded-full">
+                            <div className="space-y-2.5">
+                                {ongoingEvents.slice(0, 3).map((evt) => (
+                                    <article
+                                        key={evt.event_id}
+                                        className="space-y-2.5 rounded-xl border border-gray-200/80 bg-[#F5F6FA]/70 p-3.5 transition-colors hover:border-[#1B1F5C]/30"
+                                    >
+                                        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+                                            <div className="min-w-0">
+                                                <div className="flex flex-wrap items-center gap-1.5">
+                                                    <span className="rounded-md bg-[#1B1F5C] px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-white">
                                                         Active Session
                                                     </span>
                                                     {evt.is_geofenced && (
-                                                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100/70 px-2 py-0.5 rounded-full flex items-center gap-1">
-                                                            <ShieldCheck className="h-3 w-3" /> Geofence Active ({evt.radius_meters}m)
+                                                        <span className="inline-flex items-center gap-1 rounded-md border border-emerald-200/80 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
+                                                            <ShieldCheck
+                                                                className="h-3 w-3"
+                                                                aria-hidden="true"
+                                                            />
+                                                            Geofence Active
+                                                            {evt.radius_meters != null
+                                                                ? ` (${evt.radius_meters}m)`
+                                                                : ''}
                                                         </span>
                                                     )}
                                                 </div>
-                                                <h3 className="text-base font-black text-[#1B1F5C] mt-2">{evt.title}</h3>
-                                                <p className="text-xs text-gray-500 flex items-center gap-1.5 mt-0.5">
-                                                    <Clock className="h-3.5 w-3.5 text-gray-400" /> Started: {evt.start_time} 
-                                                    <span>&bull;</span> 
-                                                    <span className="font-semibold text-gray-700">{evt.location}</span>
+                                                <h3 className="mt-1.5 truncate text-sm font-black text-[#1B1F5C]">
+                                                    {evt.title}
+                                                </h3>
+                                                <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-gray-600">
+                                                    <Clock
+                                                        className="h-3 w-3 shrink-0 text-gray-400"
+                                                        aria-hidden="true"
+                                                    />
+                                                    <span>Started: {evt.start_time || 'TBA'}</span>
+                                                    <span aria-hidden="true">•</span>
+                                                    <span className="truncate font-semibold text-gray-700">
+                                                        {evt.location || 'Location TBA'}
+                                                    </span>
                                                 </p>
                                             </div>
-                                            <div className="flex items-center gap-3 shrink-0">
-                                                <div className="bg-white px-4 py-2.5 rounded-2xl shadow-2xs border border-indigo-100 text-center">
-                                                    <span className="text-xl font-black text-[#1B1F5C]">
-                                                        {evt.attendances_count ?? 0}
+
+                                            <div className="flex shrink-0 items-center gap-2">
+                                                <div className="min-w-[78px] rounded-xl border border-gray-200/80 bg-white px-3 py-1.5 text-center shadow-2xs">
+                                                    <span className="block text-base font-black leading-tight text-[#1B1F5C]">
+                                                        {(evt.attendances_count ?? 0).toLocaleString()}
                                                     </span>
-                                                    <p className="text-[9px] text-gray-400 uppercase tracking-wider font-bold">Checked In</p>
+                                                    <span className="text-[9px] font-extrabold uppercase tracking-wider text-gray-500">
+                                                        Checked In
+                                                    </span>
                                                 </div>
-                                                <div className="bg-white px-3 py-2.5 rounded-2xl shadow-2xs border border-indigo-100 text-center">
-                                                    <span className="text-sm font-black text-emerald-600">
-                                                        {evt.avg_confidence}%
+                                                <div className="min-w-[78px] rounded-xl border border-gray-200/80 bg-white px-3 py-1.5 text-center shadow-2xs">
+                                                    <span className="block text-base font-black leading-tight text-emerald-700">
+                                                        {evt.avg_confidence ?? 0}%
                                                     </span>
-                                                    <p className="text-[9px] text-gray-400 uppercase tracking-wider font-bold">Confidence</p>
+                                                    <span className="text-[9px] font-extrabold uppercase tracking-wider text-gray-500">
+                                                        Confidence
+                                                    </span>
                                                 </div>
                                             </div>
                                         </div>
 
-                                        <div className="flex items-center justify-between pt-2 border-t border-indigo-100/60 text-xs">
-                                            <span className="text-gray-500 font-medium">Biometric & facial recognition telemetry nominal.</span>
-                                            <Link 
-                                                href={`/admin/events`} 
-                                                className="font-bold text-[#1B1F5C] hover:underline flex items-center gap-1"
+                                        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-gray-200/80 pt-2 text-[11px]">
+                                            <span className="font-medium text-gray-600">
+                                                Biometric &amp; facial recognition data nominal.
+                                            </span>
+                                            <Link
+                                                href="/admin/events"
+                                                aria-label={`Manage windows for ${evt.title}`}
+                                                className="inline-flex items-center gap-1 rounded-xs font-bold text-[#1B1F5C] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                             >
-                                                Manage Windows &rarr;
+                                                <span>Manage Windows</span>
+                                                <ArrowUpRight
+                                                    className="h-3 w-3 text-[#F5A623]"
+                                                    aria-hidden="true"
+                                                />
                                             </Link>
                                         </div>
-                                    </div>
+                                    </article>
                                 ))}
                             </div>
                         ) : (
-                            <div className="py-16 text-center space-y-3">
-                                <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-gray-100 text-gray-400">
-                                    <Calendar className="h-6 w-6" />
+                            <div className="space-y-2.5 py-10 text-center">
+                                <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl border border-[#1B1F5C]/15 bg-[#1B1F5C]/5 text-[#1B1F5C]">
+                                    <CalendarX className="h-5 w-5" aria-hidden="true" />
                                 </div>
-                                <p className="font-bold text-gray-700 text-sm">No active events running right now.</p>
-                                <p className="text-xs text-gray-400">Scheduled events will automatically initialize telemetry when live.</p>
+                                <p className="text-sm font-bold text-gray-900">
+                                    No active events running right now
+                                </p>
+                                <p className="mx-auto max-w-xs text-xs text-gray-500">
+                                    Scheduled events automatically initialize biometric data when their check-in window opens.
+                                </p>
+                                <div className="pt-1">
+                                    <Link
+                                        href="/admin/events"
+                                        className="inline-flex min-h-[38px] items-center justify-center gap-1.5 rounded-xl border border-gray-300 bg-white px-3.5 py-1.5 text-xs font-bold text-[#1B1F5C] transition-colors hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                    >
+                                        <span>View Event Schedule</span>
+                                        <ArrowUpRight className="h-3.5 w-3.5 text-[#F5A623]" aria-hidden="true" />
+                                    </Link>
+                                </div>
                             </div>
                         )}
-                    </div>
+                    </main>
 
-                    {/* RIGHT PANEL: Actionable Clearance Triage Queue */}
-                    <div className="rounded-3xl border border-gray-100 bg-white p-6 lg:p-8 shadow-xs space-y-6">
-                        <div className="flex items-center justify-between pb-4 border-b border-gray-100">
+                    {/* RIGHT PANEL (4 Cols): Actionable Clearance Triage Queue */}
+                    <aside
+                        aria-labelledby="sanctions-queue-heading"
+                        className="space-y-3.5 rounded-2xl border border-gray-200/80 bg-white p-4 shadow-xs sm:p-5 lg:col-span-4"
+                    >
+                        <div className="flex items-center justify-between gap-2 border-b border-gray-100 pb-3">
                             <div>
-                                <h2 className="text-lg font-bold text-gray-900">Sanction Section</h2>
-                                <p className="text-xs text-gray-500">Actionable student requests</p>
+                                <h2
+                                    id="sanctions-queue-heading"
+                                    className="text-base font-black text-[#1B1F5C]"
+                                >
+                                    Sanctions Queue
+                                </h2>
+                                <p className="text-xs font-medium text-gray-500">
+                                    Actionable student clearance requests
+                                </p>
                             </div>
-                            <span className="text-xs font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full">
-                                {pendingClearancesCount} pending
+                            <span
+                                role="status"
+                                className="shrink-0 rounded-full border border-[#1B1F5C]/15 bg-[#1B1F5C]/5 px-2.5 py-1 text-xs font-extrabold text-[#1B1F5C]"
+                            >
+                                {pendingClearancesCount} Pending
                             </span>
                         </div>
 
-                        <div className="space-y-3 max-h-[320px] overflow-y-auto pr-1">
+                        <div className="max-h-[360px] space-y-2.5 overflow-y-auto pr-0.5" aria-live="polite">
                             {pendingClearancesList.length > 0 ? (
                                 pendingClearancesList.slice(0, 4).map((req) => (
-                                    <div key={req.id} className="p-3.5 rounded-2xl bg-gray-50 border border-gray-100 space-y-2">
-                                        <div className="flex items-start justify-between">
-                                            <div>
-                                                <p className="text-xs font-bold text-gray-900">{req.student_name}</p>
-                                                <p className="text-[11px] text-gray-400 font-mono">{req.student_number} &bull; {req.program}</p>
+                                    <div
+                                        key={req.id}
+                                        className="space-y-2 rounded-xl border border-gray-200/80 bg-[#F5F6FA]/70 p-3"
+                                    >
+                                        <div className="flex items-start justify-between gap-2">
+                                            <div className="min-w-0">
+                                                <p className="truncate text-xs font-extrabold text-gray-900">
+                                                    {req.student_name}
+                                                </p>
+                                                <p className="truncate font-mono text-[11px] text-gray-600">
+                                                    {req.student_number} • {req.program}
+                                                </p>
                                             </div>
-                                            <span className="text-[10px] text-gray-400">{req.submitted_at}</span>
+                                            <span className="shrink-0 font-mono text-[10px] text-gray-500">
+                                                {req.submitted_at}
+                                            </span>
                                         </div>
-                                        <div className="flex items-center gap-2 pt-1 border-t border-gray-200/60">
+                                        <div className="border-t border-gray-200/70 pt-2">
                                             <Link
-                                                href={`/admin/clearance/${req.id}`}
-                                                className="flex-1 py-1.5 px-3 rounded-xl bg-[#1B1F5C] text-white text-center text-xs font-bold hover:bg-[#151848] transition"
+                                                href="/admin/sanctions"
+                                                aria-label={`Review clearance request for ${req.student_name}`}
+                                                className="inline-flex min-h-[38px] w-full items-center justify-center rounded-lg bg-[#1B1F5C] px-3 py-1.5 text-xs font-bold text-white transition-colors hover:bg-[#131644] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                             >
-                                                Review
+                                                Review Request
                                             </Link>
                                         </div>
                                     </div>
                                 ))
                             ) : (
-                                <div className="py-12 text-center text-gray-400 text-xs space-y-1">
-                                    <CheckCircle2 className="h-8 w-8 mx-auto text-emerald-400" />
-                                    <p className="font-bold text-gray-700 mt-2">All Sanctions Processed</p>
-                                    <p className="text-gray-400 text-[11px]">No pending requests require your attention right now.</p>
+                                <div className="space-y-1.5 py-10 text-center text-xs text-gray-500">
+                                    <CheckCircle2
+                                        className="mx-auto h-7 w-7 text-emerald-600"
+                                        aria-hidden="true"
+                                    />
+                                    <p className="font-bold text-gray-900">All Sanctions Processed</p>
+                                    <p className="text-[11px] text-gray-500">
+                                        No pending clearance requests require attention.
+                                    </p>
                                 </div>
                             )}
                         </div>
-                        <Link href="/admin/clearance" className="block text-center text-xs font-bold text-[#1B1F5C] hover:underline pt-2">
-                            View All Sanctions Records &rarr;
-                        </Link>
-                    </div>
 
+                        <Link
+                            href="/admin/sanctions"
+                            className="flex min-h-[38px] items-center justify-center gap-1 rounded-lg border-t border-gray-100 pt-2 text-xs font-bold text-[#1B1F5C] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                        >
+                            <span>View All Sanctions Records</span>
+                            <ArrowUpRight className="h-3.5 w-3.5 text-[#F5A623]" aria-hidden="true" />
+                        </Link>
+                    </aside>
                 </div>
 
                 {/* TIER 3: AUDIT STREAM & SYSTEM ACTIVITY FOOTER */}
-                <div className="rounded-3xl border border-gray-100 bg-white p-6 lg:p-8 shadow-xs space-y-4">
-                    <div className="flex items-center justify-between pb-4 border-b border-gray-100">
+                <section
+                    aria-labelledby="audit-stream-heading"
+                    className="space-y-3 rounded-2xl border border-gray-200/80 bg-white p-4 shadow-xs sm:p-5"
+                >
+                    <div className="flex items-center justify-between gap-2 border-b border-gray-100 pb-2.5">
                         <div className="flex items-center gap-2">
-                            <Activity className="h-5 w-5 text-[#1B1F5C]" />
-                            <h2 className="text-lg font-bold text-gray-900">Security & System Audit Stream</h2>
+                            <Activity className="h-4 w-4 text-[#F5A623]" aria-hidden="true" />
+                            <h2
+                                id="audit-stream-heading"
+                                className="text-sm font-black text-[#1B1F5C] sm:text-base"
+                            >
+                                Security &amp; System Audit Stream
+                            </h2>
                         </div>
-                        <span className="text-xs text-gray-400">Real-time log trail</span>
+                        <span className="text-xs font-medium text-gray-500">Real-time log trail</span>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
-                        {recentActivities.length > 0 ? (
-                            recentActivities.map((act, i) => (
-                                <div key={i} className="flex items-start gap-3 p-3.5 rounded-2xl bg-gray-50 border border-gray-100">
-                                    <div className="h-8 w-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 mt-0.5">
-                                        <Check className="h-4 w-4" />
+                    {recentActivities.length > 0 ? (
+                        <ul className="grid grid-cols-1 gap-2.5 pt-0.5 md:grid-cols-2 lg:grid-cols-3">
+                            {recentActivities.slice(0, 6).map((act, i) => (
+                                <li
+                                    key={`${act.time}-${i}`}
+                                    className="flex items-start gap-2.5 rounded-xl border border-gray-200/80 bg-[#F5F6FA]/70 p-2.5"
+                                >
+                                    <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border border-emerald-200/80 bg-emerald-50 text-emerald-700">
+                                        <Check className="h-3.5 w-3.5" aria-hidden="true" />
                                     </div>
                                     <div className="min-w-0 flex-1">
-                                        <p className="text-xs font-bold text-gray-900">{act.text}</p>
-                                        <span className="text-[11px] text-gray-400 mt-0.5 block">{act.time}</span>
+                                        <p className="text-xs font-bold leading-tight text-gray-900">
+                                            {act.text}
+                                        </p>
+                                        <span className="mt-0.5 block font-mono text-[10px] text-gray-500">
+                                            {act.time}
+                                        </span>
                                     </div>
-                                </div>
-                            ))
-                        ) : (
-                            <div className="col-span-full py-8 text-center text-gray-400 text-xs">
-                                No recent system activity logged.
-                            </div>
-                        )}
-                    </div>
-                </div>
-
+                                </li>
+                            ))}
+                        </ul>
+                    ) : (
+                        <div className="py-5 text-center text-xs text-gray-500">
+                            No recent system activity logged.
+                        </div>
+                    )}
+                </section>
             </div>
         </>
     );
 }
 
-AdminDashboard.layout = (page: React.ReactNode) => <AdminLayout title="Executive Dashboard">{page}</AdminLayout>;
+AdminDashboard.layout = (page: React.ReactNode) => (
+    <AdminLayout title="Executive Dashboard">{page}</AdminLayout>
+);

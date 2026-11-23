@@ -111,7 +111,7 @@ class EventController extends Controller
             ->distinct()
             ->get();
 
-        // Extract unique course/degree and section combinations from registered students (e.g., "BS in Computer Science - 4 - A")
+        // Extract unique course/degree and section combinations from registered students
         $availableSections = Student::select('degree', 'year_section')
             ->distinct()
             ->whereNotNull('degree')
@@ -138,33 +138,40 @@ class EventController extends Controller
     public function store(Request $request)
     {
         $validated = $request->validate([
-            'title'                    => ['required', 'string', 'max:150'],
-            'description'              => ['nullable', 'string'],
-            'target_scope'             => ['required', Rule::in(['all', 'section'])],
-            'target_sections'          => ['nullable', 'array'],
-            'event_date'               => ['required', 'string'],
-            'event_end_date'           => ['nullable', 'string'],
-            'schedules'                => ['required', 'array', 'min:1'],
-            'schedules.*.date'         => ['required', 'string'],
-            'schedules.*.slots'        => ['required', 'array', 'min:1'],
-            'schedules.*.slots.*.time_in_start'  => ['required'],
-            'schedules.*.slots.*.time_in_end'    => ['nullable'],
-            'schedules.*.slots.*.time_out_start' => ['nullable'],
-            'schedules.*.slots.*.time_out_end'   => ['nullable'],
-            'location'                 => ['nullable', 'string', 'max:100'],
-            'is_geofenced'             => ['boolean'],
-            'geofence_type'            => ['nullable', Rule::in(['radius', 'polygon'])],
-            'latitude'                 => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-90,90'],
-            'longitude'                => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-180,180'],
-            'radius_meters'            => ['nullable', 'integer', 'min:10', 'max:5000'],
-            'geofence_polygon'         => ['nullable', 'required_if:geofence_type,polygon', 'array', 'min:3'],
-            'approval_status'          => ['nullable', Rule::in(['approved', 'pending', 'declined'])],
-            'is_active'                => ['boolean'],
+            'title'                               => ['required', 'string', 'max:150'],
+            'description'                         => ['nullable', 'string'],
+            'target_scope'                        => ['required', Rule::in(['all', 'section'])],
+            'target_sections'                     => ['nullable', 'array'],
+            'event_date'                          => ['required', 'string'],
+            'event_end_date'                      => ['nullable', 'string'],
+            'schedules'                           => ['required', 'array', 'min:1'],
+            'schedules.*.date'                    => ['required', 'string'],
+            'schedules.*.slots'                   => ['required', 'array', 'min:1'],
+            // 4 Checkpoint time inputs per slot
+            'schedules.*.slots.*.morning_time_in_start'   => ['nullable'],
+            'schedules.*.slots.*.morning_time_in_end'     => ['nullable'],
+            'schedules.*.slots.*.morning_time_out_start'  => ['nullable'],
+            'schedules.*.slots.*.morning_time_out_end'    => ['nullable'],
+            'schedules.*.slots.*.afternoon_time_in_start' => ['nullable'],
+            'schedules.*.slots.*.afternoon_time_in_end'   => ['nullable'],
+            'schedules.*.slots.*.afternoon_time_out_start'=> ['nullable'],
+            'schedules.*.slots.*.afternoon_time_out_end'  => ['nullable'],
+            // Legacy fallbacks
+            'schedules.*.slots.*.time_in_start'           => ['nullable'],
+            'schedules.*.slots.*.time_in_end'             => ['nullable'],
+            'schedules.*.slots.*.time_out_start'          => ['nullable'],
+            'schedules.*.slots.*.time_out_end'            => ['nullable'],
+            'location'                            => ['nullable', 'string', 'max:100'],
+            'is_geofenced'                        => ['boolean'],
+            'geofence_type'                       => ['nullable', Rule::in(['radius', 'polygon'])],
+            'latitude'                            => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-90,90'],
+            'longitude'                           => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-180,180'],
+            'radius_meters'                       => ['nullable', 'integer', 'min:10', 'max:5000'],
+            'geofence_polygon'                    => ['nullable', 'required_if:geofence_type,polygon', 'array', 'min:3'],
+            'approval_status'                     => ['nullable', Rule::in(['approved', 'pending', 'declined'])],
+            'is_active'                           => ['boolean'],
         ]);
 
-        // =====================================================================
-        // SCHEDULE CONFLICT CHECKER
-        // =====================================================================
         if ($validated['target_scope'] === 'section' && !empty($validated['target_sections'])) {
             foreach ($validated['schedules'] as $schedule) {
                 $scheduleDate = $this->parseDateInput($schedule['date']);
@@ -228,33 +235,38 @@ class EventController extends Controller
     public function update(Request $request, Event $event)
     {
         $validated = $request->validate([
-            'title'                    => ['required', 'string', 'max:150'],
-            'description'              => ['nullable', 'string'],
-            'target_scope'             => ['required', Rule::in(['all', 'section'])],
-            'target_sections'          => ['nullable', 'array'],
-            'event_date'               => ['required', 'string'],
-            'event_end_date'           => ['nullable', 'string'],
-            'schedules'                => ['required', 'array', 'min:1'],
-            'schedules.*.date'         => ['required', 'string'],
-            'schedules.*.slots'        => ['required', 'array', 'min:1'],
-            'schedules.*.slots.*.time_in_start'  => ['required'],
-            'schedules.*.slots.*.time_in_end'    => ['nullable'],
-            'schedules.*.slots.*.time_out_start' => ['nullable'],
-            'schedules.*.slots.*.time_out_end'   => ['nullable'],
-            'location'                 => ['nullable', 'string', 'max:100'],
-            'is_geofenced'             => ['boolean'],
-            'geofence_type'            => ['nullable', Rule::in(['radius', 'polygon'])],
-            'latitude'                 => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-90,90'],
-            'longitude'                => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-180,180'],
-            'radius_meters'            => ['nullable', 'integer', 'min:10', 'max:5000'],
-            'geofence_polygon'         => ['nullable', 'required_if:geofence_type,polygon', 'array', 'min:3'],
-            'approval_status'          => ['required', Rule::in(['approved', 'pending', 'declined'])],
-            'is_active'                => ['boolean'],
+            'title'                               => ['required', 'string', 'max:150'],
+            'description'                         => ['nullable', 'string'],
+            'target_scope'                        => ['required', Rule::in(['all', 'section'])],
+            'target_sections'                     => ['nullable', 'array'],
+            'event_date'                          => ['required', 'string'],
+            'event_end_date'                      => ['nullable', 'string'],
+            'schedules'                           => ['required', 'array', 'min:1'],
+            'schedules.*.date'                    => ['required', 'string'],
+            'schedules.*.slots'                   => ['required', 'array', 'min:1'],
+            'schedules.*.slots.*.morning_time_in_start'   => ['nullable'],
+            'schedules.*.slots.*.morning_time_in_end'     => ['nullable'],
+            'schedules.*.slots.*.morning_time_out_start'  => ['nullable'],
+            'schedules.*.slots.*.morning_time_out_end'    => ['nullable'],
+            'schedules.*.slots.*.afternoon_time_in_start' => ['nullable'],
+            'schedules.*.slots.*.afternoon_time_in_end'   => ['nullable'],
+            'schedules.*.slots.*.afternoon_time_out_start'=> ['nullable'],
+            'schedules.*.slots.*.afternoon_time_out_end'  => ['nullable'],
+            'schedules.*.slots.*.time_in_start'           => ['nullable'],
+            'schedules.*.slots.*.time_in_end'             => ['nullable'],
+            'schedules.*.slots.*.time_out_start'          => ['nullable'],
+            'schedules.*.slots.*.time_out_end'            => ['nullable'],
+            'location'                            => ['nullable', 'string', 'max:100'],
+            'is_geofenced'                        => ['boolean'],
+            'geofence_type'                       => ['nullable', Rule::in(['radius', 'polygon'])],
+            'latitude'                            => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-90,90'],
+            'longitude'                           => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-180,180'],
+            'radius_meters'                       => ['nullable', 'integer', 'min:10', 'max:5000'],
+            'geofence_polygon'                    => ['nullable', 'required_if:geofence_type,polygon', 'array', 'min:3'],
+            'approval_status'                     => ['required', Rule::in(['approved', 'pending', 'declined'])],
+            'is_active'                           => ['boolean'],
         ]);
 
-        // =====================================================================
-        // SCHEDULE CONFLICT CHECKER (EXCLUDING CURRENT EVENT)
-        // =====================================================================
         if ($validated['target_scope'] === 'section' && !empty($validated['target_sections'])) {
             foreach ($validated['schedules'] as $schedule) {
                 $scheduleDate = $this->parseDateInput($schedule['date']);

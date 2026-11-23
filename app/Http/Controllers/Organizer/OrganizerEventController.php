@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Event;
 use App\Models\Student;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
 use Carbon\Carbon;
 
@@ -59,6 +60,12 @@ class OrganizerEventController extends Controller
 
         $events->getCollection()->transform(function ($event) {
             $event->event_id = $event->id;
+            
+            // Generate public URL for the official letter if it exists
+            $event->official_letter_url = $event->official_letter_path 
+                ? Storage::url($event->official_letter_path) 
+                : null;
+
             // Map event days and slots to the schedules payload expected by frontend table cells
             $event->schedules = $event->days->map(function ($day) {
                 return [
@@ -111,7 +118,14 @@ class OrganizerEventController extends Controller
             'event_end_date' => 'nullable|date|after_or_equal:event_date',
             'schedules' => 'nullable|array',
             'is_active' => 'boolean',
+            'official_letter' => 'required|file|mimes:pdf,jpg,jpeg,png|max:5120', // Max 5MB letter file
         ]);
+
+        // Handle Official Letter Upload
+        if ($request->hasFile('official_letter')) {
+            $validated['official_letter_path'] = $request->file('official_letter')->store('event-letters', 'public');
+        }
+        unset($validated['official_letter']);
 
         $validated['user_id'] = $request->user()->id;
         $validated['approval_status'] = 'pending';
@@ -132,7 +146,7 @@ class OrganizerEventController extends Controller
             }
         }
 
-        return redirect()->back()->with('success', 'Event submitted for admin approval.');
+        return redirect()->back()->with('success', 'Event and official letter submitted for admin approval.');
     }
 
     public function update(Request $request, Event $event)
@@ -157,9 +171,19 @@ class OrganizerEventController extends Controller
             'event_end_date' => 'nullable|date|after_or_equal:event_date',
             'schedules' => 'nullable|array',
             'is_active' => 'boolean',
+            'official_letter' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
         ]);
 
-        $validated['approval_status'] = 'pending';
+        // Handle replacement of Official Letter if a new file is provided
+        if ($request->hasFile('official_letter')) {
+            if ($event->official_letter_path && Storage::disk('public')->exists($event->official_letter_path)) {
+                Storage::disk('public')->delete($event->official_letter_path);
+            }
+            $validated['official_letter_path'] = $request->file('official_letter')->store('event-letters', 'public');
+        }
+        unset($validated['official_letter']);
+
+        $validated['approval_status'] = 'pending'; // Reset back to pending upon update
         
         $schedules = $validated['schedules'] ?? [];
         unset($validated['schedules']);
@@ -176,7 +200,7 @@ class OrganizerEventController extends Controller
             }
         }
 
-        return redirect()->back()->with('success', 'Event updated and resubmitted for admin approval.');
+        return redirect()->back()->with('success', 'Event updated and resubmitted with official letter for admin approval.');
     }
 
     public function destroy(Request $request, Event $event)
@@ -185,8 +209,14 @@ class OrganizerEventController extends Controller
             abort(403, 'Unauthorized action.');
         }
 
+        // Delete official letter file from storage if it exists
+        if ($event->official_letter_path && Storage::disk('public')->exists($event->official_letter_path)) {
+            Storage::disk('public')->delete($event->official_letter_path);
+        }
+
         $event->days()->delete();
         $event->delete();
+        
         return redirect()->back()->with('success', 'Event deleted successfully.');
     }
 }

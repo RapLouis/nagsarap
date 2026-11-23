@@ -17,6 +17,9 @@ type Props = {
 } & ManagePasskeysProps &
     ManageTwoFactorProps;
 
+const inputClass =
+    'mt-1 block w-full min-h-[44px] rounded-lg border border-gray-300 bg-white text-gray-900 placeholder:text-gray-400 caret-[#1B1F5C] shadow-sm transition-all focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623] focus-visible:outline-none text-sm';
+
 export default function Security(props: Props) {
     const passwordInput = useRef<HTMLInputElement>(null);
     const currentPasswordInput = useRef<HTMLInputElement>(null);
@@ -54,11 +57,11 @@ export default function Security(props: Props) {
                             currentPasswordInput.current?.focus();
                         }
                     }}
-                    className="space-y-6"
+                    className="space-y-6 max-w-md"
                 >
                     {({ errors, processing }) => (
                         <>
-                            <div className="grid gap-2">
+                            <div className="grid gap-1.5">
                                 <Label htmlFor="current_password">
                                     Current password
                                 </Label>
@@ -67,7 +70,7 @@ export default function Security(props: Props) {
                                     id="current_password"
                                     ref={currentPasswordInput}
                                     name="current_password"
-                                    className="mt-1 block w-full"
+                                    className={inputClass}
                                     autoComplete="current-password"
                                     placeholder="Current password"
                                 />
@@ -75,14 +78,14 @@ export default function Security(props: Props) {
                                 <InputError message={errors.current_password} />
                             </div>
 
-                            <div className="grid gap-2">
+                            <div className="grid gap-1.5">
                                 <Label htmlFor="password">New password</Label>
 
                                 <PasswordInput
                                     id="password"
                                     ref={passwordInput}
                                     name="password"
-                                    className="mt-1 block w-full"
+                                    className={inputClass}
                                     autoComplete="new-password"
                                     placeholder="New password"
                                     passwordrules={props.passwordRules}
@@ -91,7 +94,7 @@ export default function Security(props: Props) {
                                 <InputError message={errors.password} />
                             </div>
 
-                            <div className="grid gap-2">
+                            <div className="grid gap-1.5">
                                 <Label htmlFor="password_confirmation">
                                     Confirm password
                                 </Label>
@@ -99,7 +102,7 @@ export default function Security(props: Props) {
                                 <PasswordInput
                                     id="password_confirmation"
                                     name="password_confirmation"
-                                    className="mt-1 block w-full"
+                                    className={inputClass}
                                     autoComplete="new-password"
                                     placeholder="Confirm password"
                                     passwordrules={props.passwordRules}
@@ -110,12 +113,13 @@ export default function Security(props: Props) {
                                 />
                             </div>
 
-                            <div className="flex items-center gap-4">
+                            <div className="flex items-center gap-4 pt-2">
                                 <Button
                                     disabled={processing}
                                     data-test="update-password-button"
+                                    className="min-h-[44px] bg-[#1B1F5C] px-6 text-xs font-bold text-white shadow-md hover:bg-[#131644] focus-visible:ring-2 focus-visible:ring-[#F5A623] disabled:opacity-50 transition-all"
                                 >
-                                    Save
+                                    Save Changes
                                 </Button>
                             </div>
                         </>

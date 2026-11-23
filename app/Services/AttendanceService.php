@@ -85,8 +85,8 @@ class AttendanceService
         }
 
         /*
-         * Work out WHICH slot and WHICH window (in/out) this submission is
-         * for. Newer clients send slot_index + type; older clients omit them
+         * Work out WHICH slot and WHICH window (in/out / checkpoint) this submission is
+         * for. Newer clients send slot_index + type/checkpoint_key; older clients omit them
          * and the window is inferred from the timestamp.
          */
         $resolved = $this->slots->resolveOrInfer(
@@ -183,13 +183,13 @@ class AttendanceService
         }
 
         $status = $resolved['status'] ?? $this->statusFor($event, $attendanceAt);
+        $checkpointKey = $resolved['checkpoint_key'] ?? $this->inferCheckpointKey($resolved['type'], $attendanceAt);
 
         /*
-         * Slot-aware persistence. The record is identified by
-         * (event_date, slot_index, type), so a Time-In never blocks a
-         * Time-Out and one slot never blocks another. The transaction
-         * re-checks under a lock; the unique index is the final safety net
-         * against two requests arriving at the same moment.
+         * Checkpoint-aware persistence. The record is identified by
+         * (event_date, slot_index, checkpoint_key), allowing morning time-in,
+         * morning time-out, afternoon time-in, and afternoon time-out to coexist
+         * independently within the same slot.
          */
         try {
             return DB::transaction(
@@ -205,7 +205,8 @@ class AttendanceService
                     $longitude,
                     $locationAccuracy,
                     $geo,
-                    $resolved
+                    $resolved,
+                    $checkpointKey
                 ) {
                     $this->slots->guard(
                         $student->student_id,
@@ -224,6 +225,7 @@ class AttendanceService
                         'event_date' => $resolved['date'],
                         'slot_index' => $resolved['index'],
                         'type' => $resolved['type'],
+                        'checkpoint_key' => $checkpointKey,
                         'logged_at' => $now,
                         'attendance_time' => $attendanceAt,
                         'sync_time' => $now,
@@ -244,17 +246,39 @@ class AttendanceService
         } catch (QueryException $e) {
             // SQLSTATE 23xxx: unique index hit by a concurrent duplicate request.
             if (str_starts_with((string) $e->getCode(), '23')) {
-                throw new AttendanceException(
-                    'ALREADY_CHECKED_IN',
-                    $resolved['type'] === 'out'
+                $message = match ($checkpointKey) {
+                    Attendance::MORNING_TIME_IN => 'You have already logged your morning time-in for this slot.',
+                    Attendance::MORNING_TIME_OUT => 'You have already logged your morning time-out for this slot.',
+                    Attendance::AFTERNOON_TIME_IN => 'You have already logged your afternoon time-in for this slot.',
+                    Attendance::AFTERNOON_TIME_OUT => 'You have already logged your afternoon time-out for this slot.',
+                    default => $resolved['type'] === 'out'
                         ? 'You have already checked out for this time slot.'
                         : 'You have already checked in for this time slot.',
+                };
+
+                throw new AttendanceException(
+                    'ALREADY_CHECKED_IN',
+                    $message,
                     409
                 );
             }
 
             throw $e;
         }
+    }
+
+    /**
+     * Infer checkpoint key based on type and timestamp if not explicitly provided by slot resolver.
+     */
+    private function inferCheckpointKey(string $type, CarbonInterface $at): string
+    {
+        $hour = (int) $at->format('G');
+
+        if ($type === 'in') {
+            return $hour < 12 ? Attendance::MORNING_TIME_IN : Attendance::AFTERNOON_TIME_IN;
+        }
+
+        return $hour < 12 ? Attendance::MORNING_TIME_OUT : Attendance::AFTERNOON_TIME_OUT;
     }
 
     /**

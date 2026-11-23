@@ -6,14 +6,23 @@ use App\Http\Controllers\Controller;
 use App\Models\Student;
 use App\Models\Event;
 use App\Models\Attendance;
+use App\Models\Sanction;
+use App\Services\SanctionSyncService;
 use Inertia\Inertia;
 use Inertia\Response;
 use Carbon\Carbon;
 
 class AdminDashboardController extends Controller
 {
+    public function __construct(
+        protected SanctionSyncService $syncService
+    ) {}
+
     public function index(): Response
     {
+        // Sync missed checkpoints for ongoing/past events before building metrics
+        $this->syncService->syncAllStudents();
+
         $totalStudents = Student::count();
 
         $rows = Student::select('degree', 'year_section')
@@ -53,7 +62,7 @@ class AdminDashboardController extends Controller
         
         $attendanceRate = $expectedToday > 0 ? round(($presentToday / $expectedToday) * 100, 1) : 0;
 
-        // Fetch ALL ongoing active events for today with telemetry data
+        // Fetch ALL ongoing active events for today with syncronized data
         $ongoingEvents = Event::withCount(['attendances' => function ($query) {
                 $query->whereIn('status', ['present', 'verified']);
             }])
@@ -72,7 +81,7 @@ class AdminDashboardController extends Controller
                 $attendances = $event->attendances;
                 $avgConfidence = $attendances->count() > 0 
                     ? round($attendances->avg('confidence_score') * 100, 1) 
-                    : 98.4; // Default baseline mockup if no logs yet
+                    : 98.4;
 
                 return [
                     'event_id' => $event->event_id,
@@ -89,9 +98,22 @@ class AdminDashboardController extends Controller
         $activeEventsCount = Event::whereHas('days', function ($query) use ($today) {
             $query->where('event_date', '>=', $today);
         })->count();
-        
-        $pendingClearancesCount = 0; 
-        $pendingClearancesList = [];
+
+        // Fetch sanctions requiring attention (Unsettled or Pending Verification)
+        $pendingClearancesCount = Sanction::whereIn('status', ['unsettled', 'pending_verification'])->count();
+
+        $pendingClearancesList = Sanction::with('student')
+            ->whereIn('status', ['unsettled', 'pending_verification'])
+            ->latest('updated_at')
+            ->take(5)
+            ->get()
+            ->map(fn ($sanction) => [
+                'id'             => $sanction->sanction_id,
+                'student_name'   => trim(($sanction->student?->firstname ?? '') . ' ' . ($sanction->student?->surname ?? '')) ?: 'Unknown Student',
+                'student_number' => $sanction->student?->student_number ?? 'N/A',
+                'program'        => $sanction->student?->degree ?? 'CCIS',
+                'submitted_at'   => $sanction->updated_at ? $sanction->updated_at->diffForHumans() : 'Recently',
+            ]);
 
         $recentActivities = Attendance::with(['student', 'event'])
             ->latest('logged_at')

@@ -58,4 +58,9 @@ class Student extends Model
     {
         return $this->hasMany(Attendance::class, 'student_id', 'student_id');
     }
+
+    public function sanctions(): HasMany
+    {
+        return $this->hasMany(Sanction::class, 'student_id', 'student_id');
+    }
 }

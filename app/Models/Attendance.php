@@ -12,13 +12,27 @@ class Attendance extends Model
 
     protected $primaryKey = 'attendance_id';
 
+    // Supported Checkpoint Key Constants
+    public const MORNING_TIME_IN = 'morning_time_in';
+    public const MORNING_TIME_OUT = 'morning_time_out';
+    public const AFTERNOON_TIME_IN = 'afternoon_time_in';
+    public const AFTERNOON_TIME_OUT = 'afternoon_time_out';
+
+    public const CHECKPOINTS = [
+        self::MORNING_TIME_IN,
+        self::MORNING_TIME_OUT,
+        self::AFTERNOON_TIME_IN,
+        self::AFTERNOON_TIME_OUT,
+    ];
+
     protected $fillable = [
         'attendance_uuid',
         'student_id',
         'event_id',
-        'event_date', // Added: YYYY-MM-DD format (no date cast)
-        'slot_index', // Added: 0-based slot index
-        'type',       // Added: 'in' or 'out'
+        'event_date',
+        'slot_index',
+        'type',
+        'checkpoint_key',
         'logged_at',
         'attendance_time',
         'sync_time',

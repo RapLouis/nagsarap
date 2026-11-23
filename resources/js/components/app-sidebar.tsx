@@ -1,6 +1,6 @@
 import { Link } from '@inertiajs/react';
 import {
-    Camera,
+    Bell,
     Calendar,
     History,
     LayoutGrid,
@@ -19,7 +19,8 @@ import {
 } from '@/components/ui/sidebar';
 import type { NavItem } from '@/types';
 
-const NAVY = '#070b3f';
+// Updated to standard 4ttnd Brand System color constants
+const BRAND_NAVY = '#1B1F5C';
 
 const mainNavItems: NavItem[] = [
     {
@@ -28,18 +29,18 @@ const mainNavItems: NavItem[] = [
         icon: LayoutGrid,
     },
     {
-        title: 'Check-in',
-        href: '/check-in',
-        icon: Camera,
+        title: 'Notifications',
+        href: '/notifications',
+        icon: Bell,
     },
     {
-        title: 'My events',
-        href: '/events',
+        title: 'Calendar',
+        href: '/calendar',
         icon: Calendar,
     },
     {
-        title: 'Attendance history',
-        href: '/attendance/history',
+        title: 'Sanctions',
+        href: '/sanctions',
         icon: History,
     },
 ];
@@ -49,13 +50,17 @@ export function AppSidebar() {
         <Sidebar
             collapsible="icon"
             variant="sidebar"
-            style={{ backgroundColor: NAVY }}
-            className="border-r-0 text-white"
+            style={{ backgroundColor: BRAND_NAVY }}
+            className="border-r-0 text-white font-sans antialiased"
         >
             <SidebarHeader className="p-4">
                 <SidebarMenu>
                     <SidebarMenuItem>
-                        <SidebarMenuButton size="lg" asChild className="hover:bg-white/10 text-white">
+                        <SidebarMenuButton
+                            size="lg"
+                            asChild
+                            className="hover:bg-white/10 text-white focus-visible:ring-2 focus-visible:ring-[#F5A623] rounded-xl transition-all"
+                        >
                             <Link href="/dashboard" prefetch className="flex items-center gap-3">
                                 <AppLogo />
                             </Link>

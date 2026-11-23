@@ -6,45 +6,44 @@ return [
     |--------------------------------------------------------------------------
     | Python biometric microservice
     |--------------------------------------------------------------------------
-    | BIOMETRIC_SERVICE_TOKEN must equal INTERNAL_API_TOKEN on the Python side.
     */
-    'python_url' => env('BIOMETRIC_SERVICE_URL', 'http://127.0.0.1:5000'),
-    'python_token' => env('BIOMETRIC_SERVICE_TOKEN'),
-    'python_timeout' => (int) env('BIOMETRIC_SERVICE_TIMEOUT', 30), // seconds; 3 frames on CPU need more than 10
+    'python_url'     => env('BIOMETRIC_SERVICE_URL', 'http://127.0.0.1:5000'),
+    'python_token'   => env('BIOMETRIC_SERVICE_TOKEN'),
+    'python_timeout' => (int) env('BIOMETRIC_SERVICE_TIMEOUT', 60),
 
     /*
     |--------------------------------------------------------------------------
-    | Challenge (server-issued, one-time use)
+    | Challenge TTL (server-issued, single-use nonces)
     |--------------------------------------------------------------------------
+    | Long enough for the flashes and a 20 s head turn. The page also asks for a
+    | fresh challenge when the student presses "start", so the clock starts then.
     */
-    'challenge_ttl' => (int) env('FACE_CHALLENGE_TTL', 120), // seconds
+    'challenge_ttl' => (int) env('FACE_CHALLENGE_TTL', 300),
 
     /*
     |--------------------------------------------------------------------------
-    | Rate limiting (per student)
+    | Rate limiting
     |--------------------------------------------------------------------------
     */
-    'max_attempts' => (int) env('FACE_MAX_ATTEMPTS', 5),
+    'max_attempts'          => (int) env('FACE_MAX_ATTEMPTS', 5),
     'attempt_decay_seconds' => (int) env('FACE_ATTEMPT_DECAY', 600),
 
     /*
     |--------------------------------------------------------------------------
-    | Matching thresholds (cosine similarity)
+    | Cosine similarity thresholds
     |--------------------------------------------------------------------------
     */
     'profile_match_threshold' => (float) env('FACE_PROFILE_MATCH_THRESHOLD', 0.50),
-    'duplicate_threshold' => (float) env('FACE_DUPLICATE_THRESHOLD', 0.60),
-
-    // true  = verification fails if the profile photo is missing or unreadable (recommended).
-    // false = old behaviour: skip the profile-photo match in that case.
-    'require_profile_match' => (bool) env('FACE_REQUIRE_PROFILE_MATCH', true),
+    'duplicate_threshold'     => (float) env('FACE_DUPLICATE_THRESHOLD', 0.50),
+    'require_profile_match'   => (bool) env('FACE_REQUIRE_PROFILE_MATCH', true),
 
     /*
     |--------------------------------------------------------------------------
-    | Audit
+    | Audit logging
     |--------------------------------------------------------------------------
-    | Camera frames are biometric data. Keep this off unless you have a reason,
-    | a retention period, and the consent to hold them.
+    | Failed frames are biometric data. Keep them only while calibrating and
+    | delete them on a schedule.
     */
-    'store_failed_frames' => (bool) env('FACE_STORE_FAILED_FRAMES', false),
+    'store_failed_frames'  => (bool) env('FACE_STORE_FAILED_FRAMES', false),
+    'frame_retention_days' => (int) env('FACE_FRAME_RETENTION_DAYS', 7),
 ];

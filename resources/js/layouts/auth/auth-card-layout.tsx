@@ -20,28 +20,36 @@ export default function AuthCardLayout({
     description?: string;
 }>) {
     return (
-        <div className="flex min-h-svh flex-col items-center justify-center gap-6 bg-muted p-6 md:p-10">
-            <div className="flex w-full max-w-md flex-col gap-6">
+        <div className="flex min-h-screen flex-col items-center justify-center bg-[#F5F6FA] p-4 sm:p-6 lg:p-10 font-sans text-gray-900 antialiased">
+            <div className="flex w-full max-w-md flex-col gap-6 my-auto">
+                {/* Brand Logo Header */}
                 <Link
                     href={home()}
-                    className="flex items-center gap-2 self-center font-medium"
+                    className="flex items-center gap-2 self-center font-bold text-[#1B1F5C] transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] rounded-xl p-1"
                 >
-                    <div className="flex h-9 w-9 items-center justify-center">
-                        <AppLogoIcon className="size-9 fill-current text-black dark:text-white" />
+                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#1B1F5C] p-2 shadow-md ring-2 ring-[#F5A623]">
+                        <AppLogoIcon className="h-full w-full fill-current text-[#F5A623]" />
                     </div>
                 </Link>
 
-                <div className="flex flex-col gap-6">
-                    <Card className="rounded-xl">
-                        <CardHeader className="px-10 pt-8 pb-0 text-center">
-                            <CardTitle className="text-xl">{title}</CardTitle>
-                            <CardDescription>{description}</CardDescription>
-                        </CardHeader>
-                        <CardContent className="px-10 py-8">
-                            {children}
-                        </CardContent>
-                    </Card>
-                </div>
+                {/* Card Container */}
+                <Card className="rounded-2xl border border-gray-200/80 bg-white shadow-xl overflow-hidden">
+                    <CardHeader className="px-6 pt-8 pb-2 text-center sm:px-8">
+                        {title && (
+                            <CardTitle className="text-2xl font-black tracking-tight text-[#1B1F5C]">
+                                {title}
+                            </CardTitle>
+                        )}
+                        {description && (
+                            <CardDescription className="text-xs sm:text-sm font-medium text-gray-500 leading-relaxed mt-1">
+                                {description}
+                            </CardDescription>
+                        )}
+                    </CardHeader>
+                    <CardContent className="px-6 py-6 sm:px-8 sm:pb-8">
+                        {children}
+                    </CardContent>
+                </Card>
             </div>
         </div>
     );

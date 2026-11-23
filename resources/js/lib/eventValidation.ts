@@ -1,4 +1,14 @@
 export type TimeSlot = {
+    has_afternoon?: boolean;
+    morning_time_in_start?: string | null;
+    morning_time_in_end?: string | null;
+    morning_time_out_start?: string | null;
+    morning_time_out_end?: string | null;
+    afternoon_time_in_start?: string | null;
+    afternoon_time_in_end?: string | null;
+    afternoon_time_out_start?: string | null;
+    afternoon_time_out_end?: string | null;
+    // Legacy fallbacks
     time_in_start?: string | null;
     time_in_end?: string | null;
     time_out_start?: string | null;
@@ -12,25 +22,61 @@ export type ScheduleItem = {
 };
 
 /**
- * Validates schedule time slots to ensure chronological sequence and prevent overlaps.
+ * Validates schedule time slots to ensure chronological sequence and prevent overlaps across all 4 checkpoints.
  */
 export const validateTimeSlots = (
     schedules: ScheduleItem[],
     setErrorCallback: (errorMsg: string | null) => void
 ): boolean => {
     for (const sched of schedules) {
-        for (const slot of sched.slots) {
-            if (slot.time_in_start && slot.time_in_end && slot.time_in_start >= slot.time_in_end) {
-                setErrorCallback(`Conflict on ${sched.date}: Time-In Start must be earlier than Time-In Cutoff.`);
+        for (let i = 0; i < sched.slots.length; i++) {
+            const slot = sched.slots[i];
+            const slotPrefix = `Conflict on ${sched.date} (Slot ${i + 1}):`;
+
+            // 1. Morning Time-In Range
+            const mInStart = slot.morning_time_in_start || slot.time_in_start;
+            const mInEnd = slot.morning_time_in_end || slot.time_in_end;
+            if (mInStart && mInEnd && mInStart >= mInEnd) {
+                setErrorCallback(`${slotPrefix} Morning Time-In Start must be earlier than its Cutoff.`);
                 return false;
             }
-            if (slot.time_in_end && slot.time_out_start && slot.time_in_end >= slot.time_out_start) {
-                setErrorCallback(`Conflict on ${sched.date}: Time-In Cutoff cannot overlap or be after Time-Out Start.`);
+
+            // 2. Morning Time-Out Range
+            const mOutStart = slot.morning_time_out_start || slot.time_out_start;
+            const mOutEnd = slot.morning_time_out_end || slot.time_out_end;
+            if (mInEnd && mOutStart && mInEnd >= mOutStart) {
+                setErrorCallback(`${slotPrefix} Morning Time-In Cutoff cannot overlap or be after Morning Time-Out Start.`);
                 return false;
             }
-            if (slot.time_out_start && slot.time_out_end && slot.time_out_start >= slot.time_out_end) {
-                setErrorCallback(`Conflict on ${sched.date}: Time-Out Start must be earlier than Time-Out Cutoff.`);
+            if (mOutStart && mOutEnd && mOutStart >= mOutEnd) {
+                setErrorCallback(`${slotPrefix} Morning Time-Out Start must be earlier than its Cutoff.`);
                 return false;
+            }
+
+            // 3. Afternoon Session Validation (if enabled)
+            const hasAfternoon = Boolean(slot.has_afternoon || slot.afternoon_time_in_start);
+            if (hasAfternoon) {
+                const aInStart = slot.afternoon_time_in_start;
+                const aInEnd = slot.afternoon_time_in_end;
+                const aOutStart = slot.afternoon_time_out_start;
+                const aOutEnd = slot.afternoon_time_out_end;
+
+                if (mOutEnd && aInStart && mOutEnd >= aInStart) {
+                    setErrorCallback(`${slotPrefix} Afternoon session must start after Morning session Cutoff.`);
+                    return false;
+                }
+                if (aInStart && aInEnd && aInStart >= aInEnd) {
+                    setErrorCallback(`${slotPrefix} Afternoon Time-In Start must be earlier than its Cutoff.`);
+                    return false;
+                }
+                if (aInEnd && aOutStart && aInEnd >= aOutStart) {
+                    setErrorCallback(`${slotPrefix} Afternoon Time-In Cutoff cannot overlap or be after Afternoon Time-Out Start.`);
+                    return false;
+                }
+                if (aOutStart && aOutEnd && aOutStart >= aOutEnd) {
+                    setErrorCallback(`${slotPrefix} Afternoon Time-Out Start must be earlier than its Cutoff.`);
+                    return false;
+                }
             }
         }
     }
@@ -40,7 +86,7 @@ export const validateTimeSlots = (
 
 /**
  * Checks if the current browser system time falls within any 
- * time-in or time-out slot configured across multiple dynamic slots for today's event schedule.
+ * active time-in or time-out checkpoint window configured for today's event schedule.
  */
 export const isEventWindowOpen = (schedules: ScheduleItem[] | null | undefined): boolean => {
     if (!schedules || schedules.length === 0) return false;
@@ -58,22 +104,36 @@ export const isEventWindowOpen = (schedules: ScheduleItem[] | null | undefined):
     const currentMinutes = String(now.getMinutes()).padStart(2, '0');
     const currentTime = `${currentHours}:${currentMinutes}`;
 
-    // Dynamically checks all slots configured by the admin
     return todaySchedule.slots.some((slot) => {
         let slotOpen = false;
 
-        if (slot.time_in_start) {
-            const start = slot.time_in_start;
-            const end = slot.time_in_end || '23:59';
-            if (currentTime >= start && currentTime <= end) {
-                slotOpen = true;
-            }
+        // Check Morning Time-In
+        const mInStart = slot.morning_time_in_start || slot.time_in_start;
+        const mInEnd = slot.morning_time_in_end || slot.time_in_end || '23:59';
+        if (mInStart && currentTime >= mInStart && currentTime <= mInEnd) {
+            slotOpen = true;
         }
 
-        if (slot.time_out_start) {
-            const start = slot.time_out_start;
-            const end = slot.time_out_end || '23:59';
-            if (currentTime >= start && currentTime <= end) {
+        // Check Morning Time-Out
+        const mOutStart = slot.morning_time_out_start || slot.time_out_start;
+        const mOutEnd = slot.morning_time_out_end || slot.time_out_end || '23:59';
+        if (mOutStart && currentTime >= mOutStart && currentTime <= mOutEnd) {
+            slotOpen = true;
+        }
+
+        // Check Afternoon Time-In
+        const hasAfternoon = Boolean(slot.has_afternoon || slot.afternoon_time_in_start);
+        if (hasAfternoon) {
+            const aInStart = slot.afternoon_time_in_start;
+            const aInEnd = slot.afternoon_time_in_end || '23:59';
+            if (aInStart && currentTime >= aInStart && currentTime <= aInEnd) {
+                slotOpen = true;
+            }
+
+            // Check Afternoon Time-Out
+            const aOutStart = slot.afternoon_time_out_start;
+            const aOutEnd = slot.afternoon_time_out_end || '23:59';
+            if (aOutStart && currentTime >= aOutStart && currentTime <= aOutEnd) {
                 slotOpen = true;
             }
         }

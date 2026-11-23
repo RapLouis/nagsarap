@@ -12,13 +12,23 @@ class User extends Authenticatable
 {
     use HasApiTokens, HasFactory, Notifiable;
 
-    protected $fillable = ['student_id', 'name', 'email', 'password', 'role'];
+    protected $fillable = [
+        'student_id',
+        'name',
+        'email',
+        'password',
+        'must_change_password',
+        'role',
+        'organization_name',
+        'organization_position',
+    ];
 
     protected $hidden = ['password', 'remember_token'];
 
     protected $casts = [
         'email_verified_at' => 'datetime',
         'password' => 'hashed',
+        'must_change_password' => 'boolean',
     ];
 
     public function student(): BelongsTo

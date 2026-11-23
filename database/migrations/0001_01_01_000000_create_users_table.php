@@ -18,9 +18,6 @@ return new class extends Migration
             |--------------------------------------------------------------------------
             | Student Relationship
             |--------------------------------------------------------------------------
-            | Linked to students.student_id. 
-            | Only populated for student accounts; NULL for organizers and admins.
-            |--------------------------------------------------------------------------
             */
             $table->unsignedInteger('student_id')
                 ->nullable()
@@ -38,7 +35,7 @@ return new class extends Migration
 
             /*
             |--------------------------------------------------------------------------
-            | Authentication Credentials
+            | Authentication Credentials & Password Flags
             |--------------------------------------------------------------------------
             */
             $table->timestamp('email_verified_at')
@@ -46,11 +43,14 @@ return new class extends Migration
 
             $table->string('password');
 
+            $table->boolean('must_change_password')
+                ->default(false);
+
             $table->rememberToken();
 
             /*
             |--------------------------------------------------------------------------
-            | System Roles
+            | System Roles & Organization Metadata
             |--------------------------------------------------------------------------
             */
             $table->enum('role', [
@@ -58,6 +58,9 @@ return new class extends Migration
                 'organizer',
                 'admin',
             ])->default('student');
+
+            $table->string('organization_name')->nullable();
+            $table->string('organization_position')->nullable();
 
             $table->timestamps();
 

@@ -31,10 +31,10 @@ import {
     Building2,
     CheckSquare,
     Square,
+    Sun,
+    Sunset,
 } from 'lucide-react';
 import { 
-    TimeSlot, 
-    ScheduleItem, 
     validateTimeSlots, 
     getEventDays, 
     formatDate, 
@@ -43,6 +43,24 @@ import {
 
 type TabKey = 'ongoing' | 'upcoming' | 'completed' | 'pending' | 'declined';
 type Point = { lat: number; lng: number };
+
+type CheckpointSlot = {
+    has_afternoon?: boolean;
+    morning_time_in_start?: string;
+    morning_time_in_end?: string;
+    morning_time_out_start?: string;
+    morning_time_out_end?: string;
+    afternoon_time_in_start?: string;
+    afternoon_time_in_end?: string;
+    afternoon_time_out_start?: string;
+    afternoon_time_out_end?: string;
+    [key: string]: string | boolean | undefined;
+};
+
+type ScheduleItem = {
+    date: string;
+    slots: CheckpointSlot[];
+};
 
 type EventItem = {
     event_id: number;
@@ -87,12 +105,24 @@ type Props = {
 };
 
 const TABS: { key: TabKey; label: string; activeColor: string }[] = [
-    { key: 'ongoing', label: 'On Going', activeColor: 'text-blue-600 border-blue-600 bg-blue-50/50' },
-    { key: 'upcoming', label: 'Upcoming', activeColor: 'text-emerald-600 border-emerald-600 bg-emerald-50/50' },
-    { key: 'completed', label: 'Completed', activeColor: 'text-indigo-900 border-indigo-900 bg-indigo-50/50' },
-    { key: 'pending', label: 'Pending Approval', activeColor: 'text-amber-600 border-amber-600 bg-amber-50/50' },
-    { key: 'declined', label: 'Declined', activeColor: 'text-rose-600 border-rose-600 bg-rose-50/50' },
+    { key: 'ongoing', label: 'On Going', activeColor: 'text-[#1B1F5C] border-[#1B1F5C] bg-indigo-50/60' },
+    { key: 'upcoming', label: 'Upcoming', activeColor: 'text-emerald-700 border-emerald-600 bg-emerald-50/60' },
+    { key: 'completed', label: 'Completed', activeColor: 'text-[#1B1F5C] border-[#1B1F5C] bg-indigo-50/60' },
+    { key: 'pending', label: 'Pending Approval', activeColor: 'text-amber-700 border-amber-600 bg-amber-50/60' },
+    { key: 'declined', label: 'Declined', activeColor: 'text-rose-700 border-rose-600 bg-rose-50/60' },
 ];
+
+const DEFAULT_SLOT: CheckpointSlot = {
+    has_afternoon: false,
+    morning_time_in_start: '08:00',
+    morning_time_in_end: '08:30',
+    morning_time_out_start: '11:30',
+    morning_time_out_end: '12:00',
+    afternoon_time_in_start: '13:00',
+    afternoon_time_in_end: '13:30',
+    afternoon_time_out_start: '16:30',
+    afternoon_time_out_end: '17:00',
+};
 
 export default function Events({
     events,
@@ -115,12 +145,7 @@ export default function Events({
     const [timeValidationError, setTimeValidationError] = useState<string | null>(null);
 
     // Uniform schedule state
-    const [uniformSchedule, setUniformSchedule] = useState<TimeSlot>({
-        time_in_start: '08:00',
-        time_in_end: '12:00',
-        time_out_start: '13:00',
-        time_out_end: '17:00',
-    });
+    const [uniformSchedule, setUniformSchedule] = useState<CheckpointSlot>(DEFAULT_SLOT);
 
     // Modal & Alert States
     const [isFormOpen, setIsFormOpen] = useState(false);
@@ -177,22 +202,15 @@ export default function Events({
 
             return {
                 date: day,
-                slots: [
-                    {
-                        time_in_start: '08:00',
-                        time_in_end: '12:00',
-                        time_out_start: '13:00',
-                        time_out_end: '17:00',
-                    },
-                ],
+                slots: [{ ...DEFAULT_SLOT }],
             };
         });
 
         setData('schedules', newSchedules);
-        validateTimeSlots(newSchedules, setTimeValidationError);
+        validateTimeSlots(newSchedules as any, setTimeValidationError);
     }, [data.event_date, data.event_end_date, isMultiDay, scheduleMode, uniformSchedule]);
 
-    const handleUniformChange = (field: keyof TimeSlot, value: string) => {
+    const handleUniformChange = (field: string, value: string | boolean) => {
         const updatedUniform = { ...uniformSchedule, [field]: value };
         setUniformSchedule(updatedUniform);
 
@@ -202,7 +220,7 @@ export default function Events({
                 slots: s.slots.map((slot) => ({ ...slot, [field]: value })),
             }));
             setData('schedules', updatedSchedules);
-            validateTimeSlots(updatedSchedules, setTimeValidationError);
+            validateTimeSlots(updatedSchedules as any, setTimeValidationError);
         }
     };
 
@@ -372,23 +390,15 @@ export default function Events({
         const mappedSchedules = hasExistingSchedules
             ? clonedEvent.schedules!.map((sch) => ({
                 date: sch.date,
-                slots: sch.slots && sch.slots.length > 0 ? sch.slots : [{
-                    time_in_start: '08:00',
-                    time_in_end: '',
-                    time_out_start: '17:00',
-                    time_out_end: '',
-                }],
+                slots: sch.slots && sch.slots.length > 0 ? sch.slots.map(s => ({
+                    ...DEFAULT_SLOT,
+                    ...s,
+                    has_afternoon: Boolean(s.has_afternoon)
+                })) : [{ ...DEFAULT_SLOT }],
             }))
             : getEventDays(clonedEvent.event_date, clonedEvent.event_end_date).map((day) => ({
                 date: day,
-                slots: [
-                    {
-                        time_in_start: '08:00',
-                        time_in_end: '',
-                        time_out_start: '17:00',
-                        time_out_end: '',
-                    },
-                ],
+                slots: [{ ...DEFAULT_SLOT }],
             }));
 
         const containsMultipleSlots = mappedSchedules.some(s => s.slots && s.slots.length > 1);
@@ -423,7 +433,7 @@ export default function Events({
     const handleFormSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         
-        if (!validateTimeSlots(data.schedules, setTimeValidationError)) {
+        if (!validateTimeSlots(data.schedules as any, setTimeValidationError)) {
             return;
         }
 
@@ -474,42 +484,44 @@ export default function Events({
 
     return (
         <>
-            <Head title="Events Management" />
+            <Head title="Events Management | 4ttend Attendance System" />
 
-            <div className="p-6 space-y-6">
+            <div className="p-3 sm:p-5 space-y-4 font-sans text-gray-900 antialiased bg-[#F5F6FA] min-h-screen">
                 {successMessage && (
-                    <div className="flex items-center justify-between rounded-2xl bg-emerald-50 border border-emerald-200 p-4 text-emerald-800 shadow-xs transition-all">
-                        <div className="flex items-center gap-2 text-sm font-semibold">
-                            <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
+                    <div className="flex items-center justify-between rounded-2xl bg-emerald-50 border border-emerald-200 p-4 text-emerald-800 shadow-xs" role="alert">
+                        <div className="flex items-center gap-2.5 text-xs sm:text-sm font-bold">
+                            <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" aria-hidden="true" />
                             <span>{successMessage}</span>
                         </div>
                         <button
                             onClick={() => setSuccessMessage(null)}
-                            className="rounded-lg p-1 text-emerald-600 hover:bg-emerald-100"
-                            aria-label="Dismiss success message"
+                            className="rounded-lg p-1 text-emerald-600 hover:bg-emerald-100 focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                            aria-label="Dismiss success notification"
                         >
                             <X className="h-5 w-5" />
                         </button>
                     </div>
                 )}
 
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                    <div>
-                        <h2 className="text-2xl font-bold text-gray-800">Events Management</h2>
-                        <p className="text-sm text-gray-500">Configure attendance windows, hybrid venue geofencing boundaries, and participant scopes</p>
+                {/* PAGE HEADER */}
+                <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-white p-4 sm:p-5 rounded-2xl border border-gray-200/80 shadow-xs">
+                    <div className="space-y-0.5">
+                        <h1 className="text-xl sm:text-2xl font-black text-[#1B1F5C] tracking-tight">Events Management</h1>
+                        <p className="text-xs text-gray-500 font-medium">Configure session checkpoints with start-to-cutoff time ranges and optional afternoon blocks</p>
                     </div>
 
                     <button
                         onClick={openCreateModal}
-                        className="inline-flex items-center gap-2 rounded-xl bg-[#1B1F5C] px-5 py-3 text-sm font-bold text-white shadow-xs hover:bg-[#151848] transition active:scale-[0.98]"
+                        className="inline-flex items-center justify-center gap-2 min-h-[44px] rounded-xl bg-[#1B1F5C] px-4 py-2.5 text-xs font-bold text-white shadow-md hover:bg-[#131644] focus-visible:ring-2 focus-visible:ring-[#F5A623] transition-all shrink-0 active:scale-98"
                     >
-                        <Plus className="h-5 w-5" />
+                        <Plus className="h-4.5 w-4.5 text-[#F5A623]" aria-hidden="true" />
                         <span>Create New Event</span>
                     </button>
-                </div>
+                </header>
 
-                <div className="border-b border-gray-200 bg-white px-4 rounded-2xl shadow-xs">
-                    <nav className="-mb-px flex space-x-6 overflow-x-auto">
+                {/* TABS NAVIGATION */}
+                <nav className="border border-gray-200/80 bg-white px-3 sm:px-4 rounded-2xl shadow-xs" aria-label="Events status filter tabs">
+                    <div className="-mb-px flex space-x-3 sm:space-x-6 overflow-x-auto">
                         {TABS.map((tab) => {
                             const isActive = activeTab === tab.key;
                             const count = counts?.[tab.key] ?? 0;
@@ -517,14 +529,14 @@ export default function Events({
                                 <button
                                     key={tab.key}
                                     onClick={() => handleTabChange(tab.key)}
-                                    className={`whitespace-nowrap py-4 px-3 border-b-2 font-bold text-sm transition-all flex items-center gap-2.5 ${
-                                        isActive ? `${tab.activeColor} border-b-2` : 'border-transparent text-gray-400 hover:text-gray-700'
+                                    className={`whitespace-nowrap py-3.5 px-3 border-b-2 font-bold text-xs sm:text-sm transition-all flex items-center gap-2 focus-visible:ring-2 focus-visible:ring-[#F5A623] ${
+                                        isActive ? `${tab.activeColor} border-b-2` : 'border-transparent text-gray-500 hover:text-[#1B1F5C]'
                                     }`}
                                 >
                                     <span>{tab.label}</span>
                                     <span
-                                        className={`rounded-full px-2.5 py-0.5 text-xs transition-opacity ${
-                                            isActive ? 'bg-white shadow-xs text-gray-800' : 'bg-gray-100 text-gray-500'
+                                        className={`rounded-full px-2.5 py-0.5 text-[10px] sm:text-xs font-bold transition-opacity ${
+                                            isActive ? 'bg-white shadow-xs text-[#1B1F5C]' : 'bg-gray-100 text-gray-600'
                                         } ${isFiltering && isActive ? 'opacity-50' : 'opacity-100'}`}
                                     >
                                         {count}
@@ -532,28 +544,29 @@ export default function Events({
                                 </button>
                             );
                         })}
-                    </nav>
-                </div>
+                    </div>
+                </nav>
 
-                <div className="flex items-center justify-between bg-white p-4 rounded-2xl border border-gray-100 shadow-xs">
+                {/* TOOLBAR SEARCH */}
+                <div className="flex items-center justify-between bg-white p-3.5 sm:p-4 rounded-2xl border border-gray-200/80 shadow-xs">
                     <div className="relative w-full sm:w-80">
                         <input
                             type="text"
                             placeholder="Search event title, location..."
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
-                            className="w-full pl-10 pr-9 py-2.5 text-sm rounded-xl border border-gray-200 focus:border-[#1B1F5C] focus:ring-[#1B1F5C]"
+                            className="w-full min-h-[44px] pl-10 pr-9 py-2 text-xs sm:text-sm rounded-xl border border-gray-300 bg-white text-gray-900 placeholder:text-gray-400 focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623] focus-visible:outline-none shadow-xs"
                             aria-label="Search events"
                         />
                         {isFiltering ? (
-                            <Loader2 className="absolute left-3.5 top-3 h-4 w-4 text-gray-400 animate-spin" />
+                            <Loader2 className="absolute left-3.5 top-3.5 h-4 w-4 text-gray-400 animate-spin" aria-hidden="true" />
                         ) : (
-                            <Search className="absolute left-3.5 top-3 h-4 w-4 text-gray-400" />
+                            <Search className="absolute left-3.5 top-3.5 h-4 w-4 text-gray-400" aria-hidden="true" />
                         )}
                         {search && (
                             <button
                                 onClick={() => setSearch('')}
-                                className="absolute right-3 top-2.5 rounded-full p-0.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                                className="absolute right-3 top-3 rounded-full p-0.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                 aria-label="Clear search"
                             >
                                 <X className="h-4 w-4" />
@@ -562,216 +575,221 @@ export default function Events({
                     </div>
                 </div>
 
-                <div className="hidden sm:block overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-xs">
-                    <table className="w-full text-left text-sm text-gray-600">
-                        <thead className="bg-gray-50 text-xs font-semibold uppercase text-gray-500">
-                            <tr>
-                                <th className="px-6 py-4">Event Details</th>
-                                <th className="px-6 py-4">Target Audience</th>
-                                <th className="px-6 py-4">Venue & Geofence</th>
-                                <th className="px-6 py-4">Time-In Window</th>
-                                <th className="px-6 py-4">Time-Out Window</th>
-                                <th className="px-6 py-4">Status</th>
-                                <th className="px-6 py-4 text-right">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100 text-sm">
-                            {events.data.length > 0 ? (
-                                events.data.map((item) => {
-                                    const relLabel = relativeDateLabel(item.event_date);
-                                    const isQuickActing = quickActionEventId === item.event_id;
-                                    return (
-                                        <tr key={item.event_id} className="hover:bg-gray-50/50 transition-colors">
-                                            {/* 1. Event Details */}
-                                            <td className="px-6 py-4 max-w-[240px]">
-                                                <Link href={`/admin/analytics/events/${item.event_id}`} className="block">
-                                                    <div className="font-bold text-[#1B1F5C] truncate hover:underline text-base" title={item.title}>
-                                                        {item.title}
-                                                    </div>
-                                                    <div className="flex items-center gap-2 text-xs text-gray-400 mt-1">
-                                                        <span>
-                                                            {formatDate(item.event_date)}
-                                                            {item.event_end_date && item.event_end_date !== item.event_date
-                                                                ? ` - ${formatDate(item.event_end_date)}`
-                                                                : ''}
-                                                        </span>
-                                                        {relLabel && (
-                                                            <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-600">
-                                                                {relLabel}
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                </Link>
-                                            </td>
-
-                                            {/* 2. Target Audience */}
-                                            <td className="px-6 py-4">
-                                                <span className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-50/80 px-3 py-1.5 text-xs font-bold text-[#1B1F5C] border border-indigo-100">
-                                                    <span>
-                                                        {item.target_scope === 'all' ? 'All Students' : `${item.target_sections?.length || 0} Section(s)`}
-                                                    </span>
-                                                </span>
-                                            </td>
-
-                                            {/* 3. Venue & Geofence */}
-                                            <td className="px-6 py-4">
-                                                <Link href={`/admin/analytics/events/${item.event_id}`} className="block">
-                                                    <div className="flex items-center gap-1.5 font-semibold text-gray-700">
-                                                        <MapPin className="h-4 w-4 text-gray-400 shrink-0" />
-                                                        <span className="truncate max-w-[140px]" title={item.location || 'Unspecified Venue'}>
-                                                            {item.location || 'Unspecified Venue'}
-                                                        </span>
-                                                    </div>
-                                                    {item.is_geofenced ? (
-                                                        <span className="inline-flex items-center gap-1.5 text-xs text-blue-600 font-bold mt-1">
-                                                            {item.geofence_type === 'polygon' ? (
-                                                                <Hexagon className="h-3.5 w-3.5" />
-                                                            ) : (
-                                                                <CircleDot className="h-3.5 w-3.5" />
-                                                            )}
-                                                            <span>
-                                                                {item.geofence_type === 'polygon' ? 'Hexagon Polygon' : `Radius (${item.radius_meters}m)`}
-                                                            </span>
-                                                        </span>
-                                                    ) : (
-                                                        <span className="text-xs text-gray-400 block mt-1">Location Free</span>
-                                                    )}
-                                                </Link>
-                                            </td>
-
-                                            {/* 4. Time-In Window */}
-                                            <td className="px-6 py-4 text-gray-600">
-                                                <Link href={`/admin/analytics/events/${item.event_id}`} className="block space-y-1.5">
-                                                    {item?.schedules?.[0]?.slots && item.schedules[0].slots.length > 0 ? (
-                                                        item.schedules[0].slots.map((slot, index) => (
-                                                            <div key={index} className="flex items-center gap-2 font-medium text-emerald-700 text-xs">
-                                                                <LogIn className="h-3.5 w-3.5 shrink-0" />
-                                                                <span>{formatAMPM(slot?.time_in_start)}</span>
-                                                                {slot?.time_in_end && (
-                                                                    <span className="text-gray-400">- {formatAMPM(slot.time_in_end)}</span>
-                                                                )}
-                                                            </div>
-                                                        ))
-                                                    ) : (
-                                                        <span className="text-gray-300">N/A</span>
-                                                    )}
-                                                </Link>
-                                            </td>
-
-                                            {/* 5. Time-Out Window */}
-                                            <td className="px-6 py-4 text-gray-600">
-                                                <Link href={`/admin/analytics/events/${item.event_id}`} className="block space-y-1.5">
-                                                    {item?.schedules?.[0]?.slots && item.schedules[0].slots.length > 0 ? (
-                                                        item.schedules[0].slots.map((slot, index) => (
-                                                            slot?.time_out_start ? (
-                                                                <div key={index} className="flex items-center gap-2 font-medium text-amber-700 text-xs">
-                                                                    <LogOut className="h-3.5 w-3.5 shrink-0" />
-                                                                    <span>{formatAMPM(slot.time_out_start)}</span>
-                                                                    {slot?.time_out_end && (
-                                                                        <span className="text-gray-400">- {formatAMPM(slot.time_out_end)}</span>
-                                                                    )}
-                                                                </div>
-                                                            ) : null
-                                                        ))
-                                                    ) : (
-                                                        <span className="text-gray-300">N/A</span>
-                                                    )}
-                                                </Link>
-                                            </td>
-
-                                            {/* 6. Status */}
-                                            <td className="px-6 py-4">
-                                                <Link href={`/admin/analytics/events/${item.event_id}`} className="block">
-                                                    <span
-                                                        className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${
-                                                            item.is_active ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'
-                                                        }`}
-                                                    >
-                                                        <span className={`h-2 w-2 rounded-full ${item.is_active ? 'bg-emerald-500' : 'bg-gray-400'}`} />
-                                                        {item.is_active ? 'Active' : 'Inactive'}
-                                                    </span>
-                                                </Link>
-                                            </td>
-
-                                            {/* 7. Actions */}
-                                            <td className="px-6 py-4 text-right">
-                                                <div className="flex items-center justify-end gap-1.5">
-                                                    {activeTab === 'pending' && (
-                                                        <>
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => handleQuickStatusChange(item, 'approved')}
-                                                                disabled={isQuickActing}
-                                                                className="rounded-lg p-2 text-emerald-600 hover:bg-emerald-50 transition disabled:opacity-40"
-                                                                title="Approve Event"
-                                                            >
-                                                                {isQuickActing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-5 w-5" />}
-                                                            </button>
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => handleQuickStatusChange(item, 'declined')}
-                                                                disabled={isQuickActing}
-                                                                className="rounded-lg p-2 text-rose-600 hover:bg-rose-50 transition disabled:opacity-40"
-                                                                title="Decline Event"
-                                                            >
-                                                                <XCircle className="h-5 w-5" />
-                                                            </button>
-                                                        </>
-                                                    )}
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => openEditModal(item, true)}
-                                                        className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-blue-700 transition"
-                                                        title="Duplicate Event"
-                                                    >
-                                                        <Copy className="h-5 w-5" />
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => openEditModal(item)}
-                                                        className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition"
-                                                        title="Edit Event"
-                                                    >
-                                                        <Pencil className="h-5 w-5" />
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => promptDelete(item)}
-                                                        className="rounded-lg p-2 text-gray-400 hover:bg-rose-50 hover:text-rose-600 transition"
-                                                        title="Delete Event"
-                                                    >
-                                                        <Trash2 className="h-5 w-5" />
-                                                    </button>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    );
-                                })
-                            ) : (
+                {/* EVENTS DATA TABLE */}
+                <main className="overflow-hidden rounded-2xl border border-gray-200/80 bg-white shadow-xs">
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs sm:text-sm text-gray-700">
+                            <thead className="bg-gray-50/80 text-[10px] font-extrabold uppercase tracking-wider text-gray-500 border-b border-gray-100">
                                 <tr>
-                                    <td colSpan={7} className="px-6 py-16 text-center text-gray-400 space-y-3">
-                                        <CalendarX className="h-10 w-10 mx-auto text-gray-300" />
-                                        <p className="font-semibold text-sm">No {activeTab} events found.</p>
-                                    </td>
+                                    <th className="px-4 sm:px-6 py-3.5">Event Details</th>
+                                    <th className="px-4 sm:px-6 py-3.5">Target Audience</th>
+                                    <th className="px-4 sm:px-6 py-3.5">Venue & Geofence</th>
+                                    <th className="px-4 sm:px-6 py-3.5">Morning Checkpoints</th>
+                                    <th className="px-4 sm:px-6 py-3.5">Afternoon Checkpoints</th>
+                                    <th className="px-4 sm:px-6 py-3.5">Status</th>
+                                    <th className="px-4 sm:px-6 py-3.5 text-right">Actions</th>
                                 </tr>
-                            )}
-                        </tbody>
-                    </table>
-                </div>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100 text-xs sm:text-sm" aria-live="polite">
+                                {events.data.length > 0 ? (
+                                    events.data.map((item) => {
+                                        const relLabel = relativeDateLabel(item.event_date);
+                                        const isQuickActing = quickActionEventId === item.event_id;
+                                        const slot = item?.schedules?.[0]?.slots?.[0];
+                                        const hasAfternoon = Boolean(slot?.has_afternoon);
+                                        return (
+                                            <tr key={item.event_id} className="hover:bg-gray-50/50 transition-colors">
+                                                {/* 1. Event Details */}
+                                                <td className="px-4 sm:px-6 py-4 max-w-[240px]">
+                                                    <Link href={`/admin/analytics/events/${item.event_id}`} className="block group">
+                                                        <div className="font-extrabold text-[#1B1F5C] truncate group-hover:underline text-sm sm:text-base" title={item.title}>
+                                                            {item.title}
+                                                        </div>
+                                                        <div className="flex items-center gap-2 text-xs text-gray-500 font-medium mt-1">
+                                                            <span>
+                                                                {formatDate(item.event_date)}
+                                                                {item.event_end_date && item.event_end_date !== item.event_date
+                                                                    ? ` - ${formatDate(item.event_end_date)}`
+                                                                    : ''}
+                                                            </span>
+                                                            {relLabel && (
+                                                                <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-600">
+                                                                    {relLabel}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    </Link>
+                                                </td>
+
+                                                {/* 2. Target Audience */}
+                                                <td className="px-4 sm:px-6 py-4">
+                                                    <span className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-50 px-3 py-1.5 text-xs font-bold text-[#1B1F5C] border border-indigo-100">
+                                                        <span>
+                                                            {item.target_scope === 'all' ? 'All Students' : `${item.target_sections?.length || 0} Section(s)`}
+                                                        </span>
+                                                    </span>
+                                                </td>
+
+                                                {/* 3. Venue & Geofence */}
+                                                <td className="px-4 sm:px-6 py-4">
+                                                    <Link href={`/admin/analytics/events/${item.event_id}`} className="block">
+                                                        <div className="flex items-center gap-1.5 font-bold text-gray-900">
+                                                            <MapPin className="h-4 w-4 text-[#F5A623] shrink-0" aria-hidden="true" />
+                                                            <span className="truncate max-w-[140px]" title={item.location || 'Unspecified Venue'}>
+                                                                {item.location || 'Unspecified Venue'}
+                                                            </span>
+                                                        </div>
+                                                        {item.is_geofenced ? (
+                                                            <span className="inline-flex items-center gap-1.5 text-[11px] text-[#1B1F5C] font-bold mt-1">
+                                                                {item.geofence_type === 'polygon' ? (
+                                                                    <Hexagon className="h-3.5 w-3.5 text-[#F5A623]" aria-hidden="true" />
+                                                                ) : (
+                                                                    <CircleDot className="h-3.5 w-3.5 text-[#F5A623]" aria-hidden="true" />
+                                                                )}
+                                                                <span>
+                                                                    {item.geofence_type === 'polygon' ? 'Hexagon Boundary' : `Radius (${item.radius_meters}m)`}
+                                                                </span>
+                                                            </span>
+                                                        ) : (
+                                                            <span className="text-[11px] text-gray-400 block mt-1 font-medium">Location Free</span>
+                                                        )}
+                                                    </Link>
+                                                </td>
+                                                
+                                                {/* 4. Morning Checkpoints */}
+                                                <td className="px-4 sm:px-6 py-4 text-gray-700">
+                                                    <Link href={`/admin/analytics/events/${item.event_id}`} className="block space-y-1">
+                                                        <div className="flex items-center gap-1.5 text-xs font-bold text-blue-700" title="Morning Time-In">
+                                                            <LogIn className="h-3 w-3 shrink-0 text-blue-600" />
+                                                            <span>In: {formatAMPM(typeof slot?.morning_time_in_start === 'string' ? slot.morning_time_in_start : typeof slot?.time_in_start === 'string' ? slot.time_in_start : undefined)}</span>
+                                                        </div>
+                                                        <div className="flex items-center gap-1.5 text-xs font-semibold text-indigo-700" title="Morning Time-Out">
+                                                            <LogOut className="h-3 w-3 shrink-0 text-indigo-600" />
+                                                            <span>Out: {formatAMPM(typeof slot?.morning_time_out_start === 'string' ? slot.morning_time_out_start : typeof slot?.time_out_start === 'string' ? slot.time_out_start : undefined)}</span>
+                                                        </div>
+                                                    </Link>
+                                                </td>
+
+                                                {/* 5. Afternoon Checkpoints */}
+                                                <td className="px-4 sm:px-6 py-4 text-gray-700">
+                                                    {hasAfternoon ? (
+                                                        <Link href={`/admin/analytics/events/${item.event_id}`} className="block space-y-1">
+                                                            <div className="flex items-center gap-1.5 text-xs font-bold text-amber-700" title="Afternoon Time-In">
+                                                                <LogIn className="h-3 w-3 shrink-0 text-amber-600" />
+                                                                <span>In: {formatAMPM(slot?.afternoon_time_in_start)}</span>
+                                                            </div>
+                                                            <div className="flex items-center gap-1.5 text-xs font-semibold text-purple-700" title="Afternoon Time-Out">
+                                                                <LogOut className="h-3 w-3 shrink-0 text-purple-600" />
+                                                                <span>Out: {formatAMPM(slot?.afternoon_time_out_start)}</span>
+                                                            </div>
+                                                        </Link>
+                                                    ) : (
+                                                        <span className="text-[11px] font-medium text-gray-400 italic">Disabled</span>
+                                                    )}
+                                                </td>
+
+                                                {/* 6. Status */}
+                                                <td className="px-4 sm:px-6 py-4">
+                                                    <Link href={`/admin/analytics/events/${item.event_id}`} className="block">
+                                                        <span
+                                                            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-0.5 text-xs font-bold border ${
+                                                                item.is_active ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-gray-100 text-gray-600 border-gray-200'
+                                                            }`}
+                                                        >
+                                                            <span className={`h-2 w-2 rounded-full ${item.is_active ? 'bg-emerald-500' : 'bg-gray-400'}`} aria-hidden="true" />
+                                                            {item.is_active ? 'Active' : 'Inactive'}
+                                                        </span>
+                                                    </Link>
+                                                </td>
+
+                                                {/* 7. Actions */}
+                                                <td className="px-4 sm:px-6 py-4 text-right">
+                                                    <div className="flex items-center justify-end gap-1">
+                                                        {activeTab === 'pending' && (
+                                                            <>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleQuickStatusChange(item, 'approved')}
+                                                                    disabled={isQuickActing}
+                                                                    className="rounded-lg p-2 min-h-[38px] text-emerald-700 hover:bg-emerald-50 focus-visible:ring-2 focus-visible:ring-[#F5A623] transition disabled:opacity-40"
+                                                                    title="Approve Event"
+                                                                    aria-label="Approve event"
+                                                                >
+                                                                    {isQuickActing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-5 w-5" />}
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleQuickStatusChange(item, 'declined')}
+                                                                    disabled={isQuickActing}
+                                                                    className="rounded-lg p-2 min-h-[38px] text-rose-700 hover:bg-rose-50 focus-visible:ring-2 focus-visible:ring-[#F5A623] transition disabled:opacity-40"
+                                                                    title="Decline Event"
+                                                                    aria-label="Decline event"
+                                                                >
+                                                                    <XCircle className="h-5 w-5" />
+                                                                </button>
+                                                            </>
+                                                        )}
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => openEditModal(item, true)}
+                                                            className="rounded-lg p-2 min-h-[38px] text-gray-400 hover:bg-indigo-50 hover:text-[#1B1F5C] focus-visible:ring-2 focus-visible:ring-[#F5A623] transition"
+                                                            title="Duplicate Event"
+                                                            aria-label="Duplicate event"
+                                                        >
+                                                            <Copy className="h-4.5 w-4.5" />
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => openEditModal(item)}
+                                                            className="rounded-lg p-2 min-h-[38px] text-gray-400 hover:bg-gray-100 hover:text-[#1B1F5C] focus-visible:ring-2 focus-visible:ring-[#F5A623] transition"
+                                                            title="Edit Event"
+                                                            aria-label="Edit event"
+                                                        >
+                                                            <Pencil className="h-4.5 w-4.5" />
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => promptDelete(item)}
+                                                            className="rounded-lg p-2 min-h-[38px] text-gray-400 hover:bg-rose-50 hover:text-rose-600 focus-visible:ring-2 focus-visible:ring-[#F5A623] transition"
+                                                            title="Delete Event"
+                                                            aria-label="Delete event"
+                                                        >
+                                                            <Trash2 className="h-4.5 w-4.5" />
+                                                        </button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })
+                                ) : (
+                                    <tr>
+                                        <td colSpan={7} className="px-6 py-16 text-center text-gray-400 space-y-2">
+                                            <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-[#1B1F5C]">
+                                                <CalendarX className="h-5 w-5" aria-hidden="true" />
+                                            </div>
+                                            <p className="font-bold text-gray-900 text-sm">No {activeTab} events found.</p>
+                                            <p className="text-xs text-gray-500">Try adjusting your search criteria or create a new event.</p>
+                                        </td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </main>
 
                 {events.links.length > 3 && (
-                    <nav className="flex flex-wrap items-center justify-center gap-1.5" aria-label="Pagination">
+                    <nav className="flex flex-wrap items-center justify-center gap-1.5 pt-2" aria-label="Pagination">
                         {events.links.map((link, idx) => (
                             <Link
                                 key={idx}
                                 href={link.url ?? '#'}
                                 preserveState
                                 preserveScroll
-                                className={`min-w-[2.25rem] rounded-xl px-3.5 py-2 text-center text-sm font-semibold transition ${
+                                className={`min-w-[2.25rem] min-h-[38px] flex items-center justify-center rounded-xl px-3.5 py-1.5 text-center text-xs font-bold transition-all focus-visible:ring-2 focus-visible:ring-[#F5A623] ${
                                     link.active
-                                        ? 'bg-[#1B1F5C] text-white'
+                                        ? 'bg-[#1B1F5C] text-white shadow-xs'
                                         : link.url
-                                        ? 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+                                        ? 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-100'
                                         : 'bg-white text-gray-300 border border-gray-100 pointer-events-none'
                                 }`}
                                 dangerouslySetInnerHTML={{ __html: link.label }}
@@ -783,35 +801,35 @@ export default function Events({
 
             {/* WIZARD FORM MODAL */}
             {isFormOpen && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-xs">
-                    <div className="flex w-full max-w-3xl max-h-[92vh] flex-col rounded-3xl bg-white shadow-2xl transition-all">
-                        <div className="flex items-center justify-between border-b border-gray-100 p-6 pb-4">
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-4 backdrop-blur-xs">
+                    <div className="flex w-full max-w-3xl max-h-[92vh] flex-col rounded-2xl bg-white shadow-xl transition-all border border-gray-200/80 overflow-hidden">
+                        <header className="flex items-center justify-between border-b border-gray-100 p-4 sm:p-5">
                             <div className="flex items-center gap-3">
-                                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#1B1F5C]/10 text-[#1B1F5C]">
-                                    <Calendar className="h-5 w-5" />
+                                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-[#1B1F5C] border border-indigo-100">
+                                    <Calendar className="h-5 w-5" aria-hidden="true" />
                                 </div>
                                 <div>
-                                    <h3 className="text-lg font-bold text-[#0F172A]">
+                                    <h3 className="text-base sm:text-lg font-black text-[#1B1F5C]">
                                         {editingEvent ? 'Edit Event Details' : 'Create New Event'}
                                     </h3>
-                                    <p className="text-xs text-gray-400">Step {currentStep} of 3: {
-                                        currentStep === 1 ? 'Event Basic Info, Target Audience & Schedule' :
+                                    <p className="text-xs font-medium text-gray-500">Step {currentStep} of 3: {
+                                        currentStep === 1 ? 'Basic Info, Target Audience & Checkpoint Ranges' :
                                         currentStep === 2 ? 'Venue & Geofencing' : 'Review & Confirmation'
                                     }</p>
                                 </div>
                             </div>
                             <button
                                 onClick={() => setIsFormOpen(false)}
-                                className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100"
-                                aria-label="Close"
+                                className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                aria-label="Close modal"
                             >
                                 <X className="h-5 w-5" />
                             </button>
-                        </div>
+                        </header>
 
                         {(hasFormErrors || timeValidationError) && (
-                            <div className="mx-6 mt-4 flex items-start gap-2.5 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
-                                <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
+                            <div className="mx-4 sm:mx-6 mt-4 flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 p-3.5 text-xs sm:text-sm text-rose-700" role="alert">
+                                <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" aria-hidden="true" />
                                 <div>
                                     <p className="font-bold">Please fix the following before saving:</p>
                                     <ul className="list-disc list-inside mt-1 space-y-0.5 text-xs">
@@ -824,12 +842,12 @@ export default function Events({
                             </div>
                         )}
 
-                        <form id="event-form" onSubmit={handleFormSubmit} className="flex-1 overflow-y-auto px-6 py-4 space-y-5 text-sm">
-                            {/* STEP 1: BASIC INFO, TARGET AUDIENCE & SCHEDULE */}
+                        <form id="event-form" onSubmit={handleFormSubmit} className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 text-xs sm:text-sm">
+                            {/* STEP 1: BASIC INFO, TARGET AUDIENCE & CHECKPOINT RANGES */}
                             {currentStep === 1 && (
-                                <div className="space-y-5 animate-fadeIn">
+                                <div className="space-y-4 animate-fadeIn">
                                     <div>
-                                        <label htmlFor="event-title" className="block font-bold uppercase tracking-wider text-gray-500 text-xs">
+                                        <label htmlFor="event-title" className="block font-bold uppercase tracking-wider text-gray-500 text-[10px]">
                                             Event Title *
                                         </label>
                                         <input
@@ -839,12 +857,12 @@ export default function Events({
                                             value={data.title}
                                             onChange={(e) => setData('title', e.target.value)}
                                             placeholder="e.g. University Sportsfest"
-                                            className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-gray-800 text-sm font-medium focus:border-[#1B1F5C] focus:ring-[#1B1F5C]"
+                                            className="mt-1 w-full min-h-[44px] rounded-xl border border-gray-300 bg-white px-3.5 py-2.5 text-gray-900 text-xs sm:text-sm font-medium focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623] focus-visible:outline-none shadow-xs"
                                         />
                                     </div>
 
                                     <div>
-                                        <label htmlFor="event-description" className="block font-bold uppercase tracking-wider text-gray-500 text-xs">
+                                        <label htmlFor="event-description" className="block font-bold uppercase tracking-wider text-gray-500 text-[10px]">
                                             Description
                                         </label>
                                         <textarea
@@ -853,17 +871,17 @@ export default function Events({
                                             value={data.description}
                                             onChange={(e) => setData('description', e.target.value)}
                                             placeholder="Optional details..."
-                                            className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white p-3.5 text-gray-800 text-sm font-medium focus:border-[#1B1F5C] focus:ring-[#1B1F5C]"
+                                            className="mt-1 w-full rounded-xl border border-gray-300 bg-white p-3.5 text-gray-900 text-xs sm:text-sm font-medium focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623] focus-visible:outline-none shadow-xs"
                                         />
                                     </div>
 
-                                    {/* TARGET AUDIENCE SCOPING (Matched Font Style & 2-Column Grid) */}
+                                    {/* TARGET AUDIENCE SCOPING */}
                                     <div className="space-y-2">
-                                        <label className="block font-bold uppercase tracking-wider text-gray-500 text-xs">
+                                        <label className="block font-bold uppercase tracking-wider text-gray-500 text-[10px]">
                                             Participant Target Audience Scope
                                         </label>
 
-                                        <div className="rounded-2xl border border-indigo-100 bg-indigo-50/30 p-4 space-y-3">
+                                        <div className="rounded-2xl border border-indigo-100 bg-indigo-50/30 p-3.5 space-y-3">
                                             <div className="grid grid-cols-2 gap-2">
                                                 <button
                                                     type="button"
@@ -871,10 +889,10 @@ export default function Events({
                                                         setData('target_scope', 'all');
                                                         setData('target_sections', []);
                                                     }}
-                                                    className={`py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 ${
+                                                    className={`min-h-[44px] py-2 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 focus-visible:ring-2 focus-visible:ring-[#F5A623] ${
                                                         data.target_scope === 'all'
                                                             ? 'bg-[#1B1F5C] text-white shadow-xs'
-                                                            : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+                                                            : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50'
                                                     }`}
                                                 >
                                                     All Students (University-wide)
@@ -882,10 +900,10 @@ export default function Events({
                                                 <button
                                                     type="button"
                                                     onClick={() => setData('target_scope', 'section')}
-                                                    className={`py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 ${
+                                                    className={`min-h-[44px] py-2 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 focus-visible:ring-2 focus-visible:ring-[#F5A623] ${
                                                         data.target_scope === 'section'
                                                             ? 'bg-[#1B1F5C] text-white shadow-xs'
-                                                            : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+                                                            : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50'
                                                     }`}
                                                 >
                                                     Specific Course & Sections
@@ -893,9 +911,9 @@ export default function Events({
                                             </div>
 
                                             {data.target_scope === 'section' && (
-                                                <div className="pt-2 space-y-2.5 animate-fadeIn">
+                                                <div className="pt-2 space-y-2 animate-fadeIn">
                                                     <div className="flex items-center justify-between">
-                                                        <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">
+                                                        <span className="text-[10px] font-extrabold text-gray-500 uppercase tracking-wider">
                                                             Select Target Courses & Sections:
                                                         </span>
                                                         {availableSections.length > 0 && (
@@ -921,7 +939,7 @@ export default function Events({
                                                     </div>
 
                                                     {availableSections.length === 0 ? (
-                                                        <p className="text-xs text-amber-600 italic bg-amber-50 p-3 rounded-xl border border-amber-200">
+                                                        <p className="text-xs text-amber-700 italic bg-amber-50 p-3 rounded-xl border border-amber-200">
                                                             No student records with course/section found in Student Management yet. You can still publish as 'All Students'.
                                                         </p>
                                                     ) : (
@@ -933,14 +951,14 @@ export default function Events({
                                                                         key={sectionStr}
                                                                         type="button"
                                                                         onClick={() => {
-                                                                            const updated = isSelected 
+                                                                            const updated = isSelected
                                                                                 ? data.target_sections.filter(s => s !== sectionStr)
                                                                                 : [...data.target_sections, sectionStr];
                                                                             setData('target_sections', updated);
                                                                         }}
-                                                                        className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between text-left ${
-                                                                            isSelected 
-                                                                                ? 'bg-[#1B1F5C] text-white shadow-xs' 
+                                                                        className={`w-full min-h-[40px] px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center justify-between text-left focus-visible:ring-2 focus-visible:ring-[#F5A623] ${
+                                                                            isSelected
+                                                                                ? 'bg-[#1B1F5C] text-white shadow-xs'
                                                                                 : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50'
                                                                         }`}
                                                                     >
@@ -966,9 +984,9 @@ export default function Events({
                                             label="Enable Multi-Day Event (Span Range)"
                                         />
 
-                                        <div className={`grid ${isMultiDay ? 'grid-cols-2' : 'grid-cols-1'} gap-3`}>
+                                        <div className={`grid ${isMultiDay ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'} gap-3`}>
                                             <div>
-                                                <label htmlFor="event-date" className="block font-bold uppercase tracking-wider text-gray-500 text-xs">
+                                                <label htmlFor="event-date" className="block font-bold uppercase tracking-wider text-gray-500 text-[10px]">
                                                     {isMultiDay ? 'Start Date *' : 'Event Date *'}
                                                 </label>
                                                 <input
@@ -977,13 +995,13 @@ export default function Events({
                                                     required
                                                     value={data.event_date}
                                                     onChange={(e) => setData('event_date', e.target.value)}
-                                                    className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-gray-800 text-sm font-medium focus:border-[#1B1F5C] focus:ring-[#1B1F5C]"
+                                                    className="mt-1 w-full min-h-[44px] rounded-xl border border-gray-300 bg-white px-3.5 py-2.5 text-gray-900 text-xs sm:text-sm font-medium focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623] focus-visible:outline-none shadow-xs"
                                                 />
                                             </div>
 
                                             {isMultiDay && (
                                                 <div>
-                                                    <label htmlFor="event-end-date" className="block font-bold uppercase tracking-wider text-gray-500 text-xs">
+                                                    <label htmlFor="event-end-date" className="block font-bold uppercase tracking-wider text-gray-500 text-[10px]">
                                                         End Date *
                                                     </label>
                                                     <input
@@ -993,7 +1011,7 @@ export default function Events({
                                                         min={data.event_date}
                                                         value={data.event_end_date || ''}
                                                         onChange={(e) => setData('event_end_date', e.target.value)}
-                                                        className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-gray-800 text-sm font-medium focus:border-[#1B1F5C] focus:ring-[#1B1F5C]"
+                                                        className="mt-1 w-full min-h-[44px] rounded-xl border border-gray-300 bg-white px-3.5 py-2.5 text-gray-900 text-xs sm:text-sm font-medium focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623] focus-visible:outline-none shadow-xs"
                                                     />
                                                 </div>
                                             )}
@@ -1001,18 +1019,18 @@ export default function Events({
                                     </div>
 
                                     {isMultiDay && (
-                                        <div className="rounded-2xl border border-blue-100 bg-blue-50/40 p-4 space-y-3">
-                                            <label className="block font-bold text-blue-900 uppercase tracking-wider text-xs">
+                                        <div className="rounded-2xl border border-indigo-100 bg-indigo-50/40 p-4 space-y-3">
+                                            <label className="block font-bold text-[#1B1F5C] uppercase tracking-wider text-[10px]">
                                                 Multi-Day Schedule Mode
                                             </label>
                                             <div className="grid grid-cols-2 gap-2">
                                                 <button
                                                     type="button"
                                                     onClick={() => setScheduleMode('uniform')}
-                                                    className={`py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 ${
+                                                    className={`min-h-[44px] py-2 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 focus-visible:ring-2 focus-visible:ring-[#F5A623] ${
                                                         scheduleMode === 'uniform'
                                                             ? 'bg-[#1B1F5C] text-white shadow-xs'
-                                                            : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+                                                            : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50'
                                                     }`}
                                                 >
                                                     Uniform Schedule (Same Hours Daily)
@@ -1020,10 +1038,10 @@ export default function Events({
                                                 <button
                                                     type="button"
                                                     onClick={() => setScheduleMode('custom')}
-                                                    className={`py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 ${
+                                                    className={`min-h-[44px] py-2 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 focus-visible:ring-2 focus-visible:ring-[#F5A623] ${
                                                         scheduleMode === 'custom'
                                                             ? 'bg-[#1B1F5C] text-white shadow-xs'
-                                                            : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+                                                            : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50'
                                                     }`}
                                                 >
                                                     Custom Daily Schedule (Different Hours)
@@ -1032,58 +1050,118 @@ export default function Events({
                                         </div>
                                     )}
 
+                                    {/* UNIFORM CHECKPOINT RANGES CONFIGURATION */}
                                     {isMultiDay && scheduleMode === 'uniform' && (
-                                        <div className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4 space-y-3">
-                                            <div className="flex items-center gap-2 font-bold text-emerald-800 text-xs">
-                                                <Calendar className="h-4 w-4" />
-                                                <span>Uniform Hours (Applied to All Days)</span>
+                                        <div className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4 space-y-4">
+                                            <div className="flex items-center justify-between">
+                                                <div className="flex items-center gap-2 font-bold text-emerald-800 text-xs">
+                                                    <Calendar className="h-4 w-4" />
+                                                    <span>Uniform Checkpoint Ranges (Applied to All Days)</span>
+                                                </div>
+                                                <FormSwitch
+                                                    checked={Boolean(uniformSchedule.has_afternoon)}
+                                                    onCheckedChange={(checked: boolean) => handleUniformChange('has_afternoon', checked)}
+                                                    label="Enable Afternoon Session"
+                                                />
                                             </div>
 
-                                            <div className="grid grid-cols-2 gap-3 items-end pt-2 border-t border-emerald-200/50">
-                                                <div>
-                                                    <label className="block font-bold text-gray-600 text-xs">Time-In Start *</label>
-                                                    <input
-                                                        type="time"
-                                                        required
-                                                        value={uniformSchedule.time_in_start ?? ''}
-                                                        onChange={(e) => handleUniformChange('time_in_start', e.target.value)}
-                                                        className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2 text-gray-800 text-sm font-medium"
-                                                    />
+                                            {/* Morning Checkpoints */}
+                                            <div className="p-3 bg-white rounded-xl border border-emerald-200 space-y-3">
+                                                <div className="flex items-center gap-1.5 text-xs font-extrabold text-blue-800">
+                                                    <Sun className="h-4 w-4 text-blue-600" />
+                                                    <span>Morning Session (Time-In & Time-Out Ranges)</span>
                                                 </div>
-                                                <div>
-                                                    <label className="block font-bold text-gray-600 text-xs">Time-In Cutoff</label>
-                                                    <input
-                                                        type="time"
-                                                        value={uniformSchedule.time_in_end ?? ''}
-                                                        onChange={(e) => handleUniformChange('time_in_end', e.target.value)}
-                                                        className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2 text-gray-800 text-sm font-medium"
-                                                    />
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                    <div>
+                                                        <label className="block font-bold text-gray-700 text-[10px]">Morning Time-In Window (Start to Cut-Off) *</label>
+                                                        <div className="flex items-center gap-2 mt-1">
+                                                            <input
+                                                                type="time"
+                                                                value={uniformSchedule.morning_time_in_start ?? ''}
+                                                                onChange={(e) => handleUniformChange('morning_time_in_start', e.target.value)}
+                                                                className="w-full min-h-[38px] rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-gray-900 font-medium text-xs focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                                            />
+                                                            <span className="text-gray-400 text-xs font-bold">to</span>
+                                                            <input
+                                                                type="time"
+                                                                value={uniformSchedule.morning_time_in_end ?? ''}
+                                                                onChange={(e) => handleUniformChange('morning_time_in_end', e.target.value)}
+                                                                className="w-full min-h-[38px] rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-gray-900 font-medium text-xs focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                    <div>
+                                                        <label className="block font-bold text-gray-700 text-[10px]">Morning Time-Out Window (Start to Cut-Off)</label>
+                                                        <div className="flex items-center gap-2 mt-1">
+                                                            <input
+                                                                type="time"
+                                                                value={uniformSchedule.morning_time_out_start ?? ''}
+                                                                onChange={(e) => handleUniformChange('morning_time_out_start', e.target.value)}
+                                                                className="w-full min-h-[38px] rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-gray-900 font-medium text-xs focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                                            />
+                                                            <span className="text-gray-400 text-xs font-bold">to</span>
+                                                            <input
+                                                                type="time"
+                                                                value={uniformSchedule.morning_time_out_end ?? ''}
+                                                                onChange={(e) => handleUniformChange('morning_time_out_end', e.target.value)}
+                                                                className="w-full min-h-[38px] rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-gray-900 font-medium text-xs focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                                            />
+                                                        </div>
+                                                    </div>
                                                 </div>
                                             </div>
 
-                                            <div className="grid grid-cols-2 gap-3 items-end pt-2 border-t border-emerald-200/50">
-                                                <div>
-                                                    <label className="block font-bold text-gray-600 text-xs">Time-Out Start</label>
-                                                    <input
-                                                        type="time"
-                                                        value={uniformSchedule.time_out_start ?? ''}
-                                                        onChange={(e) => handleUniformChange('time_out_start', e.target.value)}
-                                                        className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2 text-gray-800 text-sm font-medium"
-                                                    />
+                                            {/* Afternoon Checkpoints (Optional) */}
+                                            {uniformSchedule.has_afternoon && (
+                                                <div className="p-3 bg-white rounded-xl border border-emerald-200 space-y-3 animate-fadeIn">
+                                                    <div className="flex items-center gap-1.5 text-xs font-extrabold text-amber-800">
+                                                        <Sunset className="h-4 w-4 text-amber-600" />
+                                                        <span>Afternoon Session (Time-In & Time-Out Ranges)</span>
+                                                    </div>
+                                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                        <div>
+                                                            <label className="block font-bold text-gray-700 text-[10px]">Afternoon Time-In Window (Start to Cut-Off)</label>
+                                                            <div className="flex items-center gap-2 mt-1">
+                                                                <input
+                                                                    type="time"
+                                                                    value={uniformSchedule.afternoon_time_in_start ?? ''}
+                                                                    onChange={(e) => handleUniformChange('afternoon_time_in_start', e.target.value)}
+                                                                    className="w-full min-h-[38px] rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-gray-900 font-medium text-xs focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                                                />
+                                                                <span className="text-gray-400 text-xs font-bold">to</span>
+                                                                <input
+                                                                    type="time"
+                                                                    value={uniformSchedule.afternoon_time_in_end ?? ''}
+                                                                    onChange={(e) => handleUniformChange('afternoon_time_in_end', e.target.value)}
+                                                                    className="w-full min-h-[38px] rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-gray-900 font-medium text-xs focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                                                />
+                                                            </div>
+                                                        </div>
+                                                        <div>
+                                                            <label className="block font-bold text-gray-700 text-[10px]">Afternoon Time-Out Window (Start to Cut-Off)</label>
+                                                            <div className="flex items-center gap-2 mt-1">
+                                                                <input
+                                                                    type="time"
+                                                                    value={uniformSchedule.afternoon_time_out_start ?? ''}
+                                                                    onChange={(e) => handleUniformChange('afternoon_time_out_start', e.target.value)}
+                                                                    className="w-full min-h-[38px] rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-gray-900 font-medium text-xs focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                                                />
+                                                                <span className="text-gray-400 text-xs font-bold">to</span>
+                                                                <input
+                                                                    type="time"
+                                                                    value={uniformSchedule.afternoon_time_out_end ?? ''}
+                                                                    onChange={(e) => handleUniformChange('afternoon_time_out_end', e.target.value)}
+                                                                    className="w-full min-h-[38px] rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-gray-900 font-medium text-xs focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                                                />
+                                                            </div>
+                                                        </div>
+                                                    </div>
                                                 </div>
-                                                <div>
-                                                    <label className="block font-bold text-gray-600 text-xs">Time-Out Cutoff</label>
-                                                    <input
-                                                        type="time"
-                                                        value={uniformSchedule.time_out_end ?? ''}
-                                                        onChange={(e) => handleUniformChange('time_out_end', e.target.value)}
-                                                        className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2 text-gray-800 text-sm font-medium"
-                                                    />
-                                                </div>
-                                            </div>
+                                            )}
                                         </div>
                                     )}
 
+                                    {/* CUSTOM CHECKPOINT RANGES PER SLOT/DAY */}
                                     {(!isMultiDay || scheduleMode === 'custom') &&
                                         data.schedules.map((schedule, dayIndex) => {
                                             const dayNumber = dayIndex + 1;
@@ -1095,7 +1173,7 @@ export default function Events({
                                                             <span>
                                                                 {isMultiDay
                                                                     ? `Day ${dayNumber} (${formatDate(schedule.date)}) Schedule`
-                                                                    : 'Event Schedule Configuration'}
+                                                                    : 'Event Schedule & Checkpoint Ranges'}
                                                             </span>
                                                         </div>
 
@@ -1103,108 +1181,198 @@ export default function Events({
                                                             type="button"
                                                             onClick={() => {
                                                                 const updated = [...data.schedules];
-                                                                updated[dayIndex].slots.push({
-                                                                    time_in_start: '13:00',
-                                                                    time_in_end: '13:30',
-                                                                    time_out_start: '17:00',
-                                                                    time_out_end: '17:30',
-                                                                });
+                                                                updated[dayIndex].slots.push({ ...DEFAULT_SLOT });
                                                                 setData('schedules', updated);
-                                                                validateTimeSlots(updated, setTimeValidationError);
+                                                                validateTimeSlots(updated as any, setTimeValidationError);
                                                             }}
-                                                            className="inline-flex items-center gap-1 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 transition"
+                                                            className="inline-flex items-center gap-1 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 focus-visible:ring-2 focus-visible:ring-[#F5A623] transition"
                                                         >
                                                             <Plus className="h-4 w-4" />
                                                             <span>Add Time Slot</span>
                                                         </button>
                                                     </div>
 
-                                                    {schedule.slots.map((slot, slotIndex) => (
-                                                        <div key={slotIndex} className="relative rounded-xl border border-emerald-200 bg-white p-3.5 space-y-3 shadow-2xs">
-                                                            {schedule.slots.length > 1 && (
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => {
-                                                                        const updated = [...data.schedules];
-                                                                        updated[dayIndex].slots.splice(slotIndex, 1);
-                                                                        setData('schedules', updated);
-                                                                        validateTimeSlots(updated, setTimeValidationError);
-                                                                    }}
-                                                                    className="absolute right-2 top-2 rounded-lg p-1 text-gray-400 hover:bg-rose-50 hover:text-rose-600 transition"
-                                                                    title="Remove Slot"
-                                                                >
-                                                                    <X className="h-4 w-4" />
-                                                                </button>
-                                                            )}
-
-                                                            <span className="text-xs font-bold uppercase text-emerald-700 tracking-wider block">
-                                                                Slot {slotIndex + 1}
-                                                            </span>
-
-                                                            <div className="grid grid-cols-2 gap-3 items-end">
-                                                                <div>
-                                                                    <label className="block font-bold text-gray-600 text-xs">Time-In Start *</label>
-                                                                    <input
-                                                                        type="time"
-                                                                        required
-                                                                        value={slot.time_in_start ?? ''}
-                                                                        onChange={(e) => {
+                                                    {schedule.slots.map((slot, slotIndex) => {
+                                                        const slotHasAfternoon = Boolean(slot.has_afternoon);
+                                                        return (
+                                                            <div key={slotIndex} className="relative rounded-xl border border-emerald-200 bg-white p-4 space-y-4 shadow-2xs">
+                                                                {schedule.slots.length > 1 && (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => {
                                                                             const updated = [...data.schedules];
-                                                                            updated[dayIndex].slots[slotIndex].time_in_start = e.target.value;
+                                                                            updated[dayIndex].slots.splice(slotIndex, 1);
                                                                             setData('schedules', updated);
-                                                                            validateTimeSlots(updated, setTimeValidationError);
+                                                                            validateTimeSlots(updated as any, setTimeValidationError);
                                                                         }}
-                                                                        className="mt-1.5 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-gray-800 font-medium text-sm"
+                                                                        className="absolute right-2 top-2 rounded-lg p-1 text-gray-400 hover:bg-rose-50 hover:text-rose-600 focus-visible:ring-2 focus-visible:ring-[#F5A623] transition"
+                                                                        title="Remove Slot"
+                                                                        aria-label="Remove time slot"
+                                                                    >
+                                                                        <X className="h-4 w-4" />
+                                                                    </button>
+                                                                )}
+
+                                                                <div className="flex items-center justify-between border-b pb-2">
+                                                                    <span className="text-[11px] font-extrabold uppercase text-emerald-800 tracking-wider">
+                                                                        Slot {slotIndex + 1} Configuration
+                                                                    </span>
+                                                                    <FormSwitch
+                                                                        checked={slotHasAfternoon}
+                                                                        onCheckedChange={(checked: boolean) => {
+                                                                            const updated = [...data.schedules];
+                                                                            updated[dayIndex].slots[slotIndex] = {
+                                                                                ...updated[dayIndex].slots[slotIndex],
+                                                                                has_afternoon: checked,
+                                                                                afternoon_time_in_start: checked ? (updated[dayIndex].slots[slotIndex].afternoon_time_in_start || '13:00') : '',
+                                                                                afternoon_time_in_end: checked ? (updated[dayIndex].slots[slotIndex].afternoon_time_in_end || '13:30') : '',
+                                                                                afternoon_time_out_start: checked ? (updated[dayIndex].slots[slotIndex].afternoon_time_out_start || '16:30') : '',
+                                                                                afternoon_time_out_end: checked ? (updated[dayIndex].slots[slotIndex].afternoon_time_out_end || '17:00') : '',
+                                                                            };
+                                                                            setData('schedules', updated);
+                                                                            validateTimeSlots(updated as any, setTimeValidationError);
+                                                                        }}
+                                                                        label="Enable Afternoon Session"
                                                                     />
                                                                 </div>
-                                                                <div>
-                                                                    <label className="block font-bold text-gray-600 text-xs">Time-In Cutoff</label>
-                                                                    <input
-                                                                        type="time"
-                                                                        value={slot.time_in_end ?? ''}
-                                                                        onChange={(e) => {
-                                                                            const updated = [...data.schedules];
-                                                                            updated[dayIndex].slots[slotIndex].time_in_end = e.target.value;
-                                                                            setData('schedules', updated);
-                                                                            validateTimeSlots(updated, setTimeValidationError);
-                                                                        }}
-                                                                        className="mt-1.5 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-gray-800 font-medium text-sm"
-                                                                    />
+
+                                                                {/* Morning Session */}
+                                                                <div className="space-y-2 bg-blue-50/40 p-3 rounded-xl border border-blue-100">
+                                                                    <div className="flex items-center gap-1 text-xs font-bold text-blue-800">
+                                                                        <Sun className="h-3.5 w-3.5 text-blue-600" />
+                                                                        <span>Morning Session (Time-In & Time-Out Ranges)</span>
+                                                                    </div>
+                                                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                                        <div>
+                                                                            <label className="block font-bold text-gray-700 text-[10px]">Morning Time-In Window (Start to Cut-Off) *</label>
+                                                                            <div className="flex items-center gap-2 mt-1">
+                                                                                <input
+                                                                                    type="time"
+                                                                                    required
+                                                                                    value={slot.morning_time_in_start ?? ''}
+                                                                                    onChange={(e) => {
+                                                                                        const updated = [...data.schedules];
+                                                                                        updated[dayIndex].slots[slotIndex].morning_time_in_start = e.target.value;
+                                                                                        setData('schedules', updated);
+                                                                                        validateTimeSlots(updated as any, setTimeValidationError);
+                                                                                    }}
+                                                                                    className="w-full min-h-[38px] rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-gray-900 font-medium text-xs focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                                                                />
+                                                                                <span className="text-gray-400 text-xs font-bold">to</span>
+                                                                                <input
+                                                                                    type="time"
+                                                                                    value={slot.morning_time_in_end ?? ''}
+                                                                                    onChange={(e) => {
+                                                                                        const updated = [...data.schedules];
+                                                                                        updated[dayIndex].slots[slotIndex].morning_time_in_end = e.target.value;
+                                                                                        setData('schedules', updated);
+                                                                                        validateTimeSlots(updated as any, setTimeValidationError);
+                                                                                    }}
+                                                                                    className="w-full min-h-[38px] rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-gray-900 font-medium text-xs focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                                                                />
+                                                                            </div>
+                                                                        </div>
+                                                                        <div>
+                                                                            <label className="block font-bold text-gray-700 text-[10px]">Morning Time-Out Window (Start to Cut-Off)</label>
+                                                                            <div className="flex items-center gap-2 mt-1">
+                                                                                <input
+                                                                                    type="time"
+                                                                                    value={slot.morning_time_out_start ?? ''}
+                                                                                    onChange={(e) => {
+                                                                                        const updated = [...data.schedules];
+                                                                                        updated[dayIndex].slots[slotIndex].morning_time_out_start = e.target.value;
+                                                                                        setData('schedules', updated);
+                                                                                        validateTimeSlots(updated as any, setTimeValidationError);
+                                                                                    }}
+                                                                                    className="w-full min-h-[38px] rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-gray-900 font-medium text-xs focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                                                                />
+                                                                                <span className="text-gray-400 text-xs font-bold">to</span>
+                                                                                <input
+                                                                                    type="time"
+                                                                                    value={slot.morning_time_out_end ?? ''}
+                                                                                    onChange={(e) => {
+                                                                                        const updated = [...data.schedules];
+                                                                                        updated[dayIndex].slots[slotIndex].morning_time_out_end = e.target.value;
+                                                                                        setData('schedules', updated);
+                                                                                        validateTimeSlots(updated as any, setTimeValidationError);
+                                                                                    }}
+                                                                                    className="w-full min-h-[38px] rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-gray-900 font-medium text-xs focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                                                                />
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
                                                                 </div>
+
+                                                                {/* Afternoon Session (Optional) */}
+                                                                {slotHasAfternoon && (
+                                                                    <div className="space-y-2 bg-amber-50/40 p-3 rounded-xl border border-amber-100 animate-fadeIn">
+                                                                        <div className="flex items-center gap-1 text-xs font-bold text-amber-800">
+                                                                            <Sunset className="h-3.5 w-3.5 text-amber-600" />
+                                                                            <span>Afternoon Session (Time-In & Time-Out Ranges)</span>
+                                                                        </div>
+                                                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                                            <div>
+                                                                                <label className="block font-bold text-gray-700 text-[10px]">Afternoon Time-In Window (Start to Cut-Off)</label>
+                                                                                <div className="flex items-center gap-2 mt-1">
+                                                                                    <input
+                                                                                        type="time"
+                                                                                        value={slot.afternoon_time_in_start ?? ''}
+                                                                                        onChange={(e) => {
+                                                                                            const updated = [...data.schedules];
+                                                                                            updated[dayIndex].slots[slotIndex].afternoon_time_in_start = e.target.value;
+                                                                                            setData('schedules', updated);
+                                                                                            validateTimeSlots(updated as any, setTimeValidationError);
+                                                                                        }}
+                                                                                        className="w-full min-h-[38px] rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-gray-900 font-medium text-xs focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                                                                    />
+                                                                                    <span className="text-gray-400 text-xs font-bold">to</span>
+                                                                                    <input
+                                                                                        type="time"
+                                                                                        value={slot.afternoon_time_in_end ?? ''}
+                                                                                        onChange={(e) => {
+                                                                                            const updated = [...data.schedules];
+                                                                                            updated[dayIndex].slots[slotIndex].afternoon_time_in_end = e.target.value;
+                                                                                            setData('schedules', updated);
+                                                                                            validateTimeSlots(updated as any, setTimeValidationError);
+                                                                                        }}
+                                                                                        className="w-full min-h-[38px] rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-gray-900 font-medium text-xs focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                                                                    />
+                                                                                </div>
+                                                                            </div>
+                                                                            <div>
+                                                                                <label className="block font-bold text-gray-700 text-[10px]">Afternoon Time-Out Window (Start to Cut-Off)</label>
+                                                                                <div className="flex items-center gap-2 mt-1">
+                                                                                    <input
+                                                                                        type="time"
+                                                                                        value={slot.afternoon_time_out_start ?? ''}
+                                                                                        onChange={(e) => {
+                                                                                            const updated = [...data.schedules];
+                                                                                            updated[dayIndex].slots[slotIndex].afternoon_time_out_start = e.target.value;
+                                                                                            setData('schedules', updated);
+                                                                                            validateTimeSlots(updated as any, setTimeValidationError);
+                                                                                        }}
+                                                                                        className="w-full min-h-[38px] rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-gray-900 font-medium text-xs focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                                                                    />
+                                                                                    <span className="text-gray-400 text-xs font-bold">to</span>
+                                                                                    <input
+                                                                                        type="time"
+                                                                                        value={slot.afternoon_time_out_end ?? ''}
+                                                                                        onChange={(e) => {
+                                                                                            const updated = [...data.schedules];
+                                                                                            updated[dayIndex].slots[slotIndex].afternoon_time_out_end = e.target.value;
+                                                                                            setData('schedules', updated);
+                                                                                            validateTimeSlots(updated as any, setTimeValidationError);
+                                                                                        }}
+                                                                                        className="w-full min-h-[38px] rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-gray-900 font-medium text-xs focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                                                                    />
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                )}
                                                             </div>
-
-                                                            <div className="grid grid-cols-2 gap-3 items-end pt-2 border-t border-gray-100">
-                                                                <div>
-                                                                    <label className="block font-bold text-gray-600 text-xs">Time-Out Start</label>
-                                                                    <input
-                                                                        type="time"
-                                                                        value={slot.time_out_start ?? ''}
-                                                                        onChange={(e) => {
-                                                                            const updated = [...data.schedules];
-                                                                            updated[dayIndex].slots[slotIndex].time_out_start = e.target.value;
-                                                                            setData('schedules', updated);
-                                                                            validateTimeSlots(updated, setTimeValidationError);
-                                                                        }}
-                                                                        className="mt-1.5 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-gray-800 font-medium text-sm"
-                                                                    />
-                                                                </div>
-                                                                <div>
-                                                                    <label className="block font-bold text-gray-600 text-xs">Time-Out Cutoff</label>
-                                                                    <input
-                                                                        type="time"
-                                                                        value={slot.time_out_end ?? ''}
-                                                                        onChange={(e) => {
-                                                                            const updated = [...data.schedules];
-                                                                            updated[dayIndex].slots[slotIndex].time_out_end = e.target.value;
-                                                                            setData('schedules', updated);
-                                                                            validateTimeSlots(updated, setTimeValidationError);
-                                                                        }}
-                                                                        className="mt-1.5 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-gray-800 font-medium text-sm"
-                                                                    />
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                    ))}
+                                                        );
+                                                    })}
                                                 </div>
                                             );
                                         })}
@@ -1215,8 +1383,8 @@ export default function Events({
                             {currentStep === 2 && (
                                 <div className="space-y-4 animate-fadeIn">
                                     <div>
-                                        <div className="flex items-center justify-between">
-                                            <label htmlFor="event-location" className="block font-bold uppercase tracking-wider text-gray-500 text-xs">
+                                        <div className="flex items-center justify-between flex-wrap gap-2">
+                                            <label htmlFor="event-location" className="block font-bold uppercase tracking-wider text-gray-500 text-[10px]">
                                                 Venue Name
                                             </label>
                                             {venues.length > 0 && (
@@ -1228,7 +1396,7 @@ export default function Events({
                                                             key={idx}
                                                             type="button"
                                                             onClick={() => handleApplyVenuePreset(venue)}
-                                                            className="text-[11px] font-bold text-[#1B1F5C] bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded-lg transition"
+                                                            className="text-[11px] font-bold text-[#1B1F5C] bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded-lg focus-visible:ring-2 focus-visible:ring-[#F5A623] transition"
                                                         >
                                                             {venue.location}
                                                         </button>
@@ -1237,7 +1405,7 @@ export default function Events({
                                             )}
                                         </div>
 
-                                        <div className="mt-1.5 flex items-center gap-2">
+                                        <div className="mt-1 flex items-center gap-2">
                                             <input
                                                 id="event-location"
                                                 type="text"
@@ -1253,14 +1421,15 @@ export default function Events({
                                                     }
                                                 }}
                                                 placeholder="e.g. MMSU Main Gym"
-                                                className="w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-gray-800 text-sm font-medium focus:border-[#1B1F5C] focus:ring-[#1B1F5C]"
+                                                className="w-full min-h-[44px] rounded-xl border border-gray-300 bg-white px-3.5 py-2.5 text-gray-900 text-xs sm:text-sm font-medium focus-visible:border-[#F5A623] focus-visible:ring-2 focus-visible:ring-[#F5A623] focus-visible:outline-none shadow-xs"
                                             />
                                             <button
                                                 type="button"
                                                 onClick={() => geocodeVenueName()}
                                                 disabled={isSearchingLocation}
-                                                className="rounded-xl bg-blue-50 border border-blue-200 p-2.5 text-blue-700 hover:bg-blue-100 font-bold transition shrink-0"
+                                                className="min-h-[44px] min-w-[44px] rounded-xl bg-blue-50 border border-blue-200 p-2.5 text-blue-700 hover:bg-blue-100 font-bold focus-visible:ring-2 focus-visible:ring-[#F5A623] transition shrink-0 flex items-center justify-center"
                                                 title="Locate Venue on Map"
+                                                aria-label="Locate venue on map"
                                             >
                                                 {isSearchingLocation ? (
                                                     <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
@@ -1270,61 +1439,61 @@ export default function Events({
                                             </button>
                                         </div>
                                         {geocodeConfirmation && (
-                                            <p className="mt-1.5 flex items-center gap-1.5 text-xs text-emerald-600 font-semibold">
+                                            <p className="mt-1.5 flex items-center gap-1.5 text-xs text-emerald-700 font-semibold">
                                                 <CheckCircle2 className="h-4 w-4 shrink-0" />
                                                 <span className="truncate">Matched: {geocodeConfirmation}</span>
                                             </p>
                                         )}
                                     </div>
 
-                                    <div className="rounded-2xl border border-blue-100 bg-blue-50/30 p-4 space-y-3">
+                                    <div className="rounded-2xl border border-indigo-100 bg-indigo-50/30 p-4 space-y-3">
                                         <div className="flex items-center justify-between">
-                                            <div className="flex items-center gap-2 font-bold text-blue-900 text-xs">
-                                                <Navigation className="h-4 w-4" />
+                                            <div className="flex items-center gap-2 font-bold text-[#1B1F5C] text-xs">
+                                                <Navigation className="h-4 w-4 text-[#F5A623]" />
                                                 <span>GPS Geofence Location Boundary</span>
                                             </div>
                                             <FormSwitch
                                                 checked={data.is_geofenced}
                                                 onCheckedChange={(checked: boolean) => setData('is_geofenced', checked)}
                                                 label="Enforce Geofence"
-                                                activeClass="peer-checked:bg-blue-600"
+                                                activeClass="peer-checked:bg-[#1B1F5C]"
                                             />
                                         </div>
 
                                         {data.is_geofenced && (
-                                            <div className="space-y-3 pt-2 border-t border-blue-100">
-                                                <div className="grid grid-cols-2 gap-2 bg-blue-100/50 p-1.5 rounded-xl">
+                                            <div className="space-y-3 pt-2 border-t border-indigo-100">
+                                                <div className="grid grid-cols-2 gap-2 bg-indigo-100/50 p-1 rounded-xl">
                                                     <button
                                                         type="button"
                                                         onClick={() => setData('geofence_type', 'radius')}
-                                                        className={`py-2 rounded-lg font-bold text-xs transition flex items-center justify-center gap-1.5 ${
+                                                        className={`min-h-[38px] py-1.5 px-3 rounded-lg font-bold text-xs transition flex items-center justify-center gap-1.5 focus-visible:ring-2 focus-visible:ring-[#F5A623] ${
                                                             data.geofence_type === 'radius'
-                                                                ? 'bg-white text-blue-900 shadow-xs'
-                                                                : 'text-gray-500 hover:text-gray-800'
+                                                                ? 'bg-white text-[#1B1F5C] shadow-xs'
+                                                                : 'text-gray-600 hover:text-gray-900'
                                                         }`}
                                                     >
-                                                        <CircleDot className="h-4 w-4" />
+                                                        <CircleDot className="h-4 w-4 text-[#F5A623]" />
                                                         <span>Circular Radius</span>
                                                     </button>
                                                     <button
                                                         type="button"
                                                         onClick={() => setData('geofence_type', 'polygon')}
-                                                        className={`py-2 rounded-lg font-bold text-xs transition flex items-center justify-center gap-1.5 ${
+                                                        className={`min-h-[38px] py-1.5 px-3 rounded-lg font-bold text-xs transition flex items-center justify-center gap-1.5 focus-visible:ring-2 focus-visible:ring-[#F5A623] ${
                                                             data.geofence_type === 'polygon'
-                                                                ? 'bg-white text-blue-900 shadow-xs'
-                                                                : 'text-gray-500 hover:text-gray-800'
+                                                                ? 'bg-white text-[#1B1F5C] shadow-xs'
+                                                                : 'text-gray-600 hover:text-gray-900'
                                                         }`}
                                                     >
-                                                        <Hexagon className="h-4 w-4" />
+                                                        <Hexagon className="h-4 w-4 text-[#F5A623]" />
                                                         <span>Hexagon Area</span>
                                                     </button>
                                                 </div>
 
                                                 {data.geofence_type === 'radius' && (
                                                     <div>
-                                                        <div className="flex items-center justify-between text-xs font-bold text-gray-600 mb-1.5">
+                                                        <div className="flex items-center justify-between text-xs font-bold text-gray-700 mb-1.5">
                                                             <span>Check-In Radius:</span>
-                                                            <span className="text-blue-700">{data.radius_meters} meters</span>
+                                                            <span className="text-[#1B1F5C] font-extrabold">{data.radius_meters} meters</span>
                                                         </div>
                                                         <input
                                                             type="range"
@@ -1358,24 +1527,24 @@ export default function Events({
                                 <div className="space-y-4 animate-fadeIn">
                                     <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4 space-y-3">
                                         <div className="flex items-center gap-2 font-bold text-[#1B1F5C] text-sm">
-                                            <FileText className="h-4 w-4" />
+                                            <FileText className="h-4 w-4 text-[#F5A623]" />
                                             <span>Event Configuration Summary ({data.schedules.length} {data.schedules.length === 1 ? 'Day' : 'Days'})</span>
                                         </div>
 
-                                        <div className="grid grid-cols-2 gap-4 text-sm pt-2 border-t border-gray-200">
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs sm:text-sm pt-2 border-t border-gray-200">
                                             <div>
-                                                <span className="text-gray-400 block font-bold uppercase tracking-wider text-xs">Title</span>
-                                                <p className="font-bold text-gray-800 mt-1">{data.title || 'Untitled Event'}</p>
+                                                <span className="text-gray-400 block font-bold uppercase tracking-wider text-[10px]">Title</span>
+                                                <p className="font-extrabold text-gray-900 mt-0.5">{data.title || 'Untitled Event'}</p>
                                             </div>
                                             <div>
-                                                <span className="text-gray-400 block font-bold uppercase tracking-wider text-xs">Target Audience</span>
-                                                <p className="font-bold text-indigo-900 mt-1">
+                                                <span className="text-gray-400 block font-bold uppercase tracking-wider text-[10px]">Target Audience</span>
+                                                <p className="font-bold text-[#1B1F5C] mt-0.5">
                                                     {data.target_scope === 'all' ? 'All Students (University-wide)' : `${data.target_sections.length} Section(s) Selected`}
                                                 </p>
                                             </div>
                                             <div>
-                                                <span className="text-gray-400 block font-bold uppercase tracking-wider text-xs">Date Span</span>
-                                                <p className="font-bold text-gray-800 mt-1">
+                                                <span className="text-gray-400 block font-bold uppercase tracking-wider text-[10px]">Date Span</span>
+                                                <p className="font-bold text-gray-900 mt-0.5">
                                                     {data.event_date ? formatDate(data.event_date) : 'Not set'}
                                                     {data.event_end_date && data.event_end_date !== data.event_date
                                                         ? ` to ${formatDate(data.event_end_date)}`
@@ -1383,8 +1552,8 @@ export default function Events({
                                                 </p>
                                             </div>
                                             <div>
-                                                <span className="text-gray-400 block font-bold uppercase tracking-wider text-xs">Venue</span>
-                                                <p className="font-bold text-gray-800 mt-1">{data.location || 'Unspecified Venue'}</p>
+                                                <span className="text-gray-400 block font-bold uppercase tracking-wider text-[10px]">Venue</span>
+                                                <p className="font-bold text-gray-900 mt-0.5">{data.location || 'Unspecified Venue'}</p>
                                             </div>
                                         </div>
                                     </div>
@@ -1398,13 +1567,13 @@ export default function Events({
                             )}
                         </form>
 
-                        <div className="flex items-center justify-between border-t border-gray-100 p-6 pt-4">
+                        <footer className="flex items-center justify-between border-t border-gray-100 p-4 sm:p-5 bg-white">
                             <div>
                                 {currentStep > 1 && (
                                     <button
                                         type="button"
                                         onClick={() => setCurrentStep(currentStep - 1)}
-                                        className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 px-4 py-2.5 font-bold text-gray-600 hover:bg-gray-50 text-sm"
+                                        className="inline-flex items-center gap-1.5 min-h-[44px] rounded-xl border border-gray-300 px-4 py-2.5 font-bold text-gray-700 hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-[#F5A623] text-xs sm:text-sm"
                                     >
                                         <ArrowLeft className="h-4 w-4" />
                                         <span>Back</span>
@@ -1416,7 +1585,7 @@ export default function Events({
                                 <button
                                     type="button"
                                     onClick={() => setIsFormOpen(false)}
-                                    className="rounded-xl border border-gray-200 px-4 py-2.5 font-bold text-gray-600 hover:bg-gray-50 text-sm"
+                                    className="min-h-[44px] rounded-xl border border-gray-300 px-4 py-2.5 font-bold text-gray-700 hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-[#F5A623] text-xs sm:text-sm"
                                 >
                                     Cancel
                                 </button>
@@ -1425,23 +1594,23 @@ export default function Events({
                                     <button
                                         type="button"
                                         onClick={() => setCurrentStep(currentStep + 1)}
-                                        className="inline-flex items-center gap-1.5 rounded-xl bg-[#1B1F5C] px-5 py-2.5 font-bold text-white hover:bg-[#151848] text-sm"
+                                        className="inline-flex items-center gap-1.5 min-h-[44px] rounded-xl bg-[#1B1F5C] px-5 py-2.5 font-bold text-white hover:bg-[#131644] focus-visible:ring-2 focus-visible:ring-[#F5A623] text-xs sm:text-sm shadow-md"
                                     >
                                         <span>Next Step</span>
-                                        <ArrowRight className="h-4 w-4" />
+                                        <ArrowRight className="h-4 w-4 text-[#F5A623]" />
                                     </button>
                                 ) : (
                                     <button
                                         type="submit"
                                         form="event-form"
                                         disabled={processing || Boolean(timeValidationError)}
-                                        className="rounded-xl bg-[#1B1F5C] px-5 py-2.5 font-bold text-white hover:bg-[#151848] disabled:opacity-50 text-sm"
+                                        className="min-h-[44px] rounded-xl bg-[#1B1F5C] px-5 py-2.5 font-bold text-white hover:bg-[#131644] focus-visible:ring-2 focus-visible:ring-[#F5A623] disabled:opacity-50 text-xs sm:text-sm shadow-md"
                                     >
                                         {processing ? 'Saving...' : editingEvent ? 'Save Changes' : 'Create Event'}
                                     </button>
                                 )}
                             </div>
-                        </div>
+                        </footer>
                     </div>
                 </div>
             )}

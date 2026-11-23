@@ -6,7 +6,7 @@ import {
     Calendar,
     BarChart3,
     BookOpen,
-    KeyRound,
+    UserCheck, // Updated icon for Organizers
     LogOut,
     X,
 } from 'lucide-react';
@@ -26,10 +26,10 @@ export function AdminSidebar({ isOpen = false, onClose }: AdminSidebarProps) {
         () => [
             { title: 'Dashboard', href: '/admin/dashboard', icon: House },
             { title: 'Student Management', href: '/admin/students', icon: Users },
-            { title: 'Organizer Keys', href: '/admin/organizer-keys', icon: KeyRound },
+            { title: 'Organizers', href: '/admin/organizers', icon: UserCheck }, // Updated URL & icon
             { title: 'Events', href: '/admin/events', icon: Calendar },
             { title: 'Analysis', href: '/admin/analytics', icon: BarChart3 },
-            { title: 'Student Clearance', href: '/admin/clearance', icon: BookOpen },
+            { title: 'Sanctions Management', href: '/admin/sanctions', icon: BookOpen },
         ],
         []
     );

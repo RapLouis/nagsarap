@@ -32,45 +32,56 @@ export default function SettingsLayout({ children }: PropsWithChildren) {
     const { isCurrentOrParentUrl } = useCurrentUrl();
 
     return (
-        <div className="px-4 py-6">
-            <Heading
-                title="Settings"
-                description="Manage your profile and account settings"
-            />
+        <div className="min-h-screen bg-[#F5F6FA] p-4 sm:p-6 lg:p-8 font-sans text-gray-900 antialiased space-y-6">
+            <div className="max-w-7xl mx-auto space-y-6">
+                <Heading
+                    title="Account Settings"
+                    description="Manage your profile information, security preferences, and theme appearance"
+                />
 
-            <div className="flex flex-col lg:flex-row lg:space-x-12">
-                <aside className="w-full max-w-xl lg:w-48">
-                    <nav
-                        className="flex flex-col space-y-1 space-x-0"
-                        aria-label="Settings"
-                    >
-                        {sidebarNavItems.map((item, index) => (
-                            <Button
-                                key={`${toUrl(item.href)}-${index}`}
-                                size="sm"
-                                variant="ghost"
-                                asChild
-                                className={cn('w-full justify-start', {
-                                    'bg-muted': isCurrentOrParentUrl(item.href),
-                                })}
-                            >
-                                <Link href={item.href}>
-                                    {item.icon && (
-                                        <item.icon className="h-4 w-4" />
-                                    )}
-                                    {item.title}
-                                </Link>
-                            </Button>
-                        ))}
-                    </nav>
-                </aside>
+                <div className="flex flex-col lg:flex-row lg:space-x-10 items-start">
+                    {/* SETTINGS SIDEBAR NAVIGATION */}
+                    <aside className="w-full lg:w-56 shrink-0 bg-white p-3 rounded-2xl border border-gray-200/80 shadow-xs">
+                        <nav
+                            className="flex flex-row lg:flex-col space-x-1 lg:space-x-0 lg:space-y-1 overflow-x-auto lg:overflow-x-visible pb-1 lg:pb-0"
+                            aria-label="Settings navigation menu"
+                        >
+                            {sidebarNavItems.map((item, index) => {
+                                const active = isCurrentOrParentUrl(item.href);
+                                return (
+                                    <Button
+                                        key={`${toUrl(item.href)}-${index}`}
+                                        size="sm"
+                                        variant="ghost"
+                                        asChild
+                                        className={cn(
+                                            'w-full justify-start min-h-[44px] px-3.5 text-xs font-bold transition-all focus-visible:ring-2 focus-visible:ring-[#F5A623]',
+                                            {
+                                                'bg-[#1B1F5C] text-white hover:bg-[#131644] hover:text-white shadow-sm': active,
+                                                'text-gray-600 hover:bg-gray-100 hover:text-[#1B1F5C]': !active,
+                                            }
+                                        )}
+                                    >
+                                        <Link href={item.href}>
+                                            {item.icon && (
+                                                <item.icon className="mr-2 h-4 w-4 shrink-0" aria-hidden="true" />
+                                            )}
+                                            {item.title}
+                                        </Link>
+                                    </Button>
+                                );
+                            })}
+                        </nav>
+                    </aside>
 
-                <Separator className="my-6 lg:hidden" />
+                    <Separator className="my-6 lg:hidden border-gray-200" />
 
-                <div className="flex-1 md:max-w-2xl">
-                    <section className="max-w-xl space-y-12">
-                        {children}
-                    </section>
+                    {/* SETTINGS CONTENT CONTAINER */}
+                    <main className="flex-1 w-full max-w-4xl bg-white p-6 sm:p-8 rounded-3xl border border-gray-200/80 shadow-xs">
+                        <div className="space-y-6">
+                            {children}
+                        </div>
+                    </main>
                 </div>
             </div>
         </div>

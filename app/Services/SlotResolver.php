@@ -12,10 +12,15 @@ use Carbon\CarbonInterface;
  * Single source of truth for "which slot / which window is this attendance for".
  *
  * A slot lives in event_days.slots (JSON list). Each slot may define:
- *   time_in_start,  time_in_end,  time_out_start,  time_out_end
+ *   morning_time_in_start, morning_time_in_end,
+ *   morning_time_out_start, morning_time_out_end,
+ *   afternoon_time_in_start, afternoon_time_in_end,
+ *   afternoon_time_out_start, afternoon_time_out_end
+ *   (with fallback to legacy time_in_start/time_out_start).
  *
- * Every attendance row is identified by (event_date, slot_index, type), so a
- * Time-In never blocks a Time-Out, and Slot 1 never blocks Slot 2.
+ * Every attendance row is identified by (event_date, slot_index, checkpoint_key),
+ * so morning time-in, morning time-out, afternoon time-in, and afternoon time-out
+ * can coexist independently within the same slot.
  */
 class SlotResolver
 {
@@ -26,13 +31,19 @@ class SlotResolver
     public const REQUIRE_TIME_IN_FOR_TIME_OUT = false;
 
     /**
-     * Resolve a slot explicitly chosen by the client (slot_index + type).
+     * Resolve a slot explicitly chosen by the client (slot_index + checkpoint_key / type).
      *
-     * @return array{date:string,index:int,type:string,slot:array,start:Carbon,end:Carbon,status:string}
+     * @return array{date:string,index:int,type:string,checkpoint_key:string,slot:array,start:Carbon,end:Carbon,status:string}
      */
-    public function resolve(Event $event, CarbonInterface $at, int $slotIndex, string $type): array
+    public function resolve(Event $event, CarbonInterface $at, int $slotIndex, ?string $checkpointKey = null, ?string $type = null): array
     {
         $at = $this->localize($at);
+
+        if (!$checkpointKey && $type) {
+            $checkpointKey = $this->inferCheckpointKey($type, $at);
+        } elseif (!$checkpointKey) {
+            $checkpointKey = Attendance::MORNING_TIME_IN;
+        }
 
         foreach ($this->candidateDays($event, $at) as [$date, $day]) {
             $slots = array_values($day->slots ?? []);
@@ -41,7 +52,7 @@ class SlotResolver
                 continue;
             }
 
-            $resolved = $this->match($date, $slotIndex, $slots[$slotIndex], $type, $at);
+            $resolved = $this->match($date, $slotIndex, $slots[$slotIndex], $checkpointKey, $at);
 
             if ($resolved) {
                 return $resolved;
@@ -50,30 +61,28 @@ class SlotResolver
 
         throw new AttendanceException(
             'SLOT_CLOSED',
-            $type === 'out'
-                ? 'The Time-Out window for this slot is not open right now.'
-                : 'The Time-In window for this slot is not open right now.',
+            'The attendance window for this checkpoint is not open right now.',
             422,
-            ['slot_index' => $slotIndex, 'type' => $type, 'attendance_time' => $at->toIso8601String()]
+            ['slot_index' => $slotIndex, 'checkpoint_key' => $checkpointKey, 'attendance_time' => $at->toIso8601String()]
         );
     }
 
     /**
-     * Resolve explicitly when slot_index + type are supplied; otherwise infer the
-     * window from the timestamp (keeps older mobile clients working).
+     * Resolve explicitly when slot_index + checkpoint_key/type are supplied; otherwise infer the
+     * window from the timestamp across all four checkpoints.
      */
-    public function resolveOrInfer(Event $event, CarbonInterface $at, ?int $slotIndex, ?string $type): array
+    public function resolveOrInfer(Event $event, CarbonInterface $at, ?int $slotIndex, ?string $checkpointKey = null, ?string $type = null): array
     {
-        if ($slotIndex !== null && $type !== null) {
-            return $this->resolve($event, $at, $slotIndex, $type);
+        if ($slotIndex !== null && ($checkpointKey !== null || $type !== null)) {
+            return $this->resolve($event, $at, $slotIndex, $checkpointKey, $type);
         }
 
         $at = $this->localize($at);
 
         foreach ($this->candidateDays($event, $at) as [$date, $day]) {
             foreach (array_values($day->slots ?? []) as $index => $slot) {
-                foreach (['in', 'out'] as $candidateType) {
-                    $resolved = $this->match($date, $index, $slot, $candidateType, $at);
+                foreach (Attendance::CHECKPOINTS as $candidateCheckpoint) {
+                    $resolved = $this->match($date, $index, $slot, $candidateCheckpoint, $at);
 
                     if ($resolved) {
                         return $resolved;
@@ -91,8 +100,7 @@ class SlotResolver
     }
 
     /**
-     * Slot-aware duplicate protection. Only looks at records for the SAME
-     * event day + slot, so other slots and the opposite type never interfere.
+     * Slot-aware duplicate protection based on checkpoint_key.
      */
     public function guard(int $studentId, int $eventId, array $resolved, bool $lock = false): void
     {
@@ -105,14 +113,20 @@ class SlotResolver
             $query->lockForUpdate();
         }
 
-        $types = $query->pluck('type')->all();
+        $checkpointKeys = $query->pluck('checkpoint_key')->all();
 
-        if (in_array($resolved['type'], $types, true)) {
+        if (in_array($resolved['checkpoint_key'], $checkpointKeys, true)) {
+            $message = match ($resolved['checkpoint_key']) {
+                Attendance::MORNING_TIME_IN => 'You have already logged your morning time-in for this time slot.',
+                Attendance::MORNING_TIME_OUT => 'You have already logged your morning time-out for this time slot.',
+                Attendance::AFTERNOON_TIME_IN => 'You have already logged your afternoon time-in for this time slot.',
+                Attendance::AFTERNOON_TIME_OUT => 'You have already logged your afternoon time-out for this time slot.',
+                default => 'You have already logged attendance for this checkpoint.',
+            };
+
             throw new AttendanceException(
                 'ALREADY_CHECKED_IN',
-                $resolved['type'] === 'out'
-                    ? 'You have already checked out for this time slot.'
-                    : 'You have already checked in for this time slot.',
+                $message,
                 409
             );
         }
@@ -140,26 +154,50 @@ class SlotResolver
         return $out;
     }
 
-    private function match(string $date, int $index, array $slot, string $type, CarbonInterface $at): ?array
+    private function match(string $date, int $index, array $slot, string $checkpointKey, CarbonInterface $at): ?array
     {
-        $startKey = $type === 'in' ? 'time_in_start' : 'time_out_start';
-        $endKey = $type === 'in' ? 'time_in_end' : 'time_out_end';
+        [$startKey, $endKey, $type] = match ($checkpointKey) {
+            Attendance::MORNING_TIME_IN => [
+                $slot['morning_time_in_start'] ?? $slot['time_in_start'] ?? null,
+                $slot['morning_time_in_end'] ?? $slot['time_in_end'] ?? null,
+                'in'
+            ],
+            Attendance::MORNING_TIME_OUT => [
+                $slot['morning_time_out_start'] ?? $slot['time_out_start'] ?? null,
+                $slot['morning_time_out_end'] ?? $slot['time_out_end'] ?? null,
+                'out'
+            ],
+            Attendance::AFTERNOON_TIME_IN => [
+                $slot['afternoon_time_in_start'] ?? null,
+                $slot['afternoon_time_in_end'] ?? null,
+                'in'
+            ],
+            Attendance::AFTERNOON_TIME_OUT => [
+                $slot['afternoon_time_out_start'] ?? null,
+                $slot['afternoon_time_out_end'] ?? null,
+                'out'
+            ],
+            default => [
+                $slot['time_in_start'] ?? null,
+                $slot['time_in_end'] ?? null,
+                'in'
+            ],
+        };
 
-        if (empty($slot[$startKey])) {
+        if (empty($startKey)) {
             return null;
         }
 
         $tz = config('app.timezone');
-        $start = Carbon::parse("{$date} " . trim($slot[$startKey]), $tz);
+        $start = Carbon::parse("{$date} " . trim($startKey), $tz);
 
-        if (!empty($slot[$endKey])) {
-            $end = Carbon::parse("{$date} " . trim($slot[$endKey]), $tz)->endOfMinute();
+        if (!empty($endKey)) {
+            $end = Carbon::parse("{$date} " . trim($endKey), $tz)->endOfMinute();
 
             if ($end->lessThanOrEqualTo($start)) {
                 $end->addDay(); // window crosses midnight
             }
         } else {
-            // No cutoff configured: open until the end of that day (matches the UI).
             $end = $start->copy()->endOfDay();
         }
 
@@ -174,11 +212,23 @@ class SlotResolver
             'date' => $date,
             'index' => $index,
             'type' => $type,
+            'checkpoint_key' => $checkpointKey,
             'slot' => $slot,
             'start' => $start,
             'end' => $end,
-            'status' => 'present', // Always marked as present when within the admin-set window
+            'status' => 'present',
         ];
+    }
+
+    private function inferCheckpointKey(string $type, CarbonInterface $at): string
+    {
+        $hour = (int) $at->format('G');
+
+        if ($type === 'in') {
+            return $hour < 12 ? Attendance::MORNING_TIME_IN : Attendance::AFTERNOON_TIME_IN;
+        }
+
+        return $hour < 12 ? Attendance::MORNING_TIME_OUT : Attendance::AFTERNOON_TIME_OUT;
     }
 
     private function localize(CarbonInterface $at): Carbon

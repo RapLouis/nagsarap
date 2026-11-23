@@ -3,19 +3,26 @@
 namespace App\Http\Controllers;
 
 use App\Models\Student;
-use Illuminate\Http\Client\Pool;
+use App\Models\User;
+use App\Services\Form5VerificationService;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class StudentRegistrationController extends Controller
 {
+    public function __construct(
+        protected Form5VerificationService $form5Service
+    ) {}
+
     /**
-     * Display the liveness verification view.
+     * Display the student registration form.
      */
     public function showRegistrationForm(): Response
     {
@@ -23,156 +30,95 @@ class StudentRegistrationController extends Controller
     }
 
     /**
-     * Process live camera snapshot and compare against the registered profile photo.
+     * Process initial registration details, Form 5 OCR check,
+     * live selfie storage, and biometric consent.
      */
-    public function verifyFace(Request $request)
+    public function register(Request $request): RedirectResponse
     {
-        // 1. Validate request parameters
-        $request->validate([
-            'student_id'        => 'required|exists:students,student_id',
-            'live_camera_frame' => 'required',
+        // 1. Validate parameters
+        $validated = $request->validate([
+            'student_number'    => ['required', 'string', 'regex:/^\d{2}-\d{6}$/', Rule::unique(Student::class, 'student_number')],
+            'surname'           => ['required', 'string', 'max:100'],
+            'firstname'         => ['required', 'string', 'max:100'],
+            'middlename'        => ['nullable', 'string', 'max:100'],
+            'ext'               => ['nullable', 'string', 'max:10'],
+            'email'             => ['required', 'string', 'email', 'max:255', Rule::unique(User::class, 'email')],
+            'password'          => ['required', 'string', 'min:8', 'confirmed'],
+            'profile_photo'     => ['required', 'file', 'image', 'mimes:jpeg,jpg,png', 'max:10240'],
+            'form_5'            => [
+                'required',
+                'file',
+                'max:10240',
+                'mimetypes:application/pdf,application/x-pdf,application/acrobat,applications/vnd.pdf,text/pdf,text/x-pdf,application/octet-stream',
+            ],
+            'biometric_consent' => ['required', 'accepted'],
         ]);
 
-        $student = Student::findOrFail($request->student_id);
+        // 2. Store Live Selfie & Form 5 Document on Secure Private Disk
+        $photoPath = $request->file('profile_photo')->store("reference_photos/{$validated['student_number']}", 'private');
+        $pdfPath = $request->file('form_5')->store("form_5_documents/{$validated['student_number']}", 'private');
+        $pdfAbsolutePath = Storage::disk('private')->path($pdfPath);
 
-        // 2. Ensure student record contains a saved photo path from initial registration
-        if (!$student->face_photo_path) {
-            throw ValidationException::withMessages([
-                'face' => 'No uploaded profile picture found for this student account. Please re-register.'
-            ]);
-        }
+        // 3. Early Form 5 OCR Validation (Fail cheap before liveness execution)
+        $fullNameParts = array_filter([
+            $validated['firstname'],
+            $validated['middlename'] ?? null,
+            $validated['surname'],
+            $validated['ext'] ?? null,
+        ]);
+        $expectedFullName = implode(' ', $fullNameParts);
 
-        // 3. Resolve path on private/public disk cleanly
-        $relativePath = ltrim(str_replace(['/storage/', 'storage/'], '', $student->face_photo_path), '/');
+        $verificationResult = $this->form5Service->verifyAndExtract(
+            $pdfAbsolutePath,
+            $validated['student_number'],
+            $expectedFullName
+        );
 
-        // Check disk availability (handles both private and public setups)
-        $disk = Storage::disk('private')->exists($relativePath) ? 'private' : 'public';
+        if (! ($verificationResult['is_verified'] ?? false)) {
+            Storage::disk('private')->delete($photoPath);
+            Storage::disk('private')->delete($pdfPath);
 
-        if (!Storage::disk($disk)->exists($relativePath)) {
-            throw ValidationException::withMessages([
-                'face' => 'Registered profile picture file is missing on the server.'
-            ]);
-        }
-
-        $photoAbsolutePath = Storage::disk($disk)->path($relativePath);
-        $photoBase64 = base64_encode(file_get_contents($photoAbsolutePath));
-
-        // 4. Extract Base64 from the uploaded live webcam file or string payload
-        if ($request->hasFile('live_camera_frame')) {
-            $liveBase64 = base64_encode(file_get_contents($request->file('live_camera_frame')->getRealPath()));
-        } else {
-            $liveBase64 = preg_replace('#^data:image/\w+;base64,#i', '', $request->input('live_camera_frame'));
-        }
-
-        // 5. Query Python microservice (Port 5000) concurrently for fast extraction
-        try {
-            $responses = Http::pool(fn (Pool $pool) => [
-                $pool->as('photo')->timeout(10)->post('http://127.0.0.1:5000/extract-embedding', [
-                    'image_base64' => $photoBase64,
-                ]),
-                $pool->as('live')->timeout(10)->post('http://127.0.0.1:5000/extract-embedding', [
-                    'image_base64' => $liveBase64,
-                ]),
-            ]);
-
-            $photoResponse = $responses['photo'];
-            $liveResponse = $responses['live'];
-
-            if ($photoResponse->failed()) {
-                $detail = $photoResponse->json()['detail'] ?? 'Unable to detect a clear face in profile picture.';
-                throw ValidationException::withMessages([
-                    'face' => "Profile Photo Error: {$detail}"
-                ]);
+            $errorMessage = 'Form 5 verification failed. The name on the document does not match your inputted name.';
+            if (! ($verificationResult['is_latest_term'] ?? true)) {
+                $errorMessage = 'The uploaded Form 5 is not valid for the current academic year/semester.';
             }
 
-            if ($liveResponse->failed()) {
-                $detail = $liveResponse->json()['detail'] ?? 'Unable to detect a clear face in camera frame.';
-                throw ValidationException::withMessages([
-                    'face' => "Live Camera Error: {$detail}"
-                ]);
-            }
-
-            $photoEmbedding = $photoResponse->json()['embedding'] ?? null;
-            $liveEmbedding = $liveResponse->json()['embedding'] ?? null;
-
-            if (empty($photoEmbedding) || empty($liveEmbedding)) {
-                throw ValidationException::withMessages([
-                    'face' => 'Facial feature extraction incomplete. Ensure your face is fully lit and unobscured.'
-                ]);
-            }
-
-        } catch (\Exception $e) {
-            if ($e instanceof ValidationException) throw $e;
-
-            Log::error('Biometrics Service Connection Failure: ' . $e->getMessage());
             throw ValidationException::withMessages([
-                'face' => 'Unable to connect to Python biometric service on port 5000. Ensure app.py is running.'
+                'form_5' => $errorMessage,
             ]);
         }
 
-        // 6. CALCULATE COSINE SIMILARITY SCORE
-        $similarity = $this->calculateCosineSimilarity($photoEmbedding, $liveEmbedding);
+        $extractedData = $verificationResult['data'] ?? [];
 
-        Log::info("Face Verification Match Score for Student ID {$student->student_id}: {$similarity}");
+        // 4. Create Student Account with status 'pending_face_verification'
+        $student = Student::create([
+            'student_number'       => $validated['student_number'],
+            'surname'              => $validated['surname'],
+            'firstname'            => $validated['firstname'],
+            'middlename'           => $validated['middlename'] ?? null,
+            'ext'                  => $validated['ext'] ?? null,
+            'email'                => strtolower(trim($validated['email'])),
+            'face_photo_path'      => $photoPath,
+            'form_5_path'          => $pdfPath,
+            'degree'               => $extractedData['degree'] ?? null,
+            'year_section'         => $extractedData['year_section'] ?? null,
+            'semester'             => $extractedData['semester'] ?? null,
+            'academic_year'        => $extractedData['academic_year'] ?? null,
+            'biometric_consent_at' => now(),
+            'verification_status'  => 'pending_face_verification',
+            'face_embedding'       => null,
+        ]);
 
-        // STRICT MATCH ENFORCEMENT: Block if similarity score < 0.60
-        if ($similarity < 0.60) {
-            throw ValidationException::withMessages([
-                'face' => "Face mismatch detected! The person in front of the camera does not match the uploaded profile picture."
-            ]);
-        }
+        // 5. Create Linked User & Authenticate Session
+        $user = User::create([
+            'name'       => "{$student->firstname} {$student->surname}",
+            'email'      => strtolower(trim($validated['email'])),
+            'password'   => Hash::make($validated['password']),
+            'student_id' => $student->student_id,
+        ]);
 
-        // 7. Duplicate Face Check: Ensure live face is not already assigned to another student
-        $existingStudents = Student::whereNotNull('face_embedding')
-            ->where('student_id', '!=', $student->student_id)
-            ->where('verification_status', 'verified')
-            ->get();
+        Auth::login($user);
 
-        foreach ($existingStudents as $existingStudent) {
-            $existingEmbedding = is_string($existingStudent->face_embedding)
-                ? json_decode($existingStudent->face_embedding, true)
-                : $existingStudent->face_embedding;
-
-            if (is_array($existingEmbedding)) {
-                $dupSimilarity = $this->calculateCosineSimilarity($liveEmbedding, $existingEmbedding);
-
-                if ($dupSimilarity >= 0.60) {
-                    throw ValidationException::withMessages([
-                        'face' => "Duplicate face detected! Face is already registered to student number: {$existingStudent->student_number}"
-                    ]);
-                }
-            }
-        }
-
-        // 8. Save embedding vector & set verification status to 'verified' ONLY when matched
-        $student->face_embedding = $liveEmbedding;
-        $student->verification_status = 'verified';
-        $student->save();
-
-        return redirect()->route('dashboard')->with('success', 'Biometric verification complete!');
-    }
-
-    /**
-     * Calculate Cosine Similarity between two 512-D float vectors.
-     */
-    private function calculateCosineSimilarity(array $vecA, array $vecB): float
-    {
-        $dotProduct = 0.0;
-        $normA = 0.0;
-        $normB = 0.0;
-
-        $count = min(count($vecA), count($vecB));
-
-        for ($i = 0; $i < $count; $i++) {
-            $dotProduct += $vecA[$i] * $vecB[$i];
-            $normA += $vecA[$i] ** 2;
-            $normB += $vecB[$i] ** 2;
-        }
-
-        if ($normA == 0 || $normB == 0) {
-            return 0.0;
-        }
-
-        return $dotProduct / (sqrt($normA) * sqrt($normB));
+        return redirect()->route('register.verify-face');
     }
 }

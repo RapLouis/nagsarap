@@ -11,13 +11,13 @@ export default function AdminLayout({ children, title = 'Dashboard' }: AdminLayo
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
     return (
-        <div className="flex h-screen bg-[#F4F5FA] overflow-hidden font-sans">
-            {/* Dedicated Admin Sidebar with mobile drawer state */}
+        <div className="flex h-screen bg-[#F5F6FA] overflow-hidden font-sans text-gray-900 antialiased">
+            {/* Dedicated Admin Sidebar with accessible mobile drawer state */}
             <AdminSidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
 
-            {/* Main Content Area */}
+            {/* Main Content Pane */}
             <div className="flex-1 flex flex-col min-w-0 h-screen overflow-y-auto">
-                {/* Dedicated Admin Header with mobile toggle handler */}
+                {/* Dedicated Admin Header with mobile menu toggle */}
                 <AdminHeader 
                     title={title} 
                     onOpenSidebar={() => setIsSidebarOpen(true)} 
