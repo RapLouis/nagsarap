@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:io';
 
+import 'package:camera/camera.dart';
 import 'package:file_selector/file_selector.dart' as fs;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -33,7 +35,7 @@ class _RegisterTabState extends State<RegisterTab> {
   final confirmPasswordController = TextEditingController();
 
   // --------------------------------------------------------------------------
-  // FILES
+  // FILES & PICKER
   // --------------------------------------------------------------------------
 
   final ImagePicker imagePicker = ImagePicker();
@@ -73,38 +75,7 @@ class _RegisterTabState extends State<RegisterTab> {
   }
 
   // --------------------------------------------------------------------------
-  // UN-MIRROR FRONT CAMERA PHOTO USING ISOLATE (COMPUTE)
-  // --------------------------------------------------------------------------
-
-  static Uint8List _flipImageBytes(Uint8List bytes) {
-    img.Image? decodedImage = img.decodeImage(bytes);
-    if (decodedImage == null) return bytes;
-
-    decodedImage = img.bakeOrientation(decodedImage);
-    final flippedImage = img.flipHorizontal(decodedImage);
-    return Uint8List.fromList(img.encodeJpg(flippedImage, quality: 85));
-  }
-
-  Future<XFile> _fixMirroredPhoto(XFile file) async {
-    try {
-      final bytes = await file.readAsBytes();
-      final processedBytes = await compute(_flipImageBytes, bytes);
-
-      final tempDir = Directory.systemTemp;
-      final targetPath =
-          '${tempDir.path}/profile_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      final fixedFile = File(targetPath);
-      await fixedFile.writeAsBytes(processedBytes);
-
-      return XFile(fixedFile.path);
-    } catch (e) {
-      debugPrint('Error un-mirroring photo: $e');
-      return file;
-    }
-  }
-
-  // --------------------------------------------------------------------------
-  // PICK + FAST VALIDATE PROFILE PHOTO
+  // PICK & FAST VALIDATE PROFILE PHOTO
   // --------------------------------------------------------------------------
 
   Future<void> pickProfilePhoto() async {
@@ -192,23 +163,24 @@ class _RegisterTabState extends State<RegisterTab> {
     }
 
     try {
-      XFile? image = await imagePicker.pickImage(
-        source: selectedSource,
-        preferredCameraDevice: CameraDevice.front,
-        imageQuality: 80,
-        maxWidth: 1024,
-        maxHeight: 1024,
-      );
-
-      if (image == null) {
-        return;
-      }
+      XFile? image;
 
       if (selectedSource == ImageSource.camera) {
-        image = await _fixMirroredPhoto(image);
+        image = await Navigator.of(context).push<XFile>(
+          MaterialPageRoute(
+            builder: (_) => const ProfileCameraScreen(),
+          ),
+        );
+      } else {
+        image = await imagePicker.pickImage(
+          source: ImageSource.gallery,
+          imageQuality: 78,
+          maxWidth: 1024,
+          maxHeight: 1024,
+        );
       }
 
-      if (!mounted) {
+      if (image == null || !mounted) {
         return;
       }
 
@@ -219,27 +191,21 @@ class _RegisterTabState extends State<RegisterTab> {
         photoValidationMessage = 'Scanning reference photo...';
       });
 
-      final result =
-          await RegistrationService.instance.validateReferencePhoto(
+      final result = await RegistrationService.instance.validateReferencePhoto(
         profilePhoto: image,
       );
 
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
 
       if (result.success) {
         setState(() {
-          validatingPhoto = false;
           facePhotoValid = true;
           photoValidationMessage = result.message;
         });
-
         return;
       }
 
       setState(() {
-        validatingPhoto = false;
         facePhotoValid = false;
         photoValidationMessage = result.message;
       });
@@ -252,41 +218,35 @@ class _RegisterTabState extends State<RegisterTab> {
             title: 'Photo Not Accepted',
             message: result.message,
             primaryText: 'Choose Another Photo',
-            primaryAction: () {
-              Navigator.of(dialogContext).pop();
-            },
+            primaryAction: () => Navigator.of(dialogContext).pop(),
           );
         },
       );
     } catch (e) {
       debugPrint('Reference photo error: $e');
 
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
 
       setState(() {
-        validatingPhoto = false;
         facePhotoValid = false;
-        photoValidationMessage = 'Unable to process the selected photo.';
+        photoValidationMessage = 'Unable to process selected photo.';
       });
 
       await showSimpleError(
         title: 'Photo Error',
-        message:
-            'Unable to process the selected photo. Please try another image.',
+        message: 'Unable to process the selected photo. Please try another image.',
       );
+    } finally {
+      if (mounted) {
+        setState(() {
+          validatingPhoto = false;
+        });
+      }
     }
   }
 
-  // --------------------------------------------------------------------------
-  // REMOVE PROFILE PHOTO
-  // --------------------------------------------------------------------------
-
   void removeProfilePhoto() {
-    if (registering || validatingPhoto) {
-      return;
-    }
+    if (registering || validatingPhoto) return;
 
     setState(() {
       profilePhoto = null;
@@ -296,13 +256,11 @@ class _RegisterTabState extends State<RegisterTab> {
   }
 
   // --------------------------------------------------------------------------
-  // FORM 5
+  // FORM 5 SELECTION
   // --------------------------------------------------------------------------
 
   Future<void> pickForm5() async {
-    if (registering) {
-      return;
-    }
+    if (registering) return;
 
     try {
       const fs.XTypeGroup pdfType = fs.XTypeGroup(
@@ -316,111 +274,76 @@ class _RegisterTabState extends State<RegisterTab> {
         acceptedTypeGroups: <fs.XTypeGroup>[pdfType],
       );
 
-      if (selectedFile == null) {
-        return;
-      }
+      if (selectedFile == null) return;
 
       final int fileSize = await selectedFile.length();
-      const int maxFileSize = 10 * 1024 * 1024;
-
-      if (fileSize > maxFileSize) {
+      if (fileSize > 10 * 1024 * 1024) {
         await showSimpleError(
           title: 'File Too Large',
           message: 'Your Form 5 must not exceed 10 MB.',
         );
-
         return;
       }
 
-      final lowerName = selectedFile.name.toLowerCase();
-
-      if (!lowerName.endsWith('.pdf')) {
+      if (!selectedFile.name.toLowerCase().endsWith('.pdf')) {
         await showSimpleError(
           title: 'Invalid Form 5',
           message: 'Please select a PDF copy of your Form 5.',
         );
-
         return;
       }
 
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
 
       setState(() {
         form5 = selectedFile;
       });
     } catch (e) {
       debugPrint('Form 5 error: $e');
-
       await showSimpleError(
         title: 'Unable to Select File',
-        message: 'The Form 5 could not be selected.',
+        message: 'The Form 5 could not be loaded.',
       );
     }
   }
 
   void removeForm5() {
-    if (registering) {
-      return;
-    }
-
+    if (registering) return;
     setState(() {
       form5 = null;
     });
   }
 
   // --------------------------------------------------------------------------
-  // STUDENT NUMBER FORMATTER
+  // FORMATTER & VALIDATIONS
   // --------------------------------------------------------------------------
 
   void formatStudentNumber(String value) {
     final digits = value.replaceAll(RegExp(r'[^0-9]'), '');
-    final limitedDigits =
-        digits.length > 8 ? digits.substring(0, 8) : digits;
+    final limitedDigits = digits.length > 8 ? digits.substring(0, 8) : digits;
 
     String formatted;
-
     if (limitedDigits.length <= 2) {
       formatted = limitedDigits;
     } else {
-      formatted =
-          '${limitedDigits.substring(0, 2)}-${limitedDigits.substring(2)}';
+      formatted = '${limitedDigits.substring(0, 2)}-${limitedDigits.substring(2)}';
     }
 
     if (studentNumberController.text != formatted) {
       studentNumberController.value = TextEditingValue(
         text: formatted,
-        selection: TextSelection.collapsed(
-          offset: formatted.length,
-        ),
+        selection: TextSelection.collapsed(offset: formatted.length),
       );
     }
-
     setState(() {});
   }
 
-  // --------------------------------------------------------------------------
-  // VALIDATION CHECKS
-  // --------------------------------------------------------------------------
-
   bool get hasMinimumLength => passwordController.text.length >= 12;
-
   bool get hasNumber => RegExp(r'[0-9]').hasMatch(passwordController.text);
-
-  bool get hasSpecialCharacter =>
-      RegExp(r'''[!@#$%^&*(),.?":{}|<>_\-+=/\\[\]]''')
-          .hasMatch(passwordController.text);
-
-  bool get passwordsMatch =>
-      passwordController.text.isNotEmpty &&
-      passwordController.text == confirmPasswordController.text;
-
-  bool get validEmail => RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
-      .hasMatch(emailController.text.trim());
-
-  bool get validStudentNumber =>
-      RegExp(r'^\d{2}-\d{6}$').hasMatch(studentNumberController.text.trim());
+  bool get hasSpecialCharacter => RegExp(r'''[!@#$%^&*(),.?":{}|<>_\-+=/\\[\]]''').hasMatch(passwordController.text);
+  bool get passwordsMatch => passwordController.text.isNotEmpty && passwordController.text == confirmPasswordController.text;
+  bool get validEmail => RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(emailController.text.trim());
+  bool get validStudentNumber => RegExp(r'^\d{2}-\d{6}$').hasMatch(studentNumberController.text.trim());
 
   bool get canRegister =>
       validStudentNumber &&
@@ -438,20 +361,15 @@ class _RegisterTabState extends State<RegisterTab> {
       !registering;
 
   // --------------------------------------------------------------------------
-  // REGISTER
+  // SUBMIT REGISTRATION (WITH GUARANTEED STATE UNLOCK)
   // --------------------------------------------------------------------------
 
   Future<void> submitRegistration() async {
-    if (!canRegister || registering) {
-      return;
-    }
+    if (!canRegister || registering) return;
 
     final selectedPhoto = profilePhoto;
     final selectedForm5 = form5;
-
-    if (selectedPhoto == null || selectedForm5 == null) {
-      return;
-    }
+    if (selectedPhoto == null || selectedForm5 == null) return;
 
     FocusScope.of(context).unfocus();
 
@@ -459,56 +377,60 @@ class _RegisterTabState extends State<RegisterTab> {
       registering = true;
     });
 
-    final result = await RegistrationService.instance.register(
-      studentNumber: studentNumberController.text,
-      surname: surnameController.text,
-      firstname: firstNameController.text,
-      middlename: middleNameController.text,
-      ext: extensionController.text,
-      email: emailController.text,
-      password: passwordController.text,
-      passwordConfirmation: confirmPasswordController.text,
-      profilePhoto: selectedPhoto,
-      form5: selectedForm5,
-    );
-
-    if (!mounted) {
-      return;
-    }
-
-    setState(() {
-      registering = false;
-    });
-
-    if (!result.success) {
-      await showSimpleError(
-        title: 'Registration Failed',
-        message: result.message,
+    try {
+      final result = await RegistrationService.instance.register(
+        studentNumber: studentNumberController.text,
+        surname: surnameController.text,
+        firstname: firstNameController.text,
+        middlename: middleNameController.text,
+        ext: extensionController.text,
+        email: emailController.text,
+        password: passwordController.text,
+        passwordConfirmation: confirmPasswordController.text,
+        profilePhoto: selectedPhoto,
+        form5: selectedForm5,
       );
 
-      return;
-    }
+      if (!mounted) return;
 
-    final studentName =
-        '${firstNameController.text.trim()} ${surnameController.text.trim()}';
+      if (!result.success) {
+        await showSimpleError(
+          title: 'Registration Failed',
+          message: result.message,
+        );
+        return;
+      }
 
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => RegistrationFaceVerificationScreen(
-          studentName: studentName,
+      final studentName = '${firstNameController.text.trim()} ${surnameController.text.trim()}';
+
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => RegistrationFaceVerificationScreen(
+            studentName: studentName,
+          ),
         ),
-      ),
-    );
+      );
+    } catch (e) {
+      debugPrint('Registration exception: $e');
+      if (!mounted) return;
+      await showSimpleError(
+        title: 'Registration Error',
+        message: 'An error occurred during submission. Please check your network connection.',
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          registering = false;
+        });
+      }
+    }
   }
 
   Future<void> showSimpleError({
     required String title,
     required String message,
   }) async {
-    if (!mounted) {
-      return;
-    }
-
+    if (!mounted) return;
     await showDialog<void>(
       context: context,
       builder: (dialogContext) {
@@ -517,16 +439,14 @@ class _RegisterTabState extends State<RegisterTab> {
           title: title,
           message: message,
           primaryText: 'Okay',
-          primaryAction: () {
-            Navigator.of(dialogContext).pop();
-          },
+          primaryAction: () => Navigator.of(dialogContext).pop(),
         );
       },
     );
   }
 
   // --------------------------------------------------------------------------
-  // CUSTOM ROUNDED INPUT FIELD BUILDER
+  // UI BUILDERS
   // --------------------------------------------------------------------------
 
   Widget _buildRoundedInputField({
@@ -755,15 +675,9 @@ class _RegisterTabState extends State<RegisterTab> {
             ),
             onChanged: (_) => setState(() {}),
             suffixIcon: IconButton(
-              onPressed: () {
-                setState(() {
-                  hidePassword = !hidePassword;
-                });
-              },
+              onPressed: () => setState(() => hidePassword = !hidePassword),
               icon: Icon(
-                hidePassword
-                    ? Icons.visibility_off_outlined
-                    : Icons.visibility_outlined,
+                hidePassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
                 size: 18,
                 color: AppColors.textMuted,
               ),
@@ -774,18 +688,9 @@ class _RegisterTabState extends State<RegisterTab> {
             padding: const EdgeInsets.only(left: 6),
             child: Column(
               children: [
-                _PasswordRequirement(
-                  passed: hasMinimumLength,
-                  text: 'At least 12 characters',
-                ),
-                _PasswordRequirement(
-                  passed: hasNumber,
-                  text: 'At least one number',
-                ),
-                _PasswordRequirement(
-                  passed: hasSpecialCharacter,
-                  text: 'At least one special character',
-                ),
+                _PasswordRequirement(passed: hasMinimumLength, text: 'At least 12 characters'),
+                _PasswordRequirement(passed: hasNumber, text: 'At least one number'),
+                _PasswordRequirement(passed: hasSpecialCharacter, text: 'At least one special character'),
               ],
             ),
           ),
@@ -804,15 +709,9 @@ class _RegisterTabState extends State<RegisterTab> {
             ),
             onChanged: (_) => setState(() {}),
             suffixIcon: IconButton(
-              onPressed: () {
-                setState(() {
-                  hideConfirmPassword = !hideConfirmPassword;
-                });
-              },
+              onPressed: () => setState(() => hideConfirmPassword = !hideConfirmPassword),
               icon: Icon(
-                hideConfirmPassword
-                    ? Icons.visibility_off_outlined
-                    : Icons.visibility_outlined,
+                hideConfirmPassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
                 size: 18,
                 color: AppColors.textMuted,
               ),
@@ -825,24 +724,16 @@ class _RegisterTabState extends State<RegisterTab> {
               child: Row(
                 children: [
                   Icon(
-                    passwordsMatch
-                        ? Icons.check_circle_rounded
-                        : Icons.cancel_rounded,
+                    passwordsMatch ? Icons.check_circle_rounded : Icons.cancel_rounded,
                     size: 14,
-                    color: passwordsMatch
-                        ? AppColors.success
-                        : AppColors.error,
+                    color: passwordsMatch ? AppColors.success : AppColors.error,
                   ),
                   const SizedBox(width: 6),
                   Text(
-                    passwordsMatch
-                        ? 'Passwords match'
-                        : 'Passwords do not match',
+                    passwordsMatch ? 'Passwords match' : 'Passwords do not match',
                     style: TextStyle(
                       fontSize: 11,
-                      color: passwordsMatch
-                          ? AppColors.success
-                          : AppColors.error,
+                      color: passwordsMatch ? AppColors.success : AppColors.error,
                     ),
                   ),
                 ],
@@ -880,9 +771,7 @@ class _RegisterTabState extends State<RegisterTab> {
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
-                  color: facePhotoValid
-                      ? AppColors.success
-                      : const Color(0xFFE2E8F0),
+                  color: facePhotoValid ? AppColors.success : const Color(0xFFE2E8F0),
                   width: 1.5,
                 ),
                 boxShadow: const [
@@ -899,9 +788,7 @@ class _RegisterTabState extends State<RegisterTab> {
                     width: 44,
                     height: 44,
                     decoration: BoxDecoration(
-                      color: facePhotoValid
-                          ? const Color(0xFFDCFCE7)
-                          : const Color(0xFFF1F5F9),
+                      color: facePhotoValid ? const Color(0xFFDCFCE7) : const Color(0xFFF1F5F9),
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: validatingPhoto
@@ -913,13 +800,9 @@ class _RegisterTabState extends State<RegisterTab> {
                             ),
                           )
                         : Icon(
-                            facePhotoValid
-                                ? Icons.check_circle_rounded
-                                : Icons.file_upload_outlined,
+                            facePhotoValid ? Icons.check_circle_rounded : Icons.file_upload_outlined,
                             size: 24,
-                            color: facePhotoValid
-                                ? AppColors.success
-                                : AppColors.navy,
+                            color: facePhotoValid ? AppColors.success : AppColors.navy,
                           ),
                   ),
                   const SizedBox(width: 14),
@@ -941,13 +824,10 @@ class _RegisterTabState extends State<RegisterTab> {
                         Text(
                           validatingPhoto
                               ? 'Scanning reference photo...'
-                              : photoValidationMessage ??
-                                  'Clear, well-lit headshot (JPG, JPEG, PNG)',
+                              : photoValidationMessage ?? 'Clear, well-lit headshot (JPG, JPEG, PNG)',
                           style: TextStyle(
                             fontSize: 11,
-                            color: facePhotoValid
-                                ? AppColors.success
-                                : AppColors.textMuted,
+                            color: facePhotoValid ? AppColors.success : AppColors.textMuted,
                           ),
                         ),
                       ],
@@ -997,9 +877,7 @@ class _RegisterTabState extends State<RegisterTab> {
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
-                  color: form5 != null
-                      ? AppColors.success
-                      : const Color(0xFFE2E8F0),
+                  color: form5 != null ? AppColors.success : const Color(0xFFE2E8F0),
                   width: 1.5,
                 ),
                 boxShadow: const [
@@ -1016,19 +894,13 @@ class _RegisterTabState extends State<RegisterTab> {
                     width: 44,
                     height: 44,
                     decoration: BoxDecoration(
-                      color: form5 != null
-                          ? const Color(0xFFDCFCE7)
-                          : const Color(0xFFF1F5F9),
+                      color: form5 != null ? const Color(0xFFDCFCE7) : const Color(0xFFF1F5F9),
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Icon(
-                      form5 != null
-                          ? Icons.description_rounded
-                          : Icons.picture_as_pdf_outlined,
+                      form5 != null ? Icons.description_rounded : Icons.picture_as_pdf_outlined,
                       size: 24,
-                      color: form5 != null
-                          ? AppColors.success
-                          : AppColors.navy,
+                      color: form5 != null ? AppColors.success : AppColors.navy,
                     ),
                   ),
                   const SizedBox(width: 14),
@@ -1149,6 +1021,364 @@ class _PasswordRequirement extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// HIGH-EFFICIENCY FAST CAMERA CAPTURE
+// ============================================================================
+
+class ProfileCameraScreen extends StatefulWidget {
+  const ProfileCameraScreen({super.key});
+
+  @override
+  State<ProfileCameraScreen> createState() => _ProfileCameraScreenState();
+}
+
+class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
+  CameraController? _cameraController;
+  bool _isInitialized = false;
+  bool _isCapturing = false;
+  XFile? _capturedImage;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _initFrontCamera();
+  }
+
+  Future<void> _initFrontCamera() async {
+    try {
+      final cameras = await availableCameras();
+      if (cameras.isEmpty) {
+        if (mounted) {
+          setState(() {
+            _errorMessage = 'No camera found on this device.';
+          });
+        }
+        return;
+      }
+
+      final frontCamera = cameras.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.front,
+        orElse: () => cameras.first,
+      );
+
+      // Using ResolutionPreset.medium ensures high speed and prevents buffer blocking on budget phones
+      final controller = CameraController(
+        frontCamera,
+        ResolutionPreset.medium,
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.jpeg,
+      );
+
+      await controller.initialize();
+
+      if (!mounted) {
+        await controller.dispose();
+        return;
+      }
+
+      setState(() {
+        _cameraController = controller;
+        _isInitialized = true;
+      });
+    } catch (e) {
+      debugPrint('Camera initialization error: $e');
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Unable to access camera.';
+        });
+      }
+    }
+  }
+
+  /// High-speed background Isolate compression to minimize server upload payloads
+  static Uint8List _compressAndFlipImage(Uint8List bytes) {
+    img.Image? decoded = img.decodeImage(bytes);
+    if (decoded == null) return bytes;
+
+    decoded = img.bakeOrientation(decoded);
+    final flipped = img.flipHorizontal(decoded);
+
+    img.Image resized = flipped;
+    if (flipped.width > 1024 || flipped.height > 1024) {
+      resized = img.copyResize(
+        flipped,
+        width: flipped.width > flipped.height ? 1024 : null,
+        height: flipped.height >= flipped.width ? 1024 : null,
+      );
+    }
+
+    return Uint8List.fromList(img.encodeJpg(resized, quality: 78));
+  }
+
+  Future<void> _capturePhoto() async {
+    if (_isCapturing || _cameraController == null || !_cameraController!.value.isInitialized) {
+      return;
+    }
+
+    setState(() {
+      _isCapturing = true;
+    });
+
+    try {
+      final rawFile = await _cameraController!.takePicture();
+      final bytes = await rawFile.readAsBytes();
+
+      final processedBytes = await compute(_compressAndFlipImage, bytes);
+
+      final tempDir = Directory.systemTemp;
+      final targetPath = '${tempDir.path}/profile_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final fixedFile = File(targetPath);
+      await fixedFile.writeAsBytes(processedBytes);
+
+      if (mounted) {
+        setState(() {
+          _capturedImage = XFile(fixedFile.path);
+        });
+      }
+    } catch (e) {
+      debugPrint('Photo capture error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to capture photo. Please try again.')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCapturing = false;
+        });
+      }
+    }
+  }
+
+  void _retakePhoto() {
+    setState(() {
+      _capturedImage = null;
+    });
+  }
+
+  void _confirmPhoto() {
+    if (_capturedImage != null) {
+      Navigator.of(context).pop(_capturedImage);
+    }
+  }
+
+  @override
+  void dispose() {
+    _cameraController?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0F172A),
+      appBar: AppBar(
+        backgroundColor: AppColors.navy,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        title: Text(
+          _capturedImage == null ? 'Take Profile Photo' : 'Review Photo',
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+      body: SafeArea(
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Positioned(
+              top: 24,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(
+                    color: AppColors.gold.withValues(alpha: 0.6),
+                    width: 1.5,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.center_focus_strong_rounded,
+                      color: AppColors.gold,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _capturedImage == null ? 'Position your face inside the circle' : 'Review your captured photo',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Center(
+              child: Container(
+                width: 320,
+                height: 320,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.black,
+                  border: Border.all(
+                    color: AppColors.gold,
+                    width: 4,
+                  ),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x66000000),
+                      blurRadius: 16,
+                      offset: Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: ClipOval(
+                  child: _capturedImage != null
+                      ? Image.file(
+                          File(_capturedImage!.path),
+                          fit: BoxFit.cover,
+                        )
+                      : (_isInitialized && _cameraController != null
+                          ? Builder(
+                              builder: (context) {
+                                double previewAspectRatio = _cameraController!.value.aspectRatio;
+                                if (previewAspectRatio < 1.0) {
+                                  previewAspectRatio = 1.0 / previewAspectRatio;
+                                }
+
+                                return OverflowBox(
+                                  alignment: Alignment.center,
+                                  child: FittedBox(
+                                    fit: BoxFit.cover,
+                                    child: SizedBox(
+                                      width: 320,
+                                      height: 320 * previewAspectRatio,
+                                      child: CameraPreview(_cameraController!),
+                                    ),
+                                  ),
+                                );
+                              },
+                            )
+                          : Center(
+                              child: _errorMessage != null
+                                  ? Padding(
+                                      padding: const EdgeInsets.all(16.0),
+                                      child: Text(
+                                        _errorMessage!,
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(
+                                          color: Colors.white70,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    )
+                                  : const CircularProgressIndicator(
+                                      color: AppColors.gold,
+                                    ),
+                            )),
+                ),
+              ),
+            ),
+            Positioned(
+              bottom: 40,
+              child: _capturedImage == null
+                  ? GestureDetector(
+                      onTap: _isInitialized && !_isCapturing ? _capturePhoto : null,
+                      child: Container(
+                        width: 76,
+                        height: 76,
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Colors.white,
+                            width: 4,
+                          ),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Color(0x40000000),
+                              blurRadius: 10,
+                              offset: Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: Container(
+                          decoration: const BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: AppColors.gold,
+                          ),
+                          child: _isCapturing
+                              ? const Padding(
+                                  padding: EdgeInsets.all(20),
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 3,
+                                    color: AppColors.navy,
+                                  ),
+                                )
+                              : const Icon(
+                                  Icons.camera_alt_rounded,
+                                  color: AppColors.navy,
+                                  size: 34,
+                                ),
+                        ),
+                      ),
+                    )
+                  : Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        ElevatedButton.icon(
+                          onPressed: _retakePhoto,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.white24,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(24),
+                            ),
+                          ),
+                          icon: const Icon(Icons.replay_rounded, size: 18),
+                          label: const Text(
+                            'Retake',
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        ElevatedButton.icon(
+                          onPressed: _confirmPhoto,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.gold,
+                            foregroundColor: AppColors.navy,
+                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(24),
+                            ),
+                          ),
+                          icon: const Icon(Icons.check_rounded, size: 18),
+                          label: const Text(
+                            'Use Photo',
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }

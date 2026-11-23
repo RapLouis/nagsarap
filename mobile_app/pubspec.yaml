@@ -55,7 +55,6 @@ dev_dependencies:
 
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.13.1
-  flutter_native_splash: ^2.4.1
 
 flutter_launcher_icons:
   android: "launcher_icon"
@@ -64,9 +63,6 @@ flutter_launcher_icons:
   adaptive_icon_background: "#FFFFFF"
   adaptive_icon_foreground: "lib/screens/images/logo.jpeg"
   min_sdk_android: 21
-
-flutter_native_splash:
-  color: "#080878"
 
 flutter:
   uses-material-design: true

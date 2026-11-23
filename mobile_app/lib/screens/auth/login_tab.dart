@@ -104,6 +104,16 @@ class _LoginTabState extends State<LoginTab> {
       return;
     }
 
+    if (result.isOffline) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Logged in using cached offline session.'),
+          backgroundColor: AppColors.navy,
+          duration: Duration(seconds: 3),
+        ),
+      );
+    }
+
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(
         builder: (_) => const HomeScreen(),
@@ -132,10 +142,6 @@ class _LoginTabState extends State<LoginTab> {
       },
     );
   }
-
-  // --------------------------------------------------------------------------
-  // CUSTOM ROUNDED INPUT FIELD BUILDER
-  // --------------------------------------------------------------------------
 
   Widget _buildRoundedInputField({
     required String label,
@@ -238,9 +244,7 @@ class _LoginTabState extends State<LoginTab> {
             ),
             onChanged: formatStudentNumber,
           ),
-
           const SizedBox(height: 20),
-
           _buildRoundedInputField(
             label: 'Password',
             hint: 'Enter your Password',
@@ -267,9 +271,7 @@ class _LoginTabState extends State<LoginTab> {
               ),
             ),
           ),
-
           const SizedBox(height: 12),
-
           Row(
             children: [
               SizedBox(
@@ -316,9 +318,7 @@ class _LoginTabState extends State<LoginTab> {
               ),
             ],
           ),
-
           const SizedBox(height: 24),
-
           SizedBox(
             width: double.infinity,
             height: 50,
