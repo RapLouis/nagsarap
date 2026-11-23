@@ -398,12 +398,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           (now.isBefore(adjustedEnd) || now.isAtSameMomentAs(adjustedEnd));
     }
 
-    // Check Time-Out window first (even if there is no Time-In record)
     if (!hasTimeOut && isInsideWindow(_getTimeOutWindow(event))) {
       return AttendanceSessionType.timeOut;
     }
 
-    // Check Time-In window
     if (!hasTimeIn && isInsideWindow(_getTimeInWindow(event))) {
       return AttendanceSessionType.timeIn;
     }
@@ -1222,172 +1220,178 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = themeController.isDarkMode;
-    final dateString = DateFormat('EEE, MMM d').format(DateTime.now());
+    return ListenableBuilder(
+      listenable: themeController,
+      builder: (context, _) {
+        final isDark = themeController.isDarkMode;
+        final dateString = DateFormat('EEE, MMM d').format(DateTime.now());
 
-    return Scaffold(
-      backgroundColor:
-          isDark ? const Color(0xFF0F172A) : const Color(0xFFF4F6FA),
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(68),
-        child: Container(
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF1E293B) : navy,
-            border: Border(
-              bottom: BorderSide(
-                color: isDark
-                    ? const Color(0xFF334155)
-                    : gold.withValues(alpha: 0.35),
-                width: 1.5,
+        return Scaffold(
+          backgroundColor:
+              isDark ? const Color(0xFF0F172A) : const Color(0xFFF4F6FA),
+          appBar: PreferredSize(
+            preferredSize: const Size.fromHeight(68),
+            child: Container(
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF1E293B) : navy,
+                border: Border(
+                  bottom: BorderSide(
+                    color: isDark
+                        ? const Color(0xFF334155)
+                        : gold.withValues(alpha: 0.35),
+                    width: 1.5,
+                  ),
+                ),
+              ),
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
+                    children: [
+                      Material(
+                        color: Colors.transparent,
+                        shape: const CircleBorder(),
+                        clipBehavior: Clip.antiAlias,
+                        child: InkWell(
+                          customBorder: const CircleBorder(),
+                          onTap: _dashboardBusy ? null : _reloadPage,
+                          child: SizedBox(
+                            width: 48,
+                            height: 48,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: gold.withValues(alpha: 0.8),
+                                  width: 1.5,
+                                ),
+                              ),
+                              clipBehavior: Clip.antiAlias,
+                              child: Transform.scale(
+                                scale: 1.45,
+                                child: Image.asset(
+                                  'lib/screens/images/logo.jpeg',
+                                  fit: BoxFit.cover,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const Spacer(),
+                      Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            'Welcome, $_firstName',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.1,
+                            ),
+                          ),
+                          if (_studentNumber.isNotEmpty) ...[
+                            const SizedBox(height: 2),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 1.5,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                _studentNumber,
+                                style: const TextStyle(
+                                  color: gold,
+                                  fontSize: 10.5,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 0.4,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(width: 10),
+                      InkWell(
+                        borderRadius: BorderRadius.circular(22),
+                        onTap: _openProfile,
+                        child: Container(
+                          padding: const EdgeInsets.all(2),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(color: gold, width: 1.8),
+                          ),
+                          child: _profileAvatar(radius: 17),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
           ),
-          child: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  Material(
-                    color: Colors.transparent,
-                    shape: const CircleBorder(),
-                    clipBehavior: Clip.antiAlias,
-                    child: InkWell(
-                      customBorder: const CircleBorder(),
-                      onTap: _dashboardBusy ? null : _reloadPage,
-                      child: SizedBox(
-                        width: 48,
-                        height: 48,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: gold.withValues(alpha: 0.8),
-                              width: 1.5,
-                            ),
-                          ),
-                          clipBehavior: Clip.antiAlias,
-                          child: Transform.scale(
-                            scale: 1.45,
-                            child: Image.asset(
-                              'lib/screens/images/logo.jpeg',
-                              fit: BoxFit.cover,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const Spacer(),
-                  Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.end,
+          body: RefreshIndicator(
+            color: gold,
+            onRefresh: () => _loadDashboard(showMainLoader: false),
+            child: _loading
+                ? const Center(
+                    child: CircularProgressIndicator(color: gold),
+                  )
+                : ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.fromLTRB(16, 18, 16, 110),
                     children: [
-                      Text(
-                        'Welcome, $_firstName',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 0.1,
-                        ),
-                      ),
-                      if (_studentNumber.isNotEmpty) ...[
-                        const SizedBox(height: 2),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 7,
-                            vertical: 1.5,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            _studentNumber,
-                            style: const TextStyle(
-                              color: gold,
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w600,
-                              letterSpacing: 0.4,
-                            ),
+                      if (_pendingOfflineCount > 0 || _syncingOffline) ...[
+                        _buildPendingOfflineCard(),
+                        const SizedBox(height: 16),
+                      ],
+                      _buildHeaderSection(dateString),
+                      const SizedBox(height: 14),
+                      _buildOverviewSection(),
+                      const SizedBox(height: 22),
+                      _buildEventsSectionHeader(),
+                      const SizedBox(height: 10),
+                      if (_error != null)
+                        _buildErrorWidget()
+                      else if (_todayEvents.isEmpty)
+                        _buildEmptyEventsWidget()
+                      else
+                        ..._todayEvents.map(
+                          (evt) => Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: _buildEventCard(evt, today: true),
                           ),
                         ),
+                      if (_upcomingEvents.isNotEmpty) ...[
+                        const SizedBox(height: 14),
+                        _buildUpcomingSection(),
                       ],
                     ],
                   ),
-                  const SizedBox(width: 10),
-                  InkWell(
-                    borderRadius: BorderRadius.circular(22),
-                    onTap: _openProfile,
-                    child: Container(
-                      padding: const EdgeInsets.all(2),
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(color: gold, width: 1.8),
-                      ),
-                      child: _profileAvatar(radius: 17),
-                    ),
-                  ),
-                ],
-              ),
-            ),
           ),
-        ),
-      ),
-      body: RefreshIndicator(
-        color: gold,
-        onRefresh: () => _loadDashboard(showMainLoader: false),
-        child: _loading
-            ? const Center(
-                child: CircularProgressIndicator(color: gold),
-              )
-            : ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(16, 18, 16, 110),
-                children: [
-                  if (_pendingOfflineCount > 0 || _syncingOffline) ...[
-                    _buildPendingOfflineCard(),
-                    const SizedBox(height: 16),
-                  ],
-                  _buildHeaderSection(dateString),
-                  const SizedBox(height: 14),
-                  _buildOverviewSection(),
-                  const SizedBox(height: 22),
-                  _buildEventsSectionHeader(),
-                  const SizedBox(height: 10),
-                  if (_error != null)
-                    _buildErrorWidget()
-                  else if (_todayEvents.isEmpty)
-                    _buildEmptyEventsWidget()
-                  else
-                    ..._todayEvents.map(
-                      (evt) => Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: _buildEventCard(evt, today: true),
-                      ),
-                    ),
-                  if (_upcomingEvents.isNotEmpty) ...[
-                    const SizedBox(height: 14),
-                    _buildUpcomingSection(),
-                  ],
-                ],
-              ),
-      ),
-      bottomNavigationBar: MainBottomNavigation(
-        currentIndex: 0,
-        notificationBadge: _unreadCount,
-        onHomeRefresh: () => _loadDashboard(showMainLoader: false),
-        onScan: _openAttendanceScanner,
-      ),
-      floatingActionButton: MainBottomNavigation.scannerButton(
-        context,
-        currentIndex: 0,
-        onPressed: _openAttendanceScanner,
-      ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
+          bottomNavigationBar: MainBottomNavigation(
+            currentIndex: 0,
+            notificationBadge: _unreadCount,
+            onHomeRefresh: () => _loadDashboard(showMainLoader: false),
+            onScan: _openAttendanceScanner,
+          ),
+          floatingActionButton: MainBottomNavigation.scannerButton(
+            context,
+            currentIndex: 0,
+            onPressed: _openAttendanceScanner,
+          ),
+          floatingActionButtonLocation:
+              FloatingActionButtonLocation.centerDocked,
+        );
+      },
     );
   }
 

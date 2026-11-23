@@ -10,8 +10,7 @@ class SanctionsScreen extends StatefulWidget {
   const SanctionsScreen({super.key});
 
   @override
-  State<SanctionsScreen> createState() =>
-      _SanctionsScreenState();
+  State<SanctionsScreen> createState() => _SanctionsScreenState();
 }
 
 class _SanctionsScreenState extends State<SanctionsScreen> {
@@ -19,16 +18,47 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
   static const Color gold = Color(0xFFFFC800);
   static const Color muted = Color(0xFF64748B);
 
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
+
   bool _loading = true;
+  bool _isSearching = false;
   String? _error;
 
   List<SanctionItem> _sanctions = const [];
   String _selectedFilter = 'All';
+  String _searchQuery = '';
 
   @override
   void initState() {
     super.initState();
     _loadSanctions();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _searchFocusNode.dispose();
+    super.dispose();
+  }
+
+  void _startSearch() {
+    setState(() {
+      _isSearching = true;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _searchFocusNode.requestFocus();
+      }
+    });
+  }
+
+  void _stopSearch() {
+    setState(() {
+      _isSearching = false;
+      _searchQuery = '';
+      _searchController.clear();
+    });
   }
 
   Future<void> _loadSanctions() async {
@@ -40,14 +70,12 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
     }
 
     try {
-      final result =
-          await SanctionService.instance.getSanctions();
+      final result = await SanctionService.instance.getSanctions();
 
       if (!mounted) return;
 
       if (result.success) {
-        final sorted =
-            List<SanctionItem>.from(result.sanctions);
+        final sorted = List<SanctionItem>.from(result.sanctions);
 
         sorted.sort((a, b) {
           final first = a.eventDate ??
@@ -91,13 +119,9 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
     List<SanctionItem> items = _sanctions;
 
     if (_selectedFilter == 'Pending') {
-      items = _sanctions
-          .where((item) => !item.isResolved)
-          .toList();
+      items = _sanctions.where((item) => !item.isResolved).toList();
     } else if (_selectedFilter == 'Resolved') {
-      items = _sanctions
-          .where((item) => item.isResolved)
-          .toList();
+      items = _sanctions.where((item) => item.isResolved).toList();
     }
 
     final Map<String, List<SanctionItem>> groups = {};
@@ -117,16 +141,13 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
           ? 'id:${item.eventId}|$dateKey'
           : '${eventName.toLowerCase()}|$dateKey';
 
-      groups
-          .putIfAbsent(identity, () => <SanctionItem>[])
-          .add(item);
+      groups.putIfAbsent(identity, () => <SanctionItem>[]).add(item);
     }
 
     final List<_EventSanctionCard> cards = [];
 
     for (final groupItems in groups.values) {
-      final eventName =
-          _extractEventName(groupItems.first.title);
+      final eventName = _extractEventName(groupItems.first.title);
 
       DateTime? eventDate;
 
@@ -134,14 +155,12 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
         final candidate = item.eventDate ?? item.issuedAt;
 
         if (candidate != null &&
-            (eventDate == null ||
-                candidate.isAfter(eventDate))) {
+            (eventDate == null || candidate.isAfter(eventDate))) {
           eventDate = candidate;
         }
       }
 
-      final isResolved =
-          groupItems.every((item) => item.isResolved);
+      final isResolved = groupItems.every((item) => item.isResolved);
 
       final Set<String> missedTags = {};
 
@@ -159,13 +178,11 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
 
       final sortedTags = missedTags.toList()
         ..sort((a, b) {
-          if (a.contains('TIME-IN') &&
-              b.contains('TIME-OUT')) {
+          if (a.contains('TIME-IN') && b.contains('TIME-OUT')) {
             return -1;
           }
 
-          if (a.contains('TIME-OUT') &&
-              b.contains('TIME-IN')) {
+          if (a.contains('TIME-OUT') && b.contains('TIME-IN')) {
             return 1;
           }
 
@@ -189,7 +206,24 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
       return second.compareTo(first);
     });
 
-    return cards;
+    final query = _searchQuery.trim().toLowerCase();
+    if (query.isEmpty) {
+      return cards;
+    }
+
+    return cards.where((card) {
+      final nameMatches = card.eventName.toLowerCase().contains(query);
+      final dateStr = card.date == null
+          ? 'date unspecified'
+          : DateFormat('MMMM d, yyyy MMM d, yyyy')
+              .format(card.date!.toLocal())
+              .toLowerCase();
+      final dateMatches = dateStr.contains(query);
+      final tagMatches =
+          card.missedTags.any((tag) => tag.toLowerCase().contains(query));
+
+      return nameMatches || dateMatches || tagMatches;
+    }).toList();
   }
 
   String _extractEventName(String title) {
@@ -230,46 +264,91 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = themeController.isDarkMode;
+    return ListenableBuilder(
+      listenable: themeController,
+      builder: (context, _) {
+        final isDark = themeController.isDarkMode;
 
-    return Scaffold(
-      backgroundColor: isDark
-          ? const Color(0xFF0F172A)
-          : const Color(0xFFF8FAFC),
-
-      appBar: AppBar(
-        backgroundColor: isDark
-            ? const Color(0xFF1E293B)
-            : navy,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        title: const Text(
-          'Sanctions',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
+        return Scaffold(
+          backgroundColor:
+              isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+          appBar: AppBar(
+            backgroundColor: isDark ? const Color(0xFF1E293B) : navy,
+            foregroundColor: Colors.white,
+            elevation: 0,
+            title: _isSearching
+                ? TextField(
+                    controller: _searchController,
+                    focusNode: _searchFocusNode,
+                    onChanged: (value) {
+                      setState(() {
+                        _searchQuery = value;
+                      });
+                    },
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    cursorColor: gold,
+                    textInputAction: TextInputAction.search,
+                    decoration: InputDecoration(
+                      hintText: 'Search event...',
+                      hintStyle: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.65),
+                        fontSize: 15,
+                      ),
+                      border: InputBorder.none,
+                      isDense: true,
+                    ),
+                  )
+                : const Text(
+                    'Sanctions',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+            actions: [
+              if (_isSearching)
+                IconButton(
+                  tooltip: 'Clear search',
+                  onPressed: () {
+                    if (_searchController.text.isNotEmpty) {
+                      setState(() {
+                        _searchController.clear();
+                        _searchQuery = '';
+                      });
+                    } else {
+                      _stopSearch();
+                    }
+                  },
+                  icon: const Icon(Icons.close_rounded, color: Colors.white),
+                )
+              else
+                IconButton(
+                  tooltip: 'Search event',
+                  onPressed: _startSearch,
+                  icon: const Icon(Icons.search_rounded, color: Colors.white),
+                ),
+              const SizedBox(width: 4),
+            ],
           ),
-        ),
-      ),
-
-      body: RefreshIndicator(
-        color: gold,
-        onRefresh: _loadSanctions,
-        child: _buildBody(),
-      ),
-
-      bottomNavigationBar:
-          const MainBottomNavigation(currentIndex: 3),
-
-      floatingActionButton:
-          MainBottomNavigation.scannerButton(
-        context,
-        currentIndex: 3,
-      ),
-
-      floatingActionButtonLocation:
-          FloatingActionButtonLocation.centerDocked,
+          body: RefreshIndicator(
+            color: gold,
+            onRefresh: _loadSanctions,
+            child: _buildBody(),
+          ),
+          bottomNavigationBar: const MainBottomNavigation(currentIndex: 3),
+          floatingActionButton: MainBottomNavigation.scannerButton(
+            context,
+            currentIndex: 3,
+          ),
+          floatingActionButtonLocation:
+              FloatingActionButtonLocation.centerDocked,
+        );
+      },
     );
   }
 
@@ -312,7 +391,6 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
       children: [
         _buildSegmentedFilter(),
         const SizedBox(height: 16),
-
         if (cards.isEmpty)
           _buildEmptyState()
         else
@@ -329,19 +407,15 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
       decoration: BoxDecoration(
         color: isDark
             ? const Color(0xFF1E293B)
-            : const Color(0xFFE2E8F0)
-                .withValues(alpha: 0.7),
+            : const Color(0xFFE2E8F0).withValues(alpha: 0.7),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: isDark
-              ? const Color(0xFF334155)
-              : const Color(0xFFCBD5E1),
+          color: isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1),
           width: 1,
         ),
       ),
       child: Row(
-        children: ['All', 'Pending', 'Resolved']
-            .map((tab) {
+        children: ['All', 'Pending', 'Resolved'].map((tab) {
           final selected = _selectedFilter == tab;
 
           final count = tab == 'All'
@@ -358,17 +432,14 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
                 });
               },
               child: AnimatedContainer(
-                duration:
-                    const Duration(milliseconds: 150),
+                duration: const Duration(milliseconds: 150),
                 padding: const EdgeInsets.symmetric(
                   vertical: 9,
                 ),
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: selected
-                      ? (isDark
-                          ? const Color(0xFF0F172A)
-                          : Colors.white)
+                      ? (isDark ? const Color(0xFF0F172A) : Colors.white)
                       : Colors.transparent,
                   borderRadius: BorderRadius.circular(8),
                 ),
@@ -377,9 +448,7 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
-                    color: selected
-                        ? (isDark ? Colors.white : navy)
-                        : muted,
+                    color: selected ? (isDark ? Colors.white : navy) : muted,
                   ),
                 ),
               ),
@@ -390,28 +459,21 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
     );
   }
 
-  Widget _buildSanctionCard(
-    _EventSanctionCard card,
-  ) {
+  Widget _buildSanctionCard(_EventSanctionCard card) {
     final isDark = themeController.isDarkMode;
 
     final dateText = card.date == null
         ? 'Date Unspecified'
-        : DateFormat('MMM d, yyyy')
-            .format(card.date!.toLocal());
+        : DateFormat('MMM d, yyyy').format(card.date!.toLocal());
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: isDark
-            ? const Color(0xFF1E293B)
-            : Colors.white,
+        color: isDark ? const Color(0xFF1E293B) : Colors.white,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: isDark
-              ? const Color(0xFF334155)
-              : const Color(0xFFE2E8F0),
+          color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
           width: 1,
         ),
       ),
@@ -419,8 +481,7 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            crossAxisAlignment:
-                CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
                 child: Text(
@@ -428,8 +489,7 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
                   style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.bold,
-                    color:
-                        isDark ? Colors.white : navy,
+                    color: isDark ? Colors.white : navy,
                   ),
                 ),
               ),
@@ -437,9 +497,7 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
               _buildStatusPill(card.isResolved),
             ],
           ),
-
           const SizedBox(height: 4),
-
           Text(
             dateText,
             style: const TextStyle(
@@ -448,15 +506,12 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
               color: muted,
             ),
           ),
-
           const SizedBox(height: 12),
-
           Wrap(
             spacing: 8,
             runSpacing: 6,
-            children: card.missedTags
-                .map((tag) => _buildTag(tag, isDark))
-                .toList(),
+            children:
+                card.missedTags.map((tag) => _buildTag(tag, isDark)).toList(),
           ),
         ],
       ),
@@ -470,9 +525,7 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
         vertical: 3,
       ),
       decoration: BoxDecoration(
-        color: isResolved
-            ? const Color(0xFFDCFCE7)
-            : const Color(0xFFFEF3C7),
+        color: isResolved ? const Color(0xFFDCFCE7) : const Color(0xFFFEF3C7),
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
@@ -480,9 +533,8 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
         style: TextStyle(
           fontSize: 10,
           fontWeight: FontWeight.w800,
-          color: isResolved
-              ? const Color(0xFF15803D)
-              : const Color(0xFFB45309),
+          color:
+              isResolved ? const Color(0xFF15803D) : const Color(0xFFB45309),
           letterSpacing: 0.3,
         ),
       ),
@@ -496,21 +548,18 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
     if (tag.contains('TIME-IN')) {
       textColor = const Color(0xFFB45309);
 
-      backgroundColor = isDark
-          ? const Color(0xFF451A03)
-          : const Color(0xFFFEF3C7);
+      backgroundColor =
+          isDark ? const Color(0xFF451A03) : const Color(0xFFFEF3C7);
     } else if (tag.contains('TIME-OUT')) {
       textColor = const Color(0xFFC2410C);
 
-      backgroundColor = isDark
-          ? const Color(0xFF431407)
-          : const Color(0xFFFFEDD5);
+      backgroundColor =
+          isDark ? const Color(0xFF431407) : const Color(0xFFFFEDD5);
     } else {
       textColor = const Color(0xFF475569);
 
-      backgroundColor = isDark
-          ? const Color(0xFF334155)
-          : const Color(0xFFF1F5F9);
+      backgroundColor =
+          isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9);
     }
 
     return Container(
@@ -536,6 +585,7 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
 
   Widget _buildEmptyState() {
     final isDark = themeController.isDarkMode;
+    final hasSearch = _searchQuery.trim().isNotEmpty;
 
     return Container(
       padding: const EdgeInsets.symmetric(
@@ -545,21 +595,29 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
       alignment: Alignment.center,
       child: Column(
         children: [
+          if (hasSearch) ...[
+            Icon(
+              Icons.search_off_rounded,
+              size: 36,
+              color: isDark ? Colors.white54 : muted,
+            ),
+            const SizedBox(height: 10),
+          ],
           Text(
-            'No Sanctions',
+            hasSearch ? 'No Matching Events' : 'No Sanctions',
             style: TextStyle(
               fontSize: 15,
               fontWeight: FontWeight.bold,
               color: isDark ? Colors.white : navy,
             ),
           ),
-
           const SizedBox(height: 4),
-
-          const Text(
-            'You currently have no recorded attendance sanctions.',
+          Text(
+            hasSearch
+                ? 'No sanctions matched "${_searchQuery.trim()}".'
+                : 'You currently have no recorded attendance sanctions.',
             textAlign: TextAlign.center,
-            style: TextStyle(
+            style: const TextStyle(
               fontSize: 12,
               color: muted,
             ),
@@ -575,14 +633,10 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: isDark
-            ? const Color(0xFF1E293B)
-            : Colors.white,
+        color: isDark ? const Color(0xFF1E293B) : Colors.white,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: isDark
-              ? const Color(0xFF334155)
-              : const Color(0xFFE2E8F0),
+          color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
         ),
       ),
       child: Column(
@@ -594,16 +648,12 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
               color: muted,
             ),
           ),
-
           const SizedBox(height: 12),
-
           ElevatedButton(
             onPressed: _loadSanctions,
             style: ElevatedButton.styleFrom(
-              backgroundColor:
-                  isDark ? gold : navy,
-              foregroundColor:
-                  isDark ? navy : Colors.white,
+              backgroundColor: isDark ? gold : navy,
+              foregroundColor: isDark ? navy : Colors.white,
               elevation: 0,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(6),

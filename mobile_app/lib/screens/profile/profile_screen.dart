@@ -6,7 +6,6 @@ import '../../main.dart';
 import '../../models/student_profile.dart';
 import '../../services/auth_service.dart';
 import '../../services/profile_service.dart';
-import '../../widgets/main_bottom_navigation.dart';
 import '../auth/auth_gate.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -124,46 +123,48 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = themeController.isDarkMode;
+    return ListenableBuilder(
+      listenable: themeController,
+      builder: (context, _) {
+        final isDark = themeController.isDarkMode;
 
-    return Scaffold(
-      backgroundColor:
-          isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
-      appBar: AppBar(
-        backgroundColor: isDark ? const Color(0xFF1E293B) : navy,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        title: const Text(
-          'Profile',
-          style: TextStyle(
-            fontWeight: FontWeight.w700,
-            fontSize: 18,
-            letterSpacing: 0.2,
-          ),
-        ),
-        actions: [
-          IconButton(
-            tooltip: isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode',
-            onPressed: () {
-              themeController.toggleTheme();
-              setState(() {});
-            },
-            icon: Icon(
-              isDark ? Icons.wb_sunny_rounded : Icons.dark_mode_rounded,
-              color: gold,
+        return Scaffold(
+          backgroundColor:
+              isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+          appBar: AppBar(
+            backgroundColor: isDark ? const Color(0xFF1E293B) : navy,
+            foregroundColor: Colors.white,
+            elevation: 0,
+            title: const Text(
+              'Profile',
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 18,
+                letterSpacing: 0.2,
+              ),
             ),
+            actions: [
+              IconButton(
+                tooltip:
+                    isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode',
+                onPressed: () {
+                  themeController.toggleTheme();
+                },
+                icon: Icon(
+                  isDark ? Icons.wb_sunny_rounded : Icons.dark_mode_rounded,
+                  color: gold,
+                ),
+              ),
+              const SizedBox(width: 4),
+            ],
           ),
-          const SizedBox(width: 4),
-        ],
-      ),
-      body: RefreshIndicator(
-        color: gold,
-        onRefresh: _loadProfile,
-        child: _buildBody(),
-      ),
-      bottomNavigationBar: const MainBottomNavigation(currentIndex: -1),
-      floatingActionButton: MainBottomNavigation.scannerButton(context),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
+          body: RefreshIndicator(
+            color: gold,
+            onRefresh: _loadProfile,
+            child: _buildBody(),
+          ),
+        );
+      },
     );
   }
 
@@ -190,7 +191,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(18, 20, 18, 112),
+      padding: const EdgeInsets.fromLTRB(18, 20, 18, 40),
       children: [
         _buildProfileHeader(profile),
         const SizedBox(height: 20),
