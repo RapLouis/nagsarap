@@ -100,6 +100,10 @@ class _AttendanceFaceVerificationScreenState
   XFile? _turnedFrame;
   Future<XFile>? _turnedCompressFuture;
 
+  // Limits concurrent native compressions to 2 workers so disk I/O never stalls camera shots
+  int _activeCompressJobs = 0;
+  final List<Completer<void>> _compressWaiters = [];
+
   late final AnimationController _pulseController;
 
   @override
@@ -136,6 +140,23 @@ class _AttendanceFaceVerificationScreenState
     return _random.nextBool() ? 'left' : 'right';
   }
 
+  Future<XFile> _compressPaced(XFile frame) async {
+    while (_activeCompressJobs >= 2) {
+      final waiter = Completer<void>();
+      _compressWaiters.add(waiter);
+      await waiter.future;
+    }
+    _activeCompressJobs++;
+    try {
+      return await ImageCompressService.compressFrame(frame);
+    } finally {
+      _activeCompressJobs--;
+      if (_compressWaiters.isNotEmpty) {
+        _compressWaiters.removeAt(0).complete();
+      }
+    }
+  }
+
   // --------------------------------------------------------------------------
   // AUTOMATIC SESSION DETECTION (TIME-IN VS TIME-OUT — NO HARDCODED MARGIN)
   // --------------------------------------------------------------------------
@@ -143,7 +164,9 @@ class _AttendanceFaceVerificationScreenState
   Future<DateTime> _getNormalizedLocalNow() async {
     final deviceNow = DateTime.now();
     try {
-      final trusted = await SecureTimeService.instance.getTrustedTime();
+      final trusted = await SecureTimeService.instance
+          .getTrustedTime()
+          .timeout(const Duration(milliseconds: 800));
       final localTrusted = trusted.toLocal();
       if (localTrusted.year >= 2025 &&
           localTrusted.difference(deviceNow).abs() < const Duration(hours: 2)) {
@@ -185,7 +208,6 @@ class _AttendanceFaceVerificationScreenState
     final bool isTimeOutActive = isInsideWindow(timeOutWin);
     final bool isTimeInActive = isInsideWindow(timeInWin);
 
-    // Go to Time-Out if Time-Out window is active, even if there is no Time-In record
     if (isTimeOutActive && !_hasTimeOut) {
       return AttendanceSessionType.timeOut;
     }
@@ -612,9 +634,12 @@ class _AttendanceFaceVerificationScreenState
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
-              onPressed: () {
+              onPressed: () async {
                 Navigator.of(dialogCtx).pop();
                 if (mounted && !_disposed) {
+                  try {
+                    await _camera?.resumePreview();
+                  } catch (_) {}
                   setState(() {
                     if (_challengeNonce == 'offline-nonce') {
                       _direction = _pickRandomDirection();
@@ -709,6 +734,9 @@ class _AttendanceFaceVerificationScreenState
 
   Future<void> _verifyLocationAndCapture() async {
     if (!mounted || _disposed) return;
+    try {
+      await _camera?.resumePreview();
+    } catch (_) {}
     setState(() {
       _step = _LivenessStep.lookCenter;
       _error = null;
@@ -868,6 +896,13 @@ class _AttendanceFaceVerificationScreenState
 
     await controller.initialize();
 
+    try {
+      await controller.setFocusMode(FocusMode.locked);
+    } catch (_) {}
+    try {
+      await controller.setExposureMode(ExposureMode.locked);
+    } catch (_) {}
+
     if (!mounted || _disposed) {
       await controller.dispose();
       return;
@@ -894,7 +929,7 @@ class _AttendanceFaceVerificationScreenState
       return await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 12),
+          timeLimit: Duration(seconds: 8),
         ),
       );
     } catch (_) {
@@ -943,7 +978,7 @@ class _AttendanceFaceVerificationScreenState
     _turnedCompressFuture = null;
 
     try {
-      // 1. Center Pose Capture (compress each frame in background immediately)
+      // 1. Center Pose Capture
       setState(() {
         _step = _LivenessStep.lookCenter;
         _hint = 'Look straight. Screen is verifying light reflections...';
@@ -953,17 +988,17 @@ class _AttendanceFaceVerificationScreenState
         if (!mounted || _disposed) return;
 
         setState(() => _overlayFlashColor = _flashColorSequence[i]);
-        await Future.delayed(const Duration(milliseconds: 280));
+        await Future.delayed(const Duration(milliseconds: 220));
         if (!mounted || _disposed) return;
 
         final frame = await _camera!.takePicture();
         _flashFrames.add(frame);
         _flashColors.add(_flashColorNames[i]);
-        _flashCompressFutures.add(ImageCompressService.compressFrame(frame));
+        _flashCompressFutures.add(_compressPaced(frame));
       }
 
       _centerFrame = await _camera!.takePicture();
-      _centerCompressFuture = ImageCompressService.compressFrame(_centerFrame!);
+      _centerCompressFuture = _compressPaced(_centerFrame!);
 
       // Instant ML Kit Check on Center Pose
       final centerCheck = await _validateCenterPoseMLKit(_centerFrame!);
@@ -981,7 +1016,7 @@ class _AttendanceFaceVerificationScreenState
         return;
       }
 
-      // 2. Head Turn Pose Capture (compress each frame in background immediately)
+      // 2. Head Turn Pose Capture
       setState(() {
         _step = _LivenessStep.turn;
         _hint =
@@ -992,39 +1027,58 @@ class _AttendanceFaceVerificationScreenState
         if (!mounted || _disposed) return;
 
         setState(() => _overlayFlashColor = _flashColorSequence[i]);
-        await Future.delayed(const Duration(milliseconds: 320));
+        await Future.delayed(const Duration(milliseconds: 250));
         if (!mounted || _disposed) return;
 
         final frame = await _camera!.takePicture();
         _flashFrames.add(frame);
         _flashColors.add(_flashColorNames[i]);
-        _flashCompressFutures.add(ImageCompressService.compressFrame(frame));
+        _flashCompressFutures.add(_compressPaced(frame));
       }
 
       _turnedFrame = await _camera!.takePicture();
-      _turnedCompressFuture = ImageCompressService.compressFrame(_turnedFrame!);
-      setState(() => _overlayFlashColor = Colors.transparent);
+      _turnedCompressFuture = _compressPaced(_turnedFrame!);
 
-      // Instant ML Kit Check on Head Turn Direction
-      final turnCheck = await _validateTurnPoseMLKit(
-        centerYaw: centerCheck.yaw,
-        turnedFrame: _turnedFrame!,
-        requiredDirection: _direction,
-      );
+      if (mounted && !_disposed) {
+        setState(() {
+          _overlayFlashColor = Colors.transparent;
+          _step = _LivenessStep.verifying;
+          _hint = 'Verifying pose & preparing frames...';
+        });
+      }
+      try {
+        await _camera?.pausePreview();
+      } catch (_) {}
 
+      final preSubmitResults = await Future.wait([
+        _validateTurnPoseMLKit(
+          centerYaw: centerCheck.yaw,
+          turnedFrame: _turnedFrame!,
+          requiredDirection: _direction,
+        ),
+        _centerCompressFuture!,
+        _turnedCompressFuture!,
+        Future.wait(_flashCompressFutures),
+      ]);
+
+      if (!mounted || _disposed) return;
+
+      final turnCheck = preSubmitResults[0] as _PoseValidationResult;
       if (!turnCheck.isValid) {
-        if (mounted && !_disposed) {
-          setState(() => _step = _LivenessStep.failed);
-          await _showInstantPosePopup(
-            title: turnCheck.title,
-            message: turnCheck.message,
-          );
-        }
+        setState(() => _step = _LivenessStep.failed);
+        await _showInstantPosePopup(
+          title: turnCheck.title,
+          message: turnCheck.message,
+        );
         return;
       }
 
-      // 3. Submit (Online or Verified Offline Queue)
-      await _submitAttendance();
+      // 3. Submit pre-compressed frames immediately
+      await _submitAttendance(
+        compressedCenter: preSubmitResults[1] as XFile,
+        compressedTurned: preSubmitResults[2] as XFile,
+        compressedFlashFrames: preSubmitResults[3] as List<XFile>,
+      );
     } catch (e) {
       debugPrint('Capture sequence error: $e');
       if (mounted && !_disposed) {
@@ -1043,7 +1097,11 @@ class _AttendanceFaceVerificationScreenState
     }
   }
 
-  Future<void> _submitAttendance() async {
+  Future<void> _submitAttendance({
+    required XFile compressedCenter,
+    required XFile compressedTurned,
+    required List<XFile> compressedFlashFrames,
+  }) async {
     final eventId = widget.event.id;
     final pos = _position ??
         Position(
@@ -1059,31 +1117,12 @@ class _AttendanceFaceVerificationScreenState
           speedAccuracy: 0,
         );
 
-    if (eventId == null || _centerFrame == null || _turnedFrame == null) {
-      throw Exception('Missing camera frames or event reference.');
+    if (eventId == null) {
+      throw Exception('Missing event reference.');
     }
 
     setState(() {
       _step = _LivenessStep.verifying;
-      _hint = 'Finalizing verification...';
-    });
-
-    // Await already-running background compressions in parallel instead of sequentially
-    final compressedResults = await Future.wait([
-      _centerCompressFuture ?? ImageCompressService.compressFrame(_centerFrame!),
-      _turnedCompressFuture ?? ImageCompressService.compressFrame(_turnedFrame!),
-      _flashCompressFutures.isNotEmpty
-          ? Future.wait(_flashCompressFutures)
-          : ImageCompressService.compressBatch(_flashFrames),
-    ]);
-
-    if (!mounted || _disposed) return;
-
-    final compressedCenter = compressedResults[0] as XFile;
-    final compressedTurned = compressedResults[1] as XFile;
-    final compressedFlashFrames = compressedResults[2] as List<XFile>;
-
-    setState(() {
       _hint = 'Verifying face with server...';
     });
 
@@ -1169,7 +1208,7 @@ class _AttendanceFaceVerificationScreenState
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) {
-        timer = Timer(const Duration(seconds: 6), () {
+        timer = Timer(const Duration(milliseconds: 2500), () {
           if (Navigator.canPop(dialogContext)) Navigator.pop(dialogContext);
         });
 
@@ -1272,12 +1311,6 @@ class _AttendanceFaceVerificationScreenState
   @override
   Widget build(BuildContext context) {
     final isDark = themeController.isDarkMode;
-    final bool isTimeOut = _currentSession == AttendanceSessionType.timeOut;
-    final String sessionTitle = _checkingSession
-        ? 'Checking Schedule...'
-        : (_currentSession == AttendanceSessionType.timeIn
-            ? 'Verify Time-In'
-            : (isTimeOut ? 'Verify Time-Out' : 'Face Verification'));
 
     return Scaffold(
       backgroundColor: _overlayFlashColor != Colors.transparent
@@ -1303,50 +1336,15 @@ class _AttendanceFaceVerificationScreenState
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: isTimeOut
-                          ? const Color(0xFFFEE2E2)
-                          : const Color(0xFFDCFCE7),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: isTimeOut
-                            ? const Color(0xFFFCA5A5)
-                            : const Color(0xFF86EFAC),
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          isTimeOut ? Icons.logout_rounded : Icons.login_rounded,
-                          size: 16,
-                          color: isTimeOut
-                              ? const Color(0xFFDC2626)
-                              : const Color(0xFF16A34A),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          sessionTitle,
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w800,
-                            color: isTimeOut
-                                ? const Color(0xFF991B1B)
-                                : const Color(0xFF166534),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 4),
+                  _buildSessionBadge(isDark),
+                  const SizedBox(height: 6),
                   Text(
                     widget.event.venue,
-                    style: const TextStyle(fontSize: 12.5, color: muted),
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w500,
+                      color: muted,
+                    ),
                   ),
                   const SizedBox(height: 10),
                   _buildInstructionBadge(),
@@ -1543,6 +1541,57 @@ class _AttendanceFaceVerificationScreenState
             ),
           ],
         ),
+      ),
+    );
+  }
+
+ Widget _buildSessionBadge(bool isDark) {
+    final bool isTimeIn = _currentSession == AttendanceSessionType.timeIn;
+    final bool isTimeOut = _currentSession == AttendanceSessionType.timeOut;
+
+    final String label = _checkingSession
+        ? 'Checking schedule...'
+        : isTimeIn
+            ? 'Time-In Attendance'
+            : isTimeOut
+                ? 'Time-Out Attendance'
+                : 'Attendance Verification';
+
+    final IconData icon = _checkingSession
+        ? Icons.schedule_rounded
+        : isTimeIn
+            ? Icons.login_rounded
+            : isTimeOut
+                ? Icons.logout_rounded
+                : Icons.verified_user_outlined;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            icon,
+            size: 15,
+            color: isDark ? brandGold : brandNavy,
+          ),
+          const SizedBox(width: 7),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+              color: isDark ? Colors.white : brandNavy,
+            ),
+          ),
+        ],
       ),
     );
   }
