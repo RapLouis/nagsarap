@@ -114,7 +114,6 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
     }
   }
 
-  // Filter and group sanctions by event AND event date.
   List<_EventSanctionCard> _getGroupedSanctions() {
     List<SanctionItem> items = _sanctions;
 
@@ -128,7 +127,6 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
 
     for (final item in items) {
       final eventName = _extractEventName(item.title);
-
       final date = item.eventDate ?? item.issuedAt;
 
       final dateKey = date == null
@@ -139,7 +137,7 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
 
       final identity = item.eventId != null
           ? 'id:${item.eventId}|$dateKey'
-          : '${eventName.toLowerCase()}|$dateKey';
+          : 'manual:${item.id}|${eventName.toLowerCase()}|$dateKey';
 
       groups.putIfAbsent(identity, () => <SanctionItem>[]).add(item);
     }
@@ -150,10 +148,8 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
       final eventName = _extractEventName(groupItems.first.title);
 
       DateTime? eventDate;
-
       for (final item in groupItems) {
         final candidate = item.eventDate ?? item.issuedAt;
-
         if (candidate != null &&
             (eventDate == null || candidate.isAfter(eventDate))) {
           eventDate = candidate;
@@ -161,11 +157,13 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
       }
 
       final isResolved = groupItems.every((item) => item.isResolved);
-
       final Set<String> missedTags = {};
 
       for (final item in groupItems) {
-        if (item.missedPeriod == 'time_in') {
+        if (item.missedPeriod == 'both') {
+          missedTags.add('TIME-IN MISSED');
+          missedTags.add('TIME-OUT MISSED');
+        } else if (item.missedPeriod == 'time_in') {
           missedTags.add('TIME-IN MISSED');
         } else if (item.missedPeriod == 'time_out') {
           missedTags.add('TIME-OUT MISSED');
@@ -173,25 +171,28 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
       }
 
       if (missedTags.isEmpty) {
-        missedTags.add('ATTENDANCE MISSED');
+        missedTags.add('ATTENDANCE SANCTION');
       }
 
       final sortedTags = missedTags.toList()
         ..sort((a, b) {
-          if (a.contains('TIME-IN') && b.contains('TIME-OUT')) {
-            return -1;
-          }
-
-          if (a.contains('TIME-OUT') && b.contains('TIME-IN')) {
-            return 1;
-          }
-
+          if (a.contains('TIME-IN') && b.contains('TIME-OUT')) return -1;
+          if (a.contains('TIME-OUT') && b.contains('TIME-IN')) return 1;
           return a.compareTo(b);
         });
+
+      final details = groupItems
+          .map((e) => e.consequence ?? e.reason)
+          .where((s) =>
+              s.trim().isNotEmpty &&
+              s.trim().toLowerCase() != eventName.toLowerCase())
+          .toSet()
+          .join(' • ');
 
       cards.add(
         _EventSanctionCard(
           eventName: eventName,
+          subtitle: details.isEmpty ? null : details,
           date: eventDate,
           isResolved: isResolved,
           missedTags: sortedTags,
@@ -202,7 +203,6 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
     cards.sort((a, b) {
       final first = a.date ?? DateTime(0);
       final second = b.date ?? DateTime(0);
-
       return second.compareTo(first);
     });
 
@@ -213,6 +213,8 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
 
     return cards.where((card) {
       final nameMatches = card.eventName.toLowerCase().contains(query);
+      final subtitleMatches =
+          (card.subtitle ?? '').toLowerCase().contains(query);
       final dateStr = card.date == null
           ? 'date unspecified'
           : DateFormat('MMMM d, yyyy MMM d, yyyy')
@@ -222,7 +224,7 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
       final tagMatches =
           card.missedTags.any((tag) => tag.toLowerCase().contains(query));
 
-      return nameMatches || dateMatches || tagMatches;
+      return nameMatches || subtitleMatches || dateMatches || tagMatches;
     }).toList();
   }
 
@@ -239,7 +241,6 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
 
     for (final suffix in suffixes) {
       final index = lower.lastIndexOf(suffix);
-
       if (index >= 0) {
         return trimmed.substring(0, index).trim();
       }
@@ -506,6 +507,17 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
               color: muted,
             ),
           ),
+          if (card.subtitle != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              card.subtitle!,
+              style: TextStyle(
+                fontSize: 12,
+                color:
+                    isDark ? const Color(0xFFCBD5E1) : const Color(0xFF475569),
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
           Wrap(
             spacing: 8,
@@ -547,17 +559,14 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
 
     if (tag.contains('TIME-IN')) {
       textColor = const Color(0xFFB45309);
-
       backgroundColor =
           isDark ? const Color(0xFF451A03) : const Color(0xFFFEF3C7);
     } else if (tag.contains('TIME-OUT')) {
       textColor = const Color(0xFFC2410C);
-
       backgroundColor =
           isDark ? const Color(0xFF431407) : const Color(0xFFFFEDD5);
     } else {
       textColor = const Color(0xFF475569);
-
       backgroundColor =
           isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9);
     }
@@ -675,12 +684,14 @@ class _SanctionsScreenState extends State<SanctionsScreen> {
 
 class _EventSanctionCard {
   final String eventName;
+  final String? subtitle;
   final DateTime? date;
   final bool isResolved;
   final List<String> missedTags;
 
   const _EventSanctionCard({
     required this.eventName,
+    this.subtitle,
     required this.date,
     required this.isResolved,
     required this.missedTags,

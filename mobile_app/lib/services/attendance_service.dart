@@ -178,24 +178,17 @@ class AttendanceService {
     String type = 'time_in',
   }) async {
     try {
-      final Map<String, dynamic> formMap = {
+      final normalizedType =
+          (type == 'time_out' || type == 'out') ? 'time_out' : 'time_in';
+
+      final formData = FormData.fromMap({
         'event_id': eventId,
-        'type': type,
-        'check_in_type': type,
-        'session_type': type,
+        'type': normalizedType,
         'challenge_nonce': challengeNonce,
         'session_id': sessionId,
         'latitude': latitude,
         'longitude': longitude,
         'location_accuracy': locationAccuracy,
-        'frontal_image_base64': await MultipartFile.fromFile(
-          centerFrame.path,
-          filename: 'attendance-center.jpg',
-        ),
-        'turn_peak_image_base64': await MultipartFile.fromFile(
-          turnedFrame.path,
-          filename: 'attendance-turn.jpg',
-        ),
         'center_frame': await MultipartFile.fromFile(
           centerFrame.path,
           filename: 'attendance-center.jpg',
@@ -204,17 +197,7 @@ class AttendanceService {
           turnedFrame.path,
           filename: 'attendance-turn.jpg',
         ),
-      };
-
-      for (int i = 0; i < flashFrames.length; i++) {
-        formMap['flash_images_base64[$i]'] = await MultipartFile.fromFile(
-          flashFrames[i].path,
-          filename: 'flash_$i.jpg',
-        );
-        formMap['flash_colors[$i]'] = flashColors[i];
-      }
-
-      final formData = FormData.fromMap(formMap);
+      });
 
       final response = await _api.dio.post(
         ApiEndpoints.attendanceMobileCheckIn,
@@ -327,7 +310,12 @@ class AttendanceService {
     }
 
     try {
-      final Map<String, dynamic> formMap = {
+      final normalizedType =
+          (record.sessionType == 'time_out' || record.sessionType == 'out')
+              ? 'time_out'
+              : 'time_in';
+
+      final formData = FormData.fromMap({
         'event_id': record.eventId,
         'attendance_uuid': record.uuid,
         'attendance_time': record.attendanceTime,
@@ -335,17 +323,8 @@ class AttendanceService {
         'longitude': record.longitude,
         'location_accuracy': record.locationAccuracy,
         'liveness_direction': record.livenessDirection,
-        'direction': record.livenessDirection,
-        'session_type': record.sessionType,
-        'type': record.sessionType,
-        'frontal_image_base64': await MultipartFile.fromFile(
-          record.centerFramePath,
-          filename: 'offline-center.jpg',
-        ),
-        'turn_peak_image_base64': await MultipartFile.fromFile(
-          record.turnedFramePath,
-          filename: 'offline-turn.jpg',
-        ),
+        'type': normalizedType,
+        'session_type': normalizedType,
         'center_frame': await MultipartFile.fromFile(
           record.centerFramePath,
           filename: 'offline-center.jpg',
@@ -354,20 +333,11 @@ class AttendanceService {
           record.turnedFramePath,
           filename: 'offline-turn.jpg',
         ),
-      };
-
-      final colors = ['red', 'green', 'blue'];
-      for (int i = 0; i < record.flashFramePaths.length; i++) {
-        formMap['flash_images_base64[$i]'] = await MultipartFile.fromFile(
-          record.flashFramePaths[i],
-          filename: 'flash_$i.jpg',
-        );
-        formMap['flash_colors[$i]'] = colors[i % colors.length];
-      }
+      });
 
       final response = await _api.dio.post(
         ApiEndpoints.attendanceSync,
-        data: FormData.fromMap(formMap),
+        data: formData,
         options: Options(
           contentType: 'multipart/form-data',
           sendTimeout: const Duration(seconds: 60),
@@ -406,7 +376,6 @@ class AttendanceService {
     }
   }
 
-  /// Alias for WorkManager background isolate tasks
   Future<OfflineSyncResult> syncPendingOfflineAttendance() {
     return syncPendingAttendances();
   }
@@ -460,13 +429,10 @@ class AttendanceService {
         continue;
       }
 
-      // Stop processing if internet connection dropped
       if (result.networkUnavailable) {
         break;
       }
 
-      // Deletes permanently rejected offline records from SQLite
-      // so the yellow pending banner disappears cleanly upon sync.
       debugPrint(
         'OFFLINE SYNC REJECTED BY SERVER (${result.message}). Cleaning up SQLite.',
       );

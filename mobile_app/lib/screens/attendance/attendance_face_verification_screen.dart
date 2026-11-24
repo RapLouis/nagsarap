@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -50,6 +52,9 @@ class _AttendanceFaceVerificationScreenState
 
   // Minimum head yaw angle (in degrees) required to confirm a left/right turn
   static const double _requiredTurnAngle = 14.0;
+
+  // Maximum time to wait for online verification before queuing offline
+  static const Duration _serverVerifyTimeout = Duration(seconds: 5);
 
   final Random _random = Random();
   CameraController? _camera;
@@ -100,7 +105,7 @@ class _AttendanceFaceVerificationScreenState
   XFile? _turnedFrame;
   Future<XFile>? _turnedCompressFuture;
 
-  // Limits concurrent native compressions to 2 workers so disk I/O never stalls camera shots
+  // Allow up to 4 parallel hardware compressions so all 5 frames finish immediately
   int _activeCompressJobs = 0;
   final List<Completer<void>> _compressWaiters = [];
 
@@ -140,14 +145,33 @@ class _AttendanceFaceVerificationScreenState
     return _random.nextBool() ? 'left' : 'right';
   }
 
-  Future<XFile> _compressPaced(XFile frame) async {
-    while (_activeCompressJobs >= 2) {
+  /// Tiered hardware compression:
+  /// - Flash frames: 240x240 @ q45 (~8-12 KB) since only RGB reflection is checked
+  /// - Pose frames: 480x480 @ q68 (~25-35 KB) optimal for ArcFace 112x112 tensors
+  Future<XFile> _compressPaced(XFile frame, {bool isFlash = false}) async {
+    while (_activeCompressJobs >= 4) {
       final waiter = Completer<void>();
       _compressWaiters.add(waiter);
       await waiter.future;
     }
     _activeCompressJobs++;
     try {
+      final targetPath =
+          '${frame.path}_${isFlash ? 'f' : 'p'}_${DateTime.now().microsecondsSinceEpoch}.jpg';
+      final dynamic compressed = await FlutterImageCompress.compressAndGetFile(
+        frame.path,
+        targetPath,
+        minWidth: isFlash ? 240 : 480,
+        minHeight: isFlash ? 240 : 480,
+        quality: isFlash ? 45 : 68,
+        format: CompressFormat.jpeg,
+      );
+
+      if (compressed is XFile) return compressed;
+      if (compressed is File) return XFile(compressed.path);
+
+      return await ImageCompressService.compressFrame(frame);
+    } catch (_) {
       return await ImageCompressService.compressFrame(frame);
     } finally {
       _activeCompressJobs--;
@@ -166,7 +190,7 @@ class _AttendanceFaceVerificationScreenState
     try {
       final trusted = await SecureTimeService.instance
           .getTrustedTime()
-          .timeout(const Duration(milliseconds: 800));
+          .timeout(const Duration(milliseconds: 500));
       final localTrusted = trusted.toLocal();
       if (localTrusted.year >= 2025 &&
           localTrusted.difference(deviceNow).abs() < const Duration(hours: 2)) {
@@ -687,9 +711,16 @@ class _AttendanceFaceVerificationScreenState
         return Future.wait([
           _initCameraFast(),
           _getAccuratePosition(),
-          AttendanceService.instance.requestLivenessChallenge(
-            eventId: widget.event.id!,
-          ),
+          AttendanceService.instance
+              .requestLivenessChallenge(eventId: widget.event.id!)
+              .timeout(
+                const Duration(seconds: 3),
+                onTimeout: () => const LivenessChallengeResult(
+                  success: false,
+                  message: 'Challenge timeout',
+                  networkUnavailable: true,
+                ),
+              ),
         ]);
       }();
 
@@ -929,7 +960,7 @@ class _AttendanceFaceVerificationScreenState
       return await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 8),
+          timeLimit: Duration(seconds: 3),
         ),
       );
     } catch (_) {
@@ -978,27 +1009,32 @@ class _AttendanceFaceVerificationScreenState
     _turnedCompressFuture = null;
 
     try {
-      // 1. Center Pose Capture
+      // 1. Center Pose Capture (Red + Green flash frames + clean Center frame)
       setState(() {
         _step = _LivenessStep.lookCenter;
-        _hint = 'Look straight. Screen is verifying light reflections...';
+        _hint = 'Look straight. Verifying light reflections...';
       });
 
-      for (int i = 0; i < _flashColorSequence.length; i++) {
+      for (int i = 0; i < 2; i++) {
         if (!mounted || _disposed) return;
 
         setState(() => _overlayFlashColor = _flashColorSequence[i]);
-        await Future.delayed(const Duration(milliseconds: 220));
+        await Future.delayed(const Duration(milliseconds: 140));
         if (!mounted || _disposed) return;
 
         final frame = await _camera!.takePicture();
         _flashFrames.add(frame);
         _flashColors.add(_flashColorNames[i]);
-        _flashCompressFutures.add(_compressPaced(frame));
+        _flashCompressFutures.add(_compressPaced(frame, isFlash: true));
+      }
+
+      // Clear overlay before taking the primary recognition frame for clean lighting
+      if (mounted && !_disposed) {
+        setState(() => _overlayFlashColor = Colors.transparent);
       }
 
       _centerFrame = await _camera!.takePicture();
-      _centerCompressFuture = _compressPaced(_centerFrame!);
+      _centerCompressFuture = _compressPaced(_centerFrame!, isFlash: false);
 
       // Instant ML Kit Check on Center Pose
       final centerCheck = await _validateCenterPoseMLKit(_centerFrame!);
@@ -1016,28 +1052,28 @@ class _AttendanceFaceVerificationScreenState
         return;
       }
 
-      // 2. Head Turn Pose Capture
+      // 2. Head Turn Pose Capture (Blue flash frame + clean Turned frame)
       setState(() {
         _step = _LivenessStep.turn;
-        _hint =
-            'Turn your head to your ${_direction.toUpperCase()} while screen flashes...';
+        _hint = 'Turn your head to your ${_direction.toUpperCase()} now...';
       });
 
-      for (int i = 0; i < _flashColorSequence.length; i++) {
-        if (!mounted || _disposed) return;
+      if (!mounted || _disposed) return;
+      setState(() => _overlayFlashColor = _flashColorSequence[2]);
+      await Future.delayed(const Duration(milliseconds: 220));
+      if (!mounted || _disposed) return;
 
-        setState(() => _overlayFlashColor = _flashColorSequence[i]);
-        await Future.delayed(const Duration(milliseconds: 250));
-        if (!mounted || _disposed) return;
+      final blueFrame = await _camera!.takePicture();
+      _flashFrames.add(blueFrame);
+      _flashColors.add(_flashColorNames[2]);
+      _flashCompressFutures.add(_compressPaced(blueFrame, isFlash: true));
 
-        final frame = await _camera!.takePicture();
-        _flashFrames.add(frame);
-        _flashColors.add(_flashColorNames[i]);
-        _flashCompressFutures.add(_compressPaced(frame));
+      if (mounted && !_disposed) {
+        setState(() => _overlayFlashColor = Colors.transparent);
       }
 
       _turnedFrame = await _camera!.takePicture();
-      _turnedCompressFuture = _compressPaced(_turnedFrame!);
+      _turnedCompressFuture = _compressPaced(_turnedFrame!, isFlash: false);
 
       if (mounted && !_disposed) {
         setState(() {
@@ -1073,7 +1109,7 @@ class _AttendanceFaceVerificationScreenState
         return;
       }
 
-      // 3. Submit pre-compressed frames immediately
+      // 3. Submit pre-compressed lightweight frames immediately
       await _submitAttendance(
         compressedCenter: preSubmitResults[1] as XFile,
         compressedTurned: preSubmitResults[2] as XFile,
@@ -1129,24 +1165,38 @@ class _AttendanceFaceVerificationScreenState
     final typeStr =
         _currentSession == AttendanceSessionType.timeIn ? 'time_in' : 'time_out';
 
-    final result = await AttendanceService.instance.mobileCheckIn(
-      eventId: eventId,
-      latitude: pos.latitude,
-      longitude: pos.longitude,
-      locationAccuracy: pos.accuracy,
-      centerFrame: compressedCenter,
-      turnedFrame: compressedTurned,
-      flashFrames: compressedFlashFrames,
-      flashColors: _flashColors,
-      challengeNonce: _challengeNonce ?? '',
-      sessionId: _challengeSessionId ?? '',
-      type: typeStr,
-    );
+    dynamic result;
+    try {
+      result = await AttendanceService.instance
+          .mobileCheckIn(
+            eventId: eventId,
+            latitude: pos.latitude,
+            longitude: pos.longitude,
+            locationAccuracy: pos.accuracy,
+            centerFrame: compressedCenter,
+            turnedFrame: compressedTurned,
+            flashFrames: compressedFlashFrames,
+            flashColors: _flashColors,
+            challengeNonce: _challengeNonce ?? '',
+            sessionId: _challengeSessionId ?? '',
+            type: typeStr,
+          )
+          .timeout(_serverVerifyTimeout);
+    } on TimeoutException {
+      result = null;
+    }
 
     if (!mounted || _disposed) return;
 
-    if (!result.success) {
-      final msg = result.message.toLowerCase();
+    final bool isSuccess = result != null && result.success == true;
+    final String resultMessage = result != null
+        ? (result.message?.toString() ?? 'Verification failed.')
+        : 'Server response timed out. Saving offline...';
+    final bool isNetworkUnavailable =
+        result == null || result.networkUnavailable == true;
+
+    if (!isSuccess) {
+      final msg = resultMessage.toLowerCase();
 
       if (msg.contains('turn') ||
           msg.contains('angle') ||
@@ -1161,7 +1211,8 @@ class _AttendanceFaceVerificationScreenState
         return;
       }
 
-      if (result.networkUnavailable) {
+      if (isNetworkUnavailable) {
+        setState(() => _hint = 'Saving locally for background sync...');
         final trustedTime = await _getNormalizedLocalNow();
 
         final offlineQueueResult =
@@ -1185,8 +1236,8 @@ class _AttendanceFaceVerificationScreenState
           return;
         }
       } else {
-        _fail(result.message);
-        _showClosedDialog(result.message);
+        _fail(resultMessage);
+        _showClosedDialog(resultMessage);
         return;
       }
     }
@@ -1545,7 +1596,7 @@ class _AttendanceFaceVerificationScreenState
     );
   }
 
- Widget _buildSessionBadge(bool isDark) {
+  Widget _buildSessionBadge(bool isDark) {
     final bool isTimeIn = _currentSession == AttendanceSessionType.timeIn;
     final bool isTimeOut = _currentSession == AttendanceSessionType.timeOut;
 

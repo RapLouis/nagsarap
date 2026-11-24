@@ -3,11 +3,13 @@ import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:file_selector/file_selector.dart' as fs;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:image/image.dart' as img;
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../core/app_colors.dart';
-import '../../services/image_compress_service.dart';
 import '../../services/registration_service.dart';
 import '../../widgets/app_dialog.dart';
 import 'registration_face_verification_screen.dart';
@@ -213,7 +215,8 @@ class _RegisterTabState extends State<RegisterTab> {
     if (!cameraStatus.isGranted) {
       await showSimpleError(
         title: 'Camera Permission Required',
-        message: 'Camera access is required to take your live profile photo. Please enable camera permission in your settings.',
+        message:
+            'Camera access is required to take your live profile photo. Please enable camera permission in your settings.',
       );
       return;
     }
@@ -280,7 +283,8 @@ class _RegisterTabState extends State<RegisterTab> {
 
       await showSimpleError(
         title: 'Photo Error',
-        message: 'Unable to process the captured photo. Please try retaking the image.',
+        message:
+            'Unable to process the captured photo. Please try retaking the image.',
       );
     } finally {
       if (mounted) {
@@ -386,10 +390,16 @@ class _RegisterTabState extends State<RegisterTab> {
 
   bool get hasMinimumLength => passwordController.text.length >= 12;
   bool get hasNumber => RegExp(r'[0-9]').hasMatch(passwordController.text);
-  bool get hasSpecialCharacter => RegExp(r'''[!@#$%^&*(),.?":{}|<>_\-+=/\\[\]]''').hasMatch(passwordController.text);
-  bool get passwordsMatch => passwordController.text.isNotEmpty && passwordController.text == confirmPasswordController.text;
-  bool get validEmail => RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(emailController.text.trim());
-  bool get validStudentNumber => RegExp(r'^\d{2}-\d{6}$').hasMatch(studentNumberController.text.trim());
+  bool get hasSpecialCharacter =>
+      RegExp(r'''[!@#$%^&*(),.?":{}|<>_\-+=/\\[\]]''')
+          .hasMatch(passwordController.text);
+  bool get passwordsMatch =>
+      passwordController.text.isNotEmpty &&
+      passwordController.text == confirmPasswordController.text;
+  bool get validEmail =>
+      RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(emailController.text.trim());
+  bool get validStudentNumber =>
+      RegExp(r'^\d{2}-\d{6}$').hasMatch(studentNumberController.text.trim());
 
   bool get canRegister =>
       validStudentNumber &&
@@ -447,7 +457,8 @@ class _RegisterTabState extends State<RegisterTab> {
         return;
       }
 
-      final studentName = '${firstNameController.text.trim()} ${surnameController.text.trim()}';
+      final studentName =
+          '${firstNameController.text.trim()} ${surnameController.text.trim()}';
 
       await Navigator.of(context).push(
         MaterialPageRoute(
@@ -461,7 +472,8 @@ class _RegisterTabState extends State<RegisterTab> {
       if (!mounted) return;
       await showSimpleError(
         title: 'Registration Error',
-        message: 'An error occurred during submission. Please check your network connection.',
+        message:
+            'An error occurred during submission. Please check your network connection.',
       );
     } finally {
       if (mounted) {
@@ -723,7 +735,9 @@ class _RegisterTabState extends State<RegisterTab> {
             suffixIcon: IconButton(
               onPressed: () => setState(() => hidePassword = !hidePassword),
               icon: Icon(
-                hidePassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                hidePassword
+                    ? Icons.visibility_off_outlined
+                    : Icons.visibility_outlined,
                 size: 18,
                 color: AppColors.textMuted,
               ),
@@ -734,9 +748,13 @@ class _RegisterTabState extends State<RegisterTab> {
             padding: const EdgeInsets.only(left: 6),
             child: Column(
               children: [
-                _PasswordRequirement(passed: hasMinimumLength, text: 'At least 12 characters'),
-                _PasswordRequirement(passed: hasNumber, text: 'At least one number'),
-                _PasswordRequirement(passed: hasSpecialCharacter, text: 'At least one special character'),
+                _PasswordRequirement(
+                    passed: hasMinimumLength, text: 'At least 12 characters'),
+                _PasswordRequirement(
+                    passed: hasNumber, text: 'At least one number'),
+                _PasswordRequirement(
+                    passed: hasSpecialCharacter,
+                    text: 'At least one special character'),
               ],
             ),
           ),
@@ -755,9 +773,12 @@ class _RegisterTabState extends State<RegisterTab> {
             ),
             onChanged: (_) => setState(() {}),
             suffixIcon: IconButton(
-              onPressed: () => setState(() => hideConfirmPassword = !hideConfirmPassword),
+              onPressed: () =>
+                  setState(() => hideConfirmPassword = !hideConfirmPassword),
               icon: Icon(
-                hideConfirmPassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                hideConfirmPassword
+                    ? Icons.visibility_off_outlined
+                    : Icons.visibility_outlined,
                 size: 18,
                 color: AppColors.textMuted,
               ),
@@ -770,16 +791,21 @@ class _RegisterTabState extends State<RegisterTab> {
               child: Row(
                 children: [
                   Icon(
-                    passwordsMatch ? Icons.check_circle_rounded : Icons.cancel_rounded,
+                    passwordsMatch
+                        ? Icons.check_circle_rounded
+                        : Icons.cancel_rounded,
                     size: 14,
                     color: passwordsMatch ? AppColors.success : AppColors.error,
                   ),
                   const SizedBox(width: 6),
                   Text(
-                    passwordsMatch ? 'Passwords match' : 'Passwords do not match',
+                    passwordsMatch
+                        ? 'Passwords match'
+                        : 'Passwords do not match',
                     style: TextStyle(
                       fontSize: 11,
-                      color: passwordsMatch ? AppColors.success : AppColors.error,
+                      color:
+                          passwordsMatch ? AppColors.success : AppColors.error,
                     ),
                   ),
                 ],
@@ -817,7 +843,9 @@ class _RegisterTabState extends State<RegisterTab> {
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
-                  color: facePhotoValid ? AppColors.success : const Color(0xFFE2E8F0),
+                  color: facePhotoValid
+                      ? AppColors.success
+                      : const Color(0xFFE2E8F0),
                   width: 1.5,
                 ),
                 boxShadow: const [
@@ -834,7 +862,9 @@ class _RegisterTabState extends State<RegisterTab> {
                     width: 44,
                     height: 44,
                     decoration: BoxDecoration(
-                      color: facePhotoValid ? const Color(0xFFDCFCE7) : const Color(0xFFF1F5F9),
+                      color: facePhotoValid
+                          ? const Color(0xFFDCFCE7)
+                          : const Color(0xFFF1F5F9),
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: validatingPhoto
@@ -846,9 +876,13 @@ class _RegisterTabState extends State<RegisterTab> {
                             ),
                           )
                         : Icon(
-                            facePhotoValid ? Icons.check_circle_rounded : Icons.camera_alt_rounded,
+                            facePhotoValid
+                                ? Icons.check_circle_rounded
+                                : Icons.camera_alt_rounded,
                             size: 24,
-                            color: facePhotoValid ? AppColors.success : AppColors.navy,
+                            color: facePhotoValid
+                                ? AppColors.success
+                                : AppColors.navy,
                           ),
                   ),
                   const SizedBox(width: 14),
@@ -870,10 +904,13 @@ class _RegisterTabState extends State<RegisterTab> {
                         Text(
                           validatingPhoto
                               ? 'Scanning reference photo...'
-                              : photoValidationMessage ?? 'Take a clear, well-lit live headshot',
+                              : photoValidationMessage ??
+                                  'Take a clear, well-lit live headshot',
                           style: TextStyle(
                             fontSize: 11,
-                            color: facePhotoValid ? AppColors.success : AppColors.textMuted,
+                            color: facePhotoValid
+                                ? AppColors.success
+                                : AppColors.textMuted,
                           ),
                         ),
                       ],
@@ -923,7 +960,9 @@ class _RegisterTabState extends State<RegisterTab> {
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
-                  color: form5 != null ? AppColors.success : const Color(0xFFE2E8F0),
+                  color: form5 != null
+                      ? AppColors.success
+                      : const Color(0xFFE2E8F0),
                   width: 1.5,
                 ),
                 boxShadow: const [
@@ -940,13 +979,18 @@ class _RegisterTabState extends State<RegisterTab> {
                     width: 44,
                     height: 44,
                     decoration: BoxDecoration(
-                      color: form5 != null ? const Color(0xFFDCFCE7) : const Color(0xFFF1F5F9),
+                      color: form5 != null
+                          ? const Color(0xFFDCFCE7)
+                          : const Color(0xFFF1F5F9),
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Icon(
-                      form5 != null ? Icons.description_rounded : Icons.picture_as_pdf_outlined,
+                      form5 != null
+                          ? Icons.description_rounded
+                          : Icons.picture_as_pdf_outlined,
                       size: 24,
-                      color: form5 != null ? AppColors.success : AppColors.navy,
+                      color:
+                          form5 != null ? AppColors.success : AppColors.navy,
                     ),
                   ),
                   const SizedBox(width: 14),
@@ -966,7 +1010,7 @@ class _RegisterTabState extends State<RegisterTab> {
                         ),
                         const SizedBox(height: 2),
                         const Text(
-                          'PDF document only (Max 10MB)',
+                          'PDF document only (Maximum 10MB)',
                           style: TextStyle(
                             fontSize: 11,
                             color: AppColors.textMuted,
@@ -1103,7 +1147,7 @@ class _PasswordRequirement extends StatelessWidget {
 }
 
 // ============================================================================
-// HIGH-EFFICIENCY FAST CAMERA CAPTURE
+// CLEAN CAMERA CAPTURE WITH LIGHTING & ALIGNMENT STABILITY GATE
 // ============================================================================
 
 class ProfileCameraScreen extends StatefulWidget {
@@ -1114,15 +1158,38 @@ class ProfileCameraScreen extends StatefulWidget {
 }
 
 class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
+  static const int _requiredStableFrames = 8;
+  static const double _minBrightness = 55.0;
+  static const double _maxBrightness = 225.0;
+  static const double _maxYawDegrees = 12.0;
+  static const double _maxRollDegrees = 12.0;
+
   CameraController? _cameraController;
+  CameraDescription? _frontCamera;
+  late final FaceDetector _faceDetector;
+
   bool _isInitialized = false;
   bool _isCapturing = false;
-  XFile? _capturedImage;
+  bool _isProcessingFrame = false;
+
+  int _stableFrames = 0;
+  String _statusHint = 'Center your face inside the circle';
   String? _errorMessage;
+  XFile? _capturedImage;
 
   @override
   void initState() {
     super.initState();
+    _faceDetector = FaceDetector(
+      options: FaceDetectorOptions(
+        performanceMode: FaceDetectorMode.fast,
+        enableTracking: false,
+        enableContours: false,
+        enableLandmarks: false,
+        enableClassification: false,
+        minFaceSize: 0.22,
+      ),
+    );
     _initFrontCamera();
   }
 
@@ -1138,19 +1205,35 @@ class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
         return;
       }
 
-      final frontCamera = cameras.firstWhere(
+      final front = cameras.firstWhere(
         (c) => c.lensDirection == CameraLensDirection.front,
         orElse: () => cameras.first,
       );
+      _frontCamera = front;
 
-      final controller = CameraController(
-        frontCamera,
-        ResolutionPreset.medium,
+      CameraController controller = CameraController(
+        front,
+        ResolutionPreset.high,
         enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.jpeg,
+        imageFormatGroup: Platform.isAndroid
+            ? ImageFormatGroup.nv21
+            : ImageFormatGroup.bgra8888,
       );
 
-      await controller.initialize();
+      try {
+        await controller.initialize();
+      } catch (_) {
+        await controller.dispose();
+        controller = CameraController(
+          front,
+          ResolutionPreset.medium,
+          enableAudio: false,
+          imageFormatGroup: Platform.isAndroid
+              ? ImageFormatGroup.nv21
+              : ImageFormatGroup.bgra8888,
+        );
+        await controller.initialize();
+      }
 
       if (!mounted) {
         await controller.dispose();
@@ -1161,6 +1244,8 @@ class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
         _cameraController = controller;
         _isInitialized = true;
       });
+
+      await _startQualityStream();
     } catch (e) {
       debugPrint('Camera initialization error: $e');
       if (mounted) {
@@ -1171,10 +1256,214 @@ class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
     }
   }
 
+  Future<void> _startQualityStream() async {
+    final controller = _cameraController;
+    if (controller == null || !controller.value.isInitialized) return;
+    if (controller.value.isStreamingImages) return;
+
+    try {
+      await controller.startImageStream(_onCameraImage);
+    } catch (e) {
+      debugPrint('Image stream start warning: $e');
+    }
+  }
+
+  Future<void> _stopQualityStream() async {
+    final controller = _cameraController;
+    if (controller == null || !controller.value.isInitialized) return;
+    if (!controller.value.isStreamingImages) return;
+
+    try {
+      await controller.stopImageStream();
+    } catch (_) {}
+  }
+
+  Future<void> _onCameraImage(CameraImage image) async {
+    if (!mounted ||
+        _isProcessingFrame ||
+        _isCapturing ||
+        _capturedImage != null) {
+      return;
+    }
+
+    _isProcessingFrame = true;
+
+    try {
+      // 1. Check lighting brightness
+      final double brightness = _measureAverageBrightness(image);
+      if (brightness < _minBrightness) {
+        _updateGateState(
+          stable: false,
+          hint: 'Lighting is too dark. Move to a brighter area.',
+        );
+        return;
+      }
+      if (brightness > _maxBrightness) {
+        _updateGateState(
+          stable: false,
+          hint: 'Lighting is too bright or backlit.',
+        );
+        return;
+      }
+
+      // 2. Check face presence, position, and frontal alignment
+      final inputImage = _toInputImage(image);
+      if (inputImage == null) return;
+
+      final faces = await _faceDetector.processImage(inputImage);
+      if (!mounted || _capturedImage != null) return;
+
+      if (faces.isEmpty) {
+        _updateGateState(
+          stable: false,
+          hint: 'Position your face inside the circle.',
+        );
+        return;
+      }
+
+      if (faces.length > 1) {
+        _updateGateState(
+          stable: false,
+          hint: 'Multiple faces detected. Ensure only you are in frame.',
+        );
+        return;
+      }
+
+      final face = faces.first;
+      final bbox = face.boundingBox;
+
+      final int rotation = _frontCamera?.sensorOrientation ?? 0;
+      final bool isRotated = rotation == 90 || rotation == 270;
+      final double frameW =
+          (isRotated ? image.height : image.width).toDouble();
+      final double frameH =
+          (isRotated ? image.width : image.height).toDouble();
+
+      final double faceWidthRatio = bbox.width / frameW;
+      final double centerXRatio = bbox.center.dx / frameW;
+      final double centerYRatio = bbox.center.dy / frameH;
+
+      if (faceWidthRatio < 0.26) {
+        _updateGateState(
+          stable: false,
+          hint: 'Move slightly closer to the camera.',
+        );
+        return;
+      }
+
+      if (faceWidthRatio > 0.78) {
+        _updateGateState(
+          stable: false,
+          hint: 'Move slightly farther from the camera.',
+        );
+        return;
+      }
+
+      if ((centerXRatio - 0.5).abs() > 0.16 ||
+          (centerYRatio - 0.5).abs() > 0.18) {
+        _updateGateState(
+          stable: false,
+          hint: 'Center your face inside the circle.',
+        );
+        return;
+      }
+
+      final double yaw = (face.headEulerAngleY ?? 0).abs();
+      final double roll = (face.headEulerAngleZ ?? 0).abs();
+
+      if (yaw > _maxYawDegrees || roll > _maxRollDegrees) {
+        _updateGateState(
+          stable: false,
+          hint: 'Look directly straight at the camera.',
+        );
+        return;
+      }
+
+      _updateGateState(
+        stable: true,
+        hint: _stableFrames + 1 >= _requiredStableFrames
+            ? 'Ready — tap Capture Photo'
+            : 'Hold steady...',
+      );
+    } catch (e) {
+      debugPrint('Frame quality check error: $e');
+    } finally {
+      _isProcessingFrame = false;
+    }
+  }
+
+  void _updateGateState({required bool stable, required String hint}) {
+    if (!mounted) return;
+    final int nextStable = stable
+        ? (_stableFrames + 1).clamp(0, _requiredStableFrames)
+        : 0;
+
+    if (nextStable != _stableFrames || hint != _statusHint) {
+      setState(() {
+        _stableFrames = nextStable;
+        _statusHint = hint;
+      });
+    }
+  }
+
+  double _measureAverageBrightness(CameraImage image) {
+    if (image.planes.isEmpty) return 128.0;
+    final Uint8List bytes = image.planes.first.bytes;
+    if (bytes.isEmpty) return 128.0;
+
+    int sum = 0;
+    int count = 0;
+    if (image.format.group == ImageFormatGroup.bgra8888) {
+      for (int i = 0; i + 2 < bytes.length; i += 64) {
+        sum += (bytes[i] + bytes[i + 1] + bytes[i + 2]) ~/ 3;
+        count++;
+      }
+    } else {
+      for (int i = 0; i < bytes.length; i += 16) {
+        sum += bytes[i];
+        count++;
+      }
+    }
+
+    return count == 0 ? 128.0 : sum / count;
+  }
+
+  InputImage? _toInputImage(CameraImage image) {
+    final camera = _frontCamera;
+    if (camera == null) return null;
+
+    final rotation =
+        InputImageRotationValue.fromRawValue(camera.sensorOrientation);
+    if (rotation == null) return null;
+
+    final format = InputImageFormatValue.fromRawValue(image.format.raw);
+    if (format == null) return null;
+
+    if (image.planes.isEmpty) return null;
+
+    final WriteBuffer allBytes = WriteBuffer();
+    for (final Plane plane in image.planes) {
+      allBytes.putUint8List(plane.bytes);
+    }
+    final bytes = allBytes.done().buffer.asUint8List();
+
+    return InputImage.fromBytes(
+      bytes: bytes,
+      metadata: InputImageMetadata(
+        size: Size(image.width.toDouble(), image.height.toDouble()),
+        rotation: rotation,
+        format: format,
+        bytesPerRow: image.planes.first.bytesPerRow,
+      ),
+    );
+  }
+
   Future<void> _capturePhoto() async {
+    final controller = _cameraController;
     if (_isCapturing ||
-        _cameraController == null ||
-        !_cameraController!.value.isInitialized) {
+        controller == null ||
+        !controller.value.isInitialized ||
+        _stableFrames < _requiredStableFrames) {
       return;
     }
 
@@ -1183,25 +1472,26 @@ class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
     });
 
     try {
-      final rawFile = await _cameraController!.takePicture();
-      final compressedFile = await ImageCompressService.compressFrame(
-        rawFile,
-        quality: 75,
-        minWidth: 640,
-        minHeight: 640,
-      );
+      await _stopQualityStream();
+
+      // Keep full native phone camera quality without downscaling or heavy compression
+      final XFile rawFile = await controller.takePicture();
+      final XFile unmirroredFile = await _normalizeFrontCapture(rawFile);
 
       if (mounted) {
         setState(() {
-          _capturedImage = compressedFile;
+          _capturedImage = unmirroredFile;
         });
       }
     } catch (e) {
       debugPrint('Photo capture error: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to capture photo. Please try again.')),
+          const SnackBar(
+            content: Text('Failed to capture photo. Please try again.'),
+          ),
         );
+        await _startQualityStream();
       }
     } finally {
       if (mounted) {
@@ -1212,10 +1502,30 @@ class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
     }
   }
 
-  void _retakePhoto() {
+  Future<XFile> _normalizeFrontCapture(XFile rawFile) async {
+    try {
+      final bytes = await rawFile.readAsBytes();
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return rawFile;
+
+      final baked = img.bakeOrientation(decoded);
+      final unmirrored = img.flipHorizontal(baked);
+      final encoded = img.encodeJpg(unmirrored, quality: 95);
+
+      await File(rawFile.path).writeAsBytes(encoded, flush: true);
+      return rawFile;
+    } catch (_) {
+      return rawFile;
+    }
+  }
+
+  Future<void> _retakePhoto() async {
     setState(() {
       _capturedImage = null;
+      _stableFrames = 0;
+      _statusHint = 'Center your face inside the circle';
     });
+    await _startQualityStream();
   }
 
   void _confirmPhoto() {
@@ -1226,216 +1536,355 @@ class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
 
   @override
   void dispose() {
+    _stopQualityStream();
     _cameraController?.dispose();
+    _faceDetector.close();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final bool isReady = _stableFrames >= _requiredStableFrames;
+    final double progress =
+        (_stableFrames / _requiredStableFrames).clamp(0.0, 1.0);
+    final int progressPct = (progress * 100).round();
+
     return Scaffold(
-      backgroundColor: const Color(0xFF0F172A),
+      backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
-        backgroundColor: AppColors.navy,
-        foregroundColor: Colors.white,
+        backgroundColor: Colors.white,
+        foregroundColor: const Color(0xFF0F172A),
         elevation: 0,
+        surfaceTintColor: Colors.transparent,
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(height: 1, color: const Color(0xFFE2E8F0)),
+        ),
         title: Text(
           _capturedImage == null ? 'Take Profile Photo' : 'Review Photo',
           style: const TextStyle(
             fontSize: 16,
-            fontWeight: FontWeight.bold,
+            fontWeight: FontWeight.w700,
+            color: Color(0xFF0F172A),
           ),
         ),
       ),
       body: SafeArea(
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            Positioned(
-              top: 24,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(
-                    color: AppColors.gold.withValues(alpha: 0.6),
-                    width: 1.5,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.center_focus_strong_rounded,
-                      color: AppColors.gold,
-                      size: 20,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      _capturedImage == null ? 'Position your face inside the circle' : 'Review your captured photo',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ],
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+          child: Column(
+            children: [
+              const Text(
+                'Position your face inside the circle in good lighting. Capture unlocks when alignment stabilizes.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.4,
+                  color: Color(0xFF475569),
                 ),
               ),
-            ),
-            Center(
-              child: Container(
-                width: 320,
-                height: 320,
+
+              const Spacer(),
+
+              // Circular Viewfinder (Native Sensor Aspect Ratio, Zero Distortion)
+              Container(
+                width: 280,
+                height: 280,
+                padding: const EdgeInsets.all(6),
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: Colors.black,
+                  color: Colors.white,
                   border: Border.all(
-                    color: AppColors.gold,
-                    width: 4,
+                    color: _capturedImage != null || isReady
+                        ? const Color(0xFF16A34A)
+                        : const Color(0xFFCBD5E1),
+                    width: 3,
                   ),
                   boxShadow: const [
                     BoxShadow(
-                      color: Color(0x66000000),
-                      blurRadius: 16,
-                      offset: Offset(0, 4),
+                      color: Color(0x120F172A),
+                      blurRadius: 18,
+                      offset: Offset(0, 6),
                     ),
                   ],
                 ),
                 child: ClipOval(
-                  child: _capturedImage != null
-                      ? Transform.flip(
-                          flipX: true,
-                          child: Image.file(
+                  child: Container(
+                    color: const Color(0xFF0F172A),
+                    child: _capturedImage != null
+                        ? Image.file(
                             File(_capturedImage!.path),
                             fit: BoxFit.cover,
-                          ),
-                        )
-                      : (_isInitialized && _cameraController != null
-                          ? Builder(
-                              builder: (context) {
-                                double previewAspectRatio = _cameraController!.value.aspectRatio;
-                                if (previewAspectRatio < 1.0) {
-                                  previewAspectRatio = 1.0 / previewAspectRatio;
-                                }
-
-                                return OverflowBox(
-                                  alignment: Alignment.center,
-                                  child: FittedBox(
-                                    fit: BoxFit.cover,
-                                    child: SizedBox(
-                                      width: 320,
-                                      height: 320 * previewAspectRatio,
-                                      child: CameraPreview(_cameraController!),
-                                    ),
-                                  ),
-                                );
-                              },
-                            )
-                          : Center(
-                              child: _errorMessage != null
-                                  ? Padding(
-                                      padding: const EdgeInsets.all(16.0),
-                                      child: Text(
-                                        _errorMessage!,
-                                        textAlign: TextAlign.center,
-                                        style: const TextStyle(
-                                          color: Colors.white70,
-                                          fontSize: 12,
+                            width: double.infinity,
+                            height: double.infinity,
+                          )
+                        : (_isInitialized && _cameraController != null
+                            ? _buildUndistortedPreview(_cameraController!)
+                            : Center(
+                                child: _errorMessage != null
+                                    ? Padding(
+                                        padding: const EdgeInsets.all(20),
+                                        child: Text(
+                                          _errorMessage!,
+                                          textAlign: TextAlign.center,
+                                          style: const TextStyle(
+                                            color: Colors.white70,
+                                            fontSize: 12.5,
+                                          ),
                                         ),
+                                      )
+                                    : const CircularProgressIndicator(
+                                        color: Colors.white,
+                                        strokeWidth: 2.5,
                                       ),
-                                    )
-                                  : const CircularProgressIndicator(
-                                      color: AppColors.gold,
-                                    ),
-                            )),
+                              )),
+                  ),
                 ),
               ),
-            ),
-            Positioned(
-              bottom: 40,
-              child: _capturedImage == null
-                  ? GestureDetector(
-                      onTap: _isInitialized && !_isCapturing ? _capturePhoto : null,
-                      child: Container(
-                        width: 76,
-                        height: 76,
-                        padding: const EdgeInsets.all(4),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: Colors.white,
-                            width: 4,
-                          ),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Color(0x40000000),
-                              blurRadius: 10,
-                              offset: Offset(0, 4),
+
+              const SizedBox(height: 24),
+
+              // Alignment & Lighting Loading Fill Bar
+              if (_capturedImage == null) ...[
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 300),
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Alignment & Lighting',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF334155),
                             ),
-                          ],
-                        ),
-                        child: Container(
-                          decoration: const BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: AppColors.gold,
                           ),
-                          child: _isCapturing
-                              ? const Padding(
-                                  padding: EdgeInsets.all(20),
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 3,
-                                    color: AppColors.navy,
-                                  ),
-                                )
-                              : const Icon(
-                                  Icons.camera_alt_rounded,
-                                  color: AppColors.navy,
-                                  size: 34,
-                                ),
+                          Text(
+                            '$progressPct%',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: isReady
+                                  ? const Color(0xFF16A34A)
+                                  : const Color(0xFF475569),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(999),
+                        child: LinearProgressIndicator(
+                          value: progress,
+                          minHeight: 7,
+                          backgroundColor: const Color(0xFFE2E8F0),
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            isReady
+                                ? const Color(0xFF16A34A)
+                                : const Color(0xFF2563EB),
+                          ),
                         ),
                       ),
-                    )
-                  : Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        ElevatedButton.icon(
-                          onPressed: _retakePhoto,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.white24,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(24),
-                            ),
-                          ),
-                          icon: const Icon(Icons.replay_rounded, size: 18),
-                          label: const Text(
-                            'Retake',
-                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: isReady
+                        ? const Color(0xFFDCFCE7)
+                        : const Color(0xFFFEF3C7),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: isReady
+                          ? const Color(0xFF86EFAC)
+                          : const Color(0xFFFDE68A),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        isReady
+                            ? Icons.check_circle_rounded
+                            : Icons.info_outline_rounded,
+                        size: 16,
+                        color: isReady
+                            ? const Color(0xFF15803D)
+                            : const Color(0xFFB45309),
+                      ),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          _statusHint,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: isReady
+                                ? const Color(0xFF15803D)
+                                : const Color(0xFF92400E),
                           ),
                         ),
-                        const SizedBox(width: 16),
-                        ElevatedButton.icon(
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+
+              const Spacer(),
+
+              // Bottom Action Buttons
+              if (_capturedImage == null)
+                Row(
+                  children: [
+                    Expanded(
+                      child: SizedBox(
+                        height: 46,
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFF334155),
+                            backgroundColor: Colors.white,
+                            side: const BorderSide(color: Color(0xFFCBD5E1)),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: const Text(
+                            'Cancel',
+                            style: TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      flex: 2,
+                      child: SizedBox(
+                        height: 46,
+                        child: ElevatedButton.icon(
+                          onPressed: (_isInitialized &&
+                                  !_isCapturing &&
+                                  isReady)
+                              ? _capturePhoto
+                              : null,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF0F172A),
+                            disabledBackgroundColor: const Color(0xFFCBD5E1),
+                            disabledForegroundColor: const Color(0xFF64748B),
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          icon: _isCapturing
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(Icons.camera_alt_rounded, size: 18),
+                          label: Text(
+                            _isCapturing ? 'Capturing...' : 'Capture Photo',
+                            style: const TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                )
+              else
+                Row(
+                  children: [
+                    Expanded(
+                      child: SizedBox(
+                        height: 46,
+                        child: OutlinedButton.icon(
+                          onPressed: _retakePhoto,
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFF334155),
+                            backgroundColor: Colors.white,
+                            side: const BorderSide(color: Color(0xFFCBD5E1)),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          icon: const Icon(Icons.refresh_rounded, size: 18),
+                          label: const Text(
+                            'Retake',
+                            style: TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      flex: 2,
+                      child: SizedBox(
+                        height: 46,
+                        child: ElevatedButton.icon(
                           onPressed: _confirmPhoto,
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.gold,
-                            foregroundColor: AppColors.navy,
-                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                            backgroundColor: const Color(0xFF16A34A),
+                            foregroundColor: Colors.white,
+                            elevation: 0,
                             shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(24),
+                              borderRadius: BorderRadius.circular(12),
                             ),
                           ),
                           icon: const Icon(Icons.check_rounded, size: 18),
                           label: const Text(
-                            'Use Photo',
-                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                            'Use This Photo',
+                            style: TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
-                      ],
+                      ),
                     ),
-            ),
-          ],
+                  ],
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildUndistortedPreview(CameraController controller) {
+    final previewSize = controller.value.previewSize;
+    if (previewSize == null) {
+      return CameraPreview(controller);
+    }
+
+    final double width = previewSize.height;
+    final double height = previewSize.width;
+
+    return SizedBox.expand(
+      child: FittedBox(
+        fit: BoxFit.cover,
+        child: SizedBox(
+          width: width,
+          height: height,
+          child: CameraPreview(controller),
         ),
       ),
     );

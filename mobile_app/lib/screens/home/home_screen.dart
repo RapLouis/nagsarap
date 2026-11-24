@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -13,6 +11,7 @@ import '../../services/auth_service.dart';
 import '../../services/event_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/profile_service.dart';
+import '../../services/sanction_service.dart';
 import '../../widgets/main_bottom_navigation.dart';
 
 import '../attendance/attendance_face_verification_screen.dart';
@@ -195,6 +194,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
+  Future<void> _refreshSanctionsQuietly() async {
+    try {
+      await SanctionService.instance.getSanctions();
+    } catch (_) {}
+  }
+
   Widget _profileAvatar({double radius = 17}) {
     return CircleAvatar(
       radius: radius,
@@ -279,6 +284,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           await AttendanceHistoryService.instance.getHistory();
       final notificationResult =
           await NotificationService.instance.getNotifications();
+      _refreshSanctionsQuietly();
+
       final pendingAfter =
           await AttendanceService.instance.pendingOfflineCount();
 
@@ -297,7 +304,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
         if (historyResult.success) {
           _historyRecords = historyResult.records;
-          _attendanceCount = historyResult.records.length;
+          _attendanceCount =
+              historyResult.records.where((r) => r.isRecorded).length;
         } else {
           _historyRecords = const [];
           _attendanceCount = 0;
@@ -348,12 +356,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   int _getAttendanceCountForEvent(EventItem event) {
+    final recordedHistory = _historyRecords.where((r) => r.isRecorded);
     int historyCount = 0;
     if (event.id != null) {
-      historyCount = _historyRecords.where((r) => r.eventId == event.id).length;
+      historyCount = recordedHistory.where((r) => r.eventId == event.id).length;
     } else {
       final cleanName = event.name.trim().toLowerCase();
-      historyCount = _historyRecords
+      historyCount = recordedHistory
           .where((r) => r.eventName.trim().toLowerCase() == cleanName)
           .length;
     }
@@ -627,6 +636,132 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _openAttendanceScannerForEvent(selectedEvent);
       }
     }
+  }
+
+  String _formatDate(EventItem event) {
+    final parsed = event.date;
+    if (parsed != null) {
+      return DateFormat('EEEE, MMMM d, yyyy').format(parsed);
+    }
+    return event.eventDate.isNotEmpty ? event.eventDate : 'Date TBA';
+  }
+
+  void _showSummaryDetails(String category) {
+    final isToday = category == 'Today';
+    final items = isToday ? _todayEvents : _upcomingEvents;
+    final isDark = themeController.isDarkMode;
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return Container(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E293B) : Colors.white,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 36,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: isDark
+                          ? const Color(0xFF475569)
+                          : const Color(0xFFCBD5E1),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      "$category's Events (${items.length})",
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: isDark ? Colors.white : navy,
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      icon: Icon(
+                        Icons.close_rounded,
+                        color: isDark ? Colors.white70 : muted,
+                        size: 20,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                if (items.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 20),
+                    child: Center(
+                      child: Text(
+                        isToday
+                            ? 'No events scheduled for today.'
+                            : 'No upcoming events scheduled.',
+                        style: const TextStyle(color: muted, fontSize: 13),
+                      ),
+                    ),
+                  )
+                else
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: MediaQuery.of(context).size.height * 0.45,
+                    ),
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: items.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (_, index) {
+                        final evt = items[index];
+                        return ListTile(
+                          tileColor: isDark
+                              ? const Color(0xFF0F172A)
+                              : const Color(0xFFF8FAFC),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          title: Text(
+                            evt.name,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 14,
+                              color: isDark ? Colors.white : navy,
+                            ),
+                          ),
+                          subtitle: Text(
+                            '${_formatDate(evt)} • ${_getTimeInWindow(evt)}',
+                            style: const TextStyle(fontSize: 12, color: muted),
+                          ),
+                          trailing: const Icon(
+                            Icons.chevron_right_rounded,
+                            color: muted,
+                          ),
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            _showEventDetailModal(evt);
+                          },
+                        );
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   void _showEventDetailModal(EventItem event) {
@@ -1162,10 +1297,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     return '${_formatTime12Hour(event.startTime)} – $endStr';
-  }
-
-  String _getDisplayWindow(EventItem event) {
-    return _getTimeInWindow(event);
   }
 
   String? _findInMap(Map map, List<String> targetKeys) {
@@ -1998,18 +2129,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               color: isDark ? gold : navy,
             ),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           Text(
-            'No events scheduled today',
+            'No events scheduled for today.',
             style: TextStyle(
-              fontSize: 14,
+              fontSize: 14.5,
               fontWeight: FontWeight.w700,
-              color: isDark ? Colors.white : const Color(0xFF0F172A),
+              color: isDark ? Colors.white : navy,
             ),
           ),
           const SizedBox(height: 4),
           const Text(
-            'Check upcoming dates in the Calendar tab.',
+            'Pull down to refresh or check upcoming events below.',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12, color: muted),
           ),
@@ -2023,7 +2154,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(20),
       decoration: _cardDecoration(isDark),
       child: Column(
         children: [
@@ -2034,13 +2165,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
           const SizedBox(height: 8),
           Text(
-            _error ?? 'Error loading events.',
+            _error ?? 'Unable to load events.',
             textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 12.5, color: muted),
+            style: TextStyle(
+              fontSize: 13,
+              color: isDark ? Colors.white70 : muted,
+            ),
           ),
           const SizedBox(height: 12),
           ElevatedButton(
-            onPressed: () => _loadDashboard(),
+            onPressed: () => _loadDashboard(showMainLoader: true),
             style: ElevatedButton.styleFrom(
               backgroundColor: isDark ? gold : navy,
               foregroundColor: isDark ? navy : Colors.white,
@@ -2050,144 +2184,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
             ),
             child: const Text(
-              'Retry',
-              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700),
+              'Try Again',
+              style: TextStyle(fontWeight: FontWeight.w700),
             ),
           ),
         ],
       ),
     );
-  }
-
-  Future<void> _showSummaryDetails(String label) async {
-    final events = label == 'Today' ? _todayEvents : _upcomingEvents;
-
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) {
-        final isDark = themeController.isDarkMode;
-        final Color accent = label == 'Today'
-            ? const Color(0xFF2563EB)
-            : const Color(0xFFD97706);
-
-        return Dialog(
-          backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 420),
-            child: Padding(
-              padding: const EdgeInsets.all(18),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 34,
-                        height: 34,
-                        decoration: BoxDecoration(
-                          color: accent.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(9),
-                        ),
-                        child: Icon(
-                          label == 'Today'
-                              ? Icons.today_rounded
-                              : Icons.event_repeat_rounded,
-                          color: accent,
-                          size: 17,
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          '$label Events',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                            color: isDark ? Colors.white : navy,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: () => Navigator.pop(dialogContext),
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                        icon: Icon(
-                          Icons.close_rounded,
-                          color: isDark ? Colors.white70 : muted,
-                          size: 20,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  Expanded(
-                    child: events.isEmpty
-                        ? const Center(
-                            child: Text(
-                              'No events scheduled.',
-                              style: TextStyle(color: muted, fontSize: 12.5),
-                            ),
-                          )
-                        : ListView.separated(
-                            itemCount: events.length,
-                            separatorBuilder: (_, _) =>
-                                const SizedBox(height: 8),
-                            itemBuilder: (_, index) {
-                              final event = events[index];
-                              return Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: isDark
-                                      ? const Color(0xFF0F172A)
-                                      : const Color(0xFFF8FAFC),
-                                  borderRadius: BorderRadius.circular(10),
-                                  border: Border.all(
-                                    color: isDark
-                                        ? const Color(0xFF334155)
-                                        : const Color(0xFFE2E8F0),
-                                  ),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      event.name,
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 13.5,
-                                        color: isDark ? Colors.white : navy,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 3),
-                                    Text(
-                                      '${_formatDate(event)} • ${_getDisplayWindow(event)}',
-                                      style: const TextStyle(
-                                        fontSize: 11.5,
-                                        color: muted,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            },
-                          ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  String _formatDate(EventItem event) {
-    final date = event.date;
-    if (date == null) return event.eventDate;
-    return DateFormat('MMMM d, yyyy').format(date);
   }
 }

@@ -14,22 +14,45 @@ class AttendanceHistoryItem {
   String get eventName {
     final eventMap = raw['event'];
     if (eventMap is Map) {
-      final name = _readStringFromMap(Map<String, dynamic>.from(eventMap), ['title', 'event_name', 'name']);
+      final name = _readStringFromMap(
+        Map<String, dynamic>.from(eventMap),
+        ['title', 'event_name', 'name'],
+      );
       if (name != null) return name;
     }
     return _readString(['event_name', 'title', 'name']) ?? 'Event';
   }
 
   String get sessionType {
-    final session = _readString(['session_type', 'type', 'session'])?.toLowerCase();
-    if (session == 'time_out' || session == 'out') {
+    final session = _readString(
+      ['session_type', 'checkpoint_key', 'type', 'session', 'period', 'checkpoint'],
+    )?.toLowerCase();
+    if (session != null &&
+        (session == 'time_out' ||
+            session == 'out' ||
+            session.endsWith('_out') ||
+            session.contains('time_out'))) {
       return 'time_out';
     }
     return 'time_in';
   }
 
   String get status {
-    return _readString(['status', 'attendance_status'])?.toLowerCase() ?? 'present';
+    return _readString(['status', 'attendance_status'])?.toLowerCase() ??
+        'present';
+  }
+
+  bool get isRecorded =>
+      status == 'present' || status == 'verified' || status == 'late';
+
+  String get displayStatus {
+    if (status == 'verified') return 'Verified';
+    if (status == 'present') return 'Present';
+    if (status == 'late') return 'Late';
+    if (status == 'absent') return 'Absent';
+    return status.isEmpty
+        ? 'Present'
+        : '${status[0].toUpperCase()}${status.substring(1)}';
   }
 
   double get confidenceScore {
@@ -37,51 +60,67 @@ class AttendanceHistoryItem {
   }
 
   DateTime? get loggedAt {
-    final dateStr = _readString(['logged_at', 'recorded_at', 'created_at', 'date', 'attendance_time']);
+    final dateStr = _readString([
+      'attendance_time',
+      'logged_at',
+      'recorded_at',
+      'created_at',
+      'date',
+    ]);
     if (dateStr == null) return null;
     return DateTime.tryParse(dateStr);
   }
 
   String? get formattedTime {
-    final time = loggedAt;
+    final time = loggedAt?.toLocal();
     if (time == null) return null;
-    final hour = time.hour > 12 ? time.hour - 12 : (time.hour == 0 ? 12 : time.hour);
+    final hour =
+        time.hour > 12 ? time.hour - 12 : (time.hour == 0 ? 12 : time.hour);
     final period = time.hour >= 12 ? 'PM' : 'AM';
     final minute = time.minute.toString().padLeft(2, '0');
     return '$hour:$minute $period';
   }
 
-  // Extended getters for attendance history screen details
   String? get venue {
     final eventMap = raw['event'];
     if (eventMap is Map) {
-      final v = _readStringFromMap(Map<String, dynamic>.from(eventMap), ['location', 'venue', 'location_name']);
+      final v = _readStringFromMap(
+        Map<String, dynamic>.from(eventMap),
+        ['location', 'venue', 'location_name'],
+      );
       if (v != null) return v;
     }
     return _readString(['venue', 'location', 'location_name']);
   }
 
-  double? get locationAccuracy => _readDouble(['location_accuracy', 'accuracy']);
+  double? get locationAccuracy =>
+      _readDouble(['location_accuracy', 'accuracy']);
 
   String? get source => _readString(['source', 'method', 'check_in_method']);
 
   String? get eventDate {
     final eventMap = raw['event'];
     if (eventMap is Map) {
-      final d = _readStringFromMap(Map<String, dynamic>.from(eventMap), ['event_date', 'date']);
+      final d = _readStringFromMap(
+        Map<String, dynamic>.from(eventMap),
+        ['event_date', 'start_date', 'date'],
+      );
       if (d != null) return d;
     }
-    return _readString(['event_date', 'date']);
+    return _readString(['event_date', 'start_date', 'date']);
   }
 
-  String? get attendanceTime => formattedTime ?? _readString(['attendance_time', 'logged_at', 'time']);
+  String? get attendanceTime =>
+      formattedTime ?? _readString(['attendance_time', 'logged_at', 'time']);
 
   String? _readString(List<String> keys) => _readStringFromMap(raw, keys);
 
   String? _readStringFromMap(Map<String, dynamic> map, List<String> keys) {
     for (final key in keys) {
       final value = map[key];
-      if (value != null && value.toString().trim().isNotEmpty && value.toString() != 'null') {
+      if (value != null &&
+          value.toString().trim().isNotEmpty &&
+          value.toString() != 'null') {
         return value.toString().trim();
       }
     }

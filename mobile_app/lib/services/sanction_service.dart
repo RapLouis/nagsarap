@@ -1,8 +1,8 @@
 import 'package:flutter/foundation.dart';
 
-import '../models/sanction_item.dart';
-import '../models/event_item.dart';
 import '../models/attendance_history_item.dart';
+import '../models/event_item.dart';
+import '../models/sanction_item.dart';
 import 'api_service.dart';
 import 'attendance_history_service.dart';
 import 'event_service.dart';
@@ -31,7 +31,7 @@ class SanctionService {
 
     // Load existing sanctions from Laravel.
     try {
-      final response = await _api.dio.get('/api/v1/sanctions');
+      final response = await _api.dio.get<dynamic>('/api/v1/sanctions');
       final raw = response.data;
 
       if (raw is Map) {
@@ -201,6 +201,7 @@ class SanctionService {
 
     final rawType = _firstString(raw, const [
       'session_type',
+      'checkpoint_key',
       'attendance_type',
       'type',
       'session',
@@ -209,14 +210,12 @@ class SanctionService {
     var normalizedType = _normalizePeriod(rawType);
 
     // Some API responses may use another field for the session type.
-    if (normalizedType == null) {
-      normalizedType = _normalizePeriod(
-        _firstString(raw, const [
-          'status',
-          'attendance_status',
-        ]),
-      );
-    }
+    normalizedType ??= _normalizePeriod(
+      _firstString(raw, const [
+        'status',
+        'attendance_status',
+      ]),
+    );
 
     if (normalizedType != expectedPeriod) {
       return false;
@@ -254,22 +253,24 @@ class SanctionService {
         .replaceAll(' ', '_');
 
     if ([
-      'time_in',
-      'timein',
-      'in',
-      'check_in',
-      'checkin',
-    ].contains(text)) {
+          'time_in',
+          'timein',
+          'in',
+          'check_in',
+          'checkin',
+        ].contains(text) ||
+        text.endsWith('_time_in')) {
       return 'time_in';
     }
 
     if ([
-      'time_out',
-      'timeout',
-      'out',
-      'check_out',
-      'checkout',
-    ].contains(text)) {
+          'time_out',
+          'timeout',
+          'out',
+          'check_out',
+          'checkout',
+        ].contains(text) ||
+        text.endsWith('_time_out')) {
       return 'time_out';
     }
 
