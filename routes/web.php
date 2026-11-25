@@ -36,6 +36,9 @@ use Carbon\Carbon;
 
 Route::inertia('/', 'welcome')->name('home');
 
+// Public Privacy Policy Route (Required for Google Play Store)
+Route::view('/privacy-policy', 'privacy-policy')->name('privacy-policy');
+
 // =========================================================================
 // GUEST REGISTRATION ROUTES
 // =========================================================================
@@ -229,9 +232,7 @@ Route::middleware(['auth', 'verified', EnsurePasswordIsChanged::class])->group(f
     Route::patch('/notifications/read-all', [StudentNotificationController::class, 'markAllAsRead'])->name('notifications.read-all');
 
     Route::get('/calendar', [App\Http\Controllers\StudentDashboardController::class, 'calendar'])
-    ->name('calendar');
-
-    
+        ->name('calendar');
 });
 
 require __DIR__.'/settings.php';
