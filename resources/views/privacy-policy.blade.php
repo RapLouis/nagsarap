@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Privacy Policy — Attend: Student Attendance (4ttnd)</title>
+    <title>Privacy Policy — Attend: Student Attendance </title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -68,7 +68,7 @@
     <main class="container">
         <h1>Privacy Policy</h1>
         <div class="meta">
-            <strong>Application:</strong> Attend: Student Attendance (4ttnd)<br>
+            <strong>Application:</strong> Attend: Student Attendance <br>
             <strong>Package Name:</strong> edu.mmsu.ccis.ccis_attendance<br>
             <strong>Effective Date:</strong> November 25, 2026
         </div>
@@ -123,13 +123,32 @@
         </p>
 
         <h2>7. Contact Us</h2>
-        <p>If you have questions about this Privacy Policy, data privacy, or account deletion requests, please contact:</p>
-        <div class="contact-box">
-            <strong>4ttnd Development &amp; CCIS Attendance Administration</strong><br>
-            Mariano Marcos State University — College of Computing and Information Sciences<br>
-            Email: <strong>[Replace with your official support email, e.g., support@cabiebies.tech]</strong><br>
-            Website: <a href="https://cabiebies.tech">https://cabiebies.tech</a>
-        </div>
+<p>If you have questions about this Privacy Policy, data privacy, or account deletion requests, please reach out to the development team:</p>
+
+<div class="contact-box" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 20px 24px; margin-top: 12px; line-height: 1.6;">
+    <div style="margin-bottom: 14px;">
+        <strong style="display: block; font-size: 1rem; color: #0f172a; margin-bottom: 4px;">4ttnd Development Team</strong>
+        <span style="color: #475569; font-size: 0.92rem;">
+            College of Computing and Information Sciences<br>
+            Mariano Marcos State University (Batac Main Campus)
+        </span>
+        <ul style="margin: 8px 0 0 18px; padding: 0; color: #334155; font-size: 0.92rem;">
+            <li>Lowell Augusteen G. Cabie</li>
+            <li>Raphael Louis P. Gabion</li>
+            <li>Fiona Kyla S. Garcia</li>
+            <li>Reina Jean R. Rafanan</li>
+        </ul>
+    </div>
+
+    <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 14px 0;">
+
+    <div style="display: grid; gap: 6px; font-size: 0.93rem; color: #334155;">
+        <div><strong>Email:</strong> <a href="mailto:raphaelgabion77@gmail.com" style="color: #2563eb; text-decoration: none;">raphaelgabion77@gmail.com</a></div>
+        <div><strong>Phone:</strong> <a href="tel:+639152754174" style="color: #2563eb; text-decoration: none;">+63 915 275 4174</a></div>
+        <div><strong>Facebook:</strong> Raphael Gabion</div>
+        <div><strong>Website:</strong> <a href="https://cabiebies.tech" target="_blank" rel="noopener noreferrer" style="color: #2563eb; text-decoration: none;">https://cabiebies.tech</a></div>
+    </div>
+</div>
     </main>
 </body>
 </html>
