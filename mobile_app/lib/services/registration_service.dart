@@ -433,19 +433,11 @@ class RegistrationService {
         quality: 60,
       );
 
-      final multipartCenterA = await MultipartFile.fromFile(
+      final multipartCenter = await MultipartFile.fromFile(
         compressedCenter.path,
         filename: 'center.jpg',
       );
-      final multipartTurnedA = await MultipartFile.fromFile(
-        compressedTurned.path,
-        filename: 'turned.jpg',
-      );
-      final multipartCenterB = await MultipartFile.fromFile(
-        compressedCenter.path,
-        filename: 'center.jpg',
-      );
-      final multipartTurnedB = await MultipartFile.fromFile(
+      final multipartTurned = await MultipartFile.fromFile(
         compressedTurned.path,
         filename: 'turned.jpg',
       );
@@ -463,10 +455,8 @@ class RegistrationService {
       final Map<String, dynamic> formMap = {
         'challenge_nonce': challengeNonce,
         'session_id': sessionId,
-        'frontal_image_base64': multipartCenterA,
-        'turn_peak_image_base64': multipartTurnedA,
-        'center_frame': multipartCenterB,
-        'turned_frame': multipartTurnedB,
+        'center_frame': multipartCenter,
+        'turned_frame': multipartTurned,
       };
 
       for (int i = 0; i < flashMultiparts.length; i++) {

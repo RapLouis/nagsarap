@@ -109,6 +109,8 @@ class RegistrationController extends Controller
             'session_id' => ['required', 'string', 'min:16', 'max:100'],
             'center_frame' => ['required', 'image', 'mimes:jpeg,jpg,png', 'max:5048'],
             'turned_frame' => ['required', 'image', 'mimes:jpeg,jpg,png', 'max:5048'],
+            'flash_images_base64' => ['nullable', 'array'],
+            'flash_images_base64.*' => ['image', 'mimes:jpeg,jpg,png', 'max:5048'],
             'flash_frames' => ['nullable', 'array'],
             'flash_frames.*' => ['image', 'mimes:jpeg,jpg,png', 'max:5048'],
             'flash_colors' => ['nullable', 'array'],
@@ -152,12 +154,18 @@ class RegistrationController extends Controller
         }
 
         $direction = $challenge['direction'];
-        $flashFrames = $request->file('flash_frames', []);
+
+        $flashFrames = $request->file('flash_images_base64');
+        if (!is_array($flashFrames) || empty($flashFrames)) {
+            $flashFrames = $request->file('flash_frames', []);
+        }
         if (!is_array($flashFrames)) {
             $flashFrames = [];
         }
 
-        $flashColors = $challenge['flash_colors'] ?? $request->input('flash_colors', []);
+        $flashColors = !empty($challenge['flash_colors']) && is_array($challenge['flash_colors'])
+            ? $challenge['flash_colors']
+            : $request->input('flash_colors', []);
         if (!is_array($flashColors)) {
             $flashColors = [];
         }
