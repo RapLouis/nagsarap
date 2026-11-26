@@ -109,6 +109,9 @@ class RegistrationController extends Controller
             'session_id' => ['required', 'string', 'min:16', 'max:100'],
             'center_frame' => ['required', 'image', 'mimes:jpeg,jpg,png', 'max:5048'],
             'turned_frame' => ['required', 'image', 'mimes:jpeg,jpg,png', 'max:5048'],
+            'flash_frames' => ['nullable', 'array'],
+            'flash_frames.*' => ['image', 'mimes:jpeg,jpg,png', 'max:5048'],
+            'flash_colors' => ['nullable', 'array'],
         ]);
 
         $student = $request->user()?->student;
@@ -133,7 +136,12 @@ class RegistrationController extends Controller
             ]);
         }
 
-        $challenge = $challenges->consume($student->student_id, $request->input('challenge_nonce'), $request->input('session_id'), 'registration');
+        $challenge = $challenges->consume(
+            $student->student_id,
+            $request->input('challenge_nonce'),
+            $request->input('session_id'),
+            'registration'
+        );
 
         if (!($challenge['valid'] ?? false)) {
             return response()->json([
@@ -144,14 +152,23 @@ class RegistrationController extends Controller
         }
 
         $direction = $challenge['direction'];
+        $flashFrames = $request->file('flash_frames', []);
+        if (!is_array($flashFrames)) {
+            $flashFrames = [];
+        }
+
+        $flashColors = $challenge['flash_colors'] ?? $request->input('flash_colors', []);
+        if (!is_array($flashColors)) {
+            $flashColors = [];
+        }
 
         try {
             $live = $bio->verifyLiveness(
                 $direction,
                 $request->file('center_frame'),
                 $request->file('turned_frame'),
-                [],
-                []
+                $flashFrames,
+                $flashColors
             );
         } catch (BiometricServiceException $e) {
             return response()->json([

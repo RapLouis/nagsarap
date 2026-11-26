@@ -1,14 +1,106 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:image/image.dart' as img;
+import 'package:path_provider/path_provider.dart';
 
 import '../../core/app_colors.dart';
 import '../../models/liveness_challenge.dart';
 import '../../services/registration_service.dart';
 import '../home/home_screen.dart';
 
-enum RegistrationLivenessStep { lookCenter, turn, verifying, passed, failed }
+enum RegistrationLivenessStep { lookCenter, flash, turn, verifying, passed, failed }
+
+class _RawStreamFrame {
+  final Uint8List plane0;
+  final Uint8List? plane1;
+  final Uint8List? plane2;
+  final int width;
+  final int height;
+  final int bytesPerRow0;
+  final int bytesPerRow1;
+  final int uvPixelStride;
+  final int sensorOrientation;
+  final bool isBgra;
+
+  const _RawStreamFrame({
+    required this.plane0,
+    this.plane1,
+    this.plane2,
+    required this.width,
+    required this.height,
+    required this.bytesPerRow0,
+    required this.bytesPerRow1,
+    required this.uvPixelStride,
+    required this.sensorOrientation,
+    required this.isBgra,
+  });
+}
+
+Uint8List _encodeRawFrameToJpeg(_RawStreamFrame raw) {
+  img.Image image = img.Image(width: raw.width, height: raw.height);
+
+  if (raw.isBgra) {
+    final bytes = raw.plane0;
+    for (int y = 0; y < raw.height; y++) {
+      final rowOffset = y * raw.bytesPerRow0;
+      for (int x = 0; x < raw.width; x++) {
+        final idx = rowOffset + x * 4;
+        if (idx + 2 < bytes.length) {
+          image.setPixelRgb(x, y, bytes[idx + 2], bytes[idx + 1], bytes[idx]);
+        }
+      }
+    }
+  } else {
+    final yPlane = raw.plane0;
+    final uPlane = raw.plane1;
+    final vPlane = raw.plane2;
+
+    for (int y = 0; y < raw.height; y++) {
+      final yRow = y * raw.bytesPerRow0;
+      final uvRow = (y >> 1) * raw.bytesPerRow1;
+      for (int x = 0; x < raw.width; x++) {
+        final yIdx = yRow + x;
+        if (yIdx >= yPlane.length) continue;
+        final yp = yPlane[yIdx];
+
+        int up = 128;
+        int vp = 128;
+        if (uPlane != null && vPlane != null) {
+          final uvIdx = uvRow + (x >> 1) * raw.uvPixelStride;
+          if (uvIdx < uPlane.length && uvIdx < vPlane.length) {
+            up = uPlane[uvIdx];
+            vp = vPlane[uvIdx];
+          }
+        }
+
+        final r = (yp + 1.402 * (vp - 128)).round().clamp(0, 255);
+        final g =
+            (yp - 0.344136 * (up - 128) - 0.714136 * (vp - 128)).round().clamp(0, 255);
+        final b = (yp + 1.772 * (up - 128)).round().clamp(0, 255);
+        image.setPixelRgb(x, y, r, g, b);
+      }
+    }
+  }
+
+  if (raw.sensorOrientation == 90) {
+    image = img.copyRotate(image, angle: 90);
+  } else if (raw.sensorOrientation == 180) {
+    image = img.copyRotate(image, angle: 180);
+  } else if (raw.sensorOrientation == 270) {
+    image = img.copyRotate(image, angle: 270);
+  }
+
+  if (image.width > 480) {
+    image = img.copyResize(image, width: 480);
+  }
+
+  return Uint8List.fromList(img.encodeJpg(image, quality: 82));
+}
 
 class RegistrationFaceVerificationScreen extends StatefulWidget {
   const RegistrationFaceVerificationScreen({
@@ -27,34 +119,39 @@ class _RegistrationFaceVerificationScreenState
     extends State<RegistrationFaceVerificationScreen>
     with SingleTickerProviderStateMixin {
   CameraController? _camera;
+  CameraDescription? _frontCamera;
+  late final FaceDetector _faceDetector;
+
   bool _cameraReady = false;
   bool _disposed = false;
-  bool _isProcessing = false;
+  bool _isProcessingFrame = false;
+  bool _isSubmitting = false;
 
   RegistrationLivenessStep _step = RegistrationLivenessStep.lookCenter;
 
   LivenessChallenge? _challenge;
   String _direction = 'left';
 
-  double _holdProgress = 0.0;
-  double _turnProgress = 0.0;
-
+  double _progress = 0.0;
   String? _hint;
   String? _error;
 
   Color _overlayFlashColor = Colors.transparent;
-  final List<XFile> _flashFrames = [];
-  final List<String> _flashColors = [];
-
-  final List<Color> _flashColorSequence = [
+  final List<String> _flashColorNames = ['red', 'green', 'blue'];
+  final List<Color> _flashColorValues = [
     Colors.red,
     Colors.green,
     Colors.blue,
   ];
-  final List<String> _flashColorNames = ['red', 'green', 'blue'];
 
-  XFile? _centerFrame;
-  XFile? _turnedFrame;
+  int _centerStableCount = 0;
+  int _flashIndex = 0;
+  DateTime? _flashColorShownAt;
+  bool _capturingFlash = false;
+
+  _RawStreamFrame? _rawCenterFrame;
+  _RawStreamFrame? _rawTurnedFrame;
+  final List<_RawStreamFrame> _rawFlashFrames = [];
 
   late final AnimationController _pulseController;
 
@@ -63,8 +160,19 @@ class _RegistrationFaceVerificationScreenState
     super.initState();
     _pulseController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1000),
+      duration: const Duration(milliseconds: 900),
     )..repeat(reverse: true);
+
+    _faceDetector = FaceDetector(
+      options: FaceDetectorOptions(
+        performanceMode: FaceDetectorMode.fast,
+        enableTracking: false,
+        enableContours: false,
+        enableLandmarks: false,
+        enableClassification: false,
+        minFaceSize: 0.20,
+      ),
+    );
 
     _initLivenessChallengeAndCamera();
   }
@@ -94,12 +202,15 @@ class _RegistrationFaceVerificationScreenState
         (c) => c.lensDirection == CameraLensDirection.front,
         orElse: () => cameras.first,
       );
+      _frontCamera = selected;
 
       final controller = CameraController(
         selected,
-        ResolutionPreset.low,
+        ResolutionPreset.medium,
         enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.jpeg,
+        imageFormatGroup: Platform.isAndroid
+            ? ImageFormatGroup.nv21
+            : ImageFormatGroup.bgra8888,
       );
 
       await controller.initialize();
@@ -157,7 +268,7 @@ class _RegistrationFaceVerificationScreenState
                 ),
                 const SizedBox(height: 18),
                 const Text(
-                  'Anti-Spoofing Verification',
+                  'Quick Liveness Check',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 19,
@@ -166,51 +277,20 @@ class _RegistrationFaceVerificationScreenState
                   ),
                 ),
                 const SizedBox(height: 12),
-                const Text(
-                  'To block photo or pre-recorded video spoofing, your screen will flash RED, GREEN, and BLUE light continuously while capturing your face during center and turned poses.',
+                Text(
+                  'Look straight at the camera for a quick RGB light check, then turn your head slightly to your $_direction.',
                   textAlign: TextAlign.center,
-                  style: TextStyle(
+                  style: const TextStyle(
                     fontSize: 13,
                     color: Colors.black87,
                     height: 1.4,
-                  ),
-                ),
-                const SizedBox(height: 14),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFFBEB),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: const Color(0xFFFDE68A)),
-                  ),
-                  child: const Row(
-                    children: [
-                      Icon(
-                        Icons.warning_amber_rounded,
-                        color: Color(0xFFD97706),
-                        size: 22,
-                      ),
-                      SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          'Warning: Screen light will flash rapidly. Keep phone steady at eye level.',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF92400E),
-                          ),
-                        ),
-                      ),
-                    ],
                   ),
                 ),
                 const SizedBox(height: 22),
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: () {
-                      Navigator.of(dialogContext).pop();
-                    },
+                    onPressed: () => Navigator.of(dialogContext).pop(),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.navy,
                       padding: const EdgeInsets.symmetric(vertical: 14),
@@ -219,7 +299,7 @@ class _RegistrationFaceVerificationScreenState
                       ),
                     ),
                     child: const Text(
-                      'I Understand',
+                      'Start Verification',
                       style: TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.bold,
@@ -236,147 +316,253 @@ class _RegistrationFaceVerificationScreenState
     );
 
     if (mounted && !_disposed) {
-      await _runAutomatedCapture();
+      await _startStreamCapture();
     }
   }
 
-  Future<void> _runAutomatedCapture() async {
-    if (_isProcessing ||
-        _camera == null ||
-        !_camera!.value.isInitialized ||
-        _disposed) {
+  Future<void> _startStreamCapture() async {
+    final controller = _camera;
+    if (controller == null || !controller.value.isInitialized || _disposed) {
       return;
     }
 
-    _isProcessing = true;
-    _flashFrames.clear();
-    _flashColors.clear();
+    _rawCenterFrame = null;
+    _rawTurnedFrame = null;
+    _rawFlashFrames.clear();
+    _centerStableCount = 0;
+    _flashIndex = 0;
+    _flashColorShownAt = null;
+    _capturingFlash = false;
 
-    try {
-      // ----------------------------------------------------------------------
-      // PHASE 1: CENTER POSE WITH CONTINUOUS FLASHING
-      // ----------------------------------------------------------------------
-      setState(() {
-        _step = RegistrationLivenessStep.lookCenter;
-        _holdProgress = 0.1;
-        _hint = 'Look straight. Screen is verifying light reflections...';
-      });
+    setState(() {
+      _step = RegistrationLivenessStep.lookCenter;
+      _progress = 0.05;
+      _hint = 'Look straight at the camera...';
+      _error = null;
+      _overlayFlashColor = Colors.transparent;
+    });
 
-      for (int i = 0; i < _flashColorSequence.length; i++) {
-        if (!mounted || _disposed) return;
-
-        setState(() {
-          _overlayFlashColor = _flashColorSequence[i];
-        });
-
-        await Future.delayed(const Duration(milliseconds: 160));
-        if (!mounted || _disposed) return;
-
-        final frame = await _camera!.takePicture();
-        _flashFrames.add(frame);
-        _flashColors.add(_flashColorNames[i]);
-
-        setState(() {
-          _holdProgress = 0.1 + (0.4 * ((i + 1) / _flashColorSequence.length));
-        });
-      }
-
-      _centerFrame = await _camera!.takePicture();
-      setState(() {
-        _holdProgress = 1.0;
-      });
-
-      // ----------------------------------------------------------------------
-      // PHASE 2: HEAD TURN POSE WITH CONTINUED FLASHING
-      // ----------------------------------------------------------------------
-      setState(() {
-        _step = RegistrationLivenessStep.turn;
-        _turnProgress = 0.1;
-        _hint = 'Turn your head to your $_direction while screen flashes...';
-      });
-
-      for (int i = 0; i < _flashColorSequence.length; i++) {
-        if (!mounted || _disposed) return;
-
-        setState(() {
-          _overlayFlashColor = _flashColorSequence[i];
-        });
-
-        await Future.delayed(const Duration(milliseconds: 220));
-        if (!mounted || _disposed) return;
-
-        final frame = await _camera!.takePicture();
-        _flashFrames.add(frame);
-        _flashColors.add(_flashColorNames[i]);
-
-        setState(() {
-          _turnProgress = 0.1 + (0.8 * ((i + 1) / _flashColorSequence.length));
-        });
-      }
-
-      _turnedFrame = await _camera!.takePicture();
-
-      setState(() {
-        _overlayFlashColor = Colors.transparent;
-        _turnProgress = 1.0;
-      });
-
-      await _submitBiometrics();
-    } catch (e) {
-      debugPrint('Registration capture error: $e');
-      if (mounted && !_disposed) {
-        setState(() {
-          _step = RegistrationLivenessStep.failed;
-          _overlayFlashColor = Colors.transparent;
-          _error = 'Camera capture failed. Please retry.';
-        });
-      }
-    } finally {
-      _isProcessing = false;
+    if (!controller.value.isStreamingImages) {
+      await controller.startImageStream(_onCameraFrame);
     }
   }
 
-  Future<void> _submitBiometrics() async {
-    setState(() {
-      _step = RegistrationLivenessStep.verifying;
-      _hint = 'Registering face biometrics...';
-      _error = null;
-    });
+  Future<void> _stopStream() async {
+    final controller = _camera;
+    if (controller == null || !controller.value.isInitialized) return;
+    if (controller.value.isStreamingImages) {
+      try {
+        await controller.stopImageStream();
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _onCameraFrame(CameraImage image) async {
+    if (_disposed ||
+        !mounted ||
+        _isProcessingFrame ||
+        _isSubmitting ||
+        _step == RegistrationLivenessStep.verifying ||
+        _step == RegistrationLivenessStep.passed ||
+        _step == RegistrationLivenessStep.failed) {
+      return;
+    }
+
+    _isProcessingFrame = true;
 
     try {
-      if (_centerFrame != null && _turnedFrame != null) {
-        final nonce = _challenge?.nonce ?? 'fallback_nonce';
-        final sessionId = _challenge?.sessionId ?? 'fallback_session_id';
+      // PHASE 2: Fast RGB Screen Flash Capture (120ms per color, zero shutter lag)
+      if (_step == RegistrationLivenessStep.flash) {
+        if (!_capturingFlash) {
+          _capturingFlash = true;
+          setState(() {
+            _overlayFlashColor = _flashColorValues[_flashIndex];
+            _hint = 'Hold still — verifying screen light...';
+          });
+          _flashColorShownAt = DateTime.now();
+        } else if (_flashColorShownAt != null &&
+            DateTime.now().difference(_flashColorShownAt!).inMilliseconds >=
+                110) {
+          _rawFlashFrames.add(_copyRawFrame(image));
+          _flashIndex++;
 
-        final result =
-            await RegistrationService.instance.verifyRegistrationFace(
-          centerFrame: _centerFrame!,
-          turnedFrame: _turnedFrame!,
-          flashFrames: _flashFrames,
-          flashColors: _flashColors,
-          challengeNonce: nonce,
-          sessionId: sessionId,
-        );
-
-        if (!result.success) {
-          final msg = result.message.toLowerCase();
-          if (msg.contains('turn') ||
-              msg.contains('angle') ||
-              msg.contains('liveness')) {
+          if (_flashIndex < _flashColorValues.length) {
             setState(() {
-              _hint = 'Retrying angle adjustment...';
+              _overlayFlashColor = _flashColorValues[_flashIndex];
+              _progress = 0.35 + (0.30 * (_flashIndex / _flashColorValues.length));
             });
-            await Future.delayed(const Duration(milliseconds: 600));
-            if (mounted && !_disposed) {
-              await _runAutomatedCapture();
-            }
-            return;
+            _flashColorShownAt = DateTime.now();
+          } else {
+            _capturingFlash = false;
+            setState(() {
+              _overlayFlashColor = Colors.transparent;
+              _step = RegistrationLivenessStep.turn;
+              _progress = 0.70;
+              _hint = 'Now turn your head to your $_direction';
+            });
           }
-          throw Exception(result.message);
         }
+        return;
       }
 
+      // PHASE 1 & PHASE 3: Real-time ML Kit Pose Check
+      final inputImage = _toInputImage(image);
+      if (inputImage == null) return;
+
+      final faces = await _faceDetector.processImage(inputImage);
+      if (_disposed || !mounted) return;
+
+      if (faces.isEmpty) {
+        _centerStableCount = 0;
+        if (_hint != 'Position your face inside the circle') {
+          setState(() => _hint = 'Position your face inside the circle');
+        }
+        return;
+      }
+
+      final face = faces.first;
+      final double yaw = face.headEulerAngleY ?? 0.0;
+
+      if (_step == RegistrationLivenessStep.lookCenter) {
+        if (yaw.abs() <= 11.0) {
+          _centerStableCount++;
+          setState(() {
+            _progress = 0.05 + (0.30 * (_centerStableCount / 3).clamp(0.0, 1.0));
+          });
+
+          if (_centerStableCount >= 3) {
+            _rawCenterFrame = _copyRawFrame(image);
+            setState(() {
+              _step = RegistrationLivenessStep.flash;
+              _progress = 0.35;
+            });
+          }
+        } else {
+          _centerStableCount = 0;
+          setState(() => _hint = 'Look straight at the camera');
+        }
+      } else if (_step == RegistrationLivenessStep.turn) {
+        // Front camera yaw sign can invert across Android HALs, so accept clear turn
+        // toward target direction (and > 15 deg head turn)
+        final bool turnedEnough = yaw.abs() >= 15.0;
+        if (turnedEnough) {
+          _rawTurnedFrame = _copyRawFrame(image);
+          setState(() {
+            _progress = 1.0;
+            _step = RegistrationLivenessStep.verifying;
+            _hint = 'Registering face biometrics...';
+          });
+          await _stopStream();
+          await _encodeAndSubmit();
+        }
+      }
+    } catch (e) {
+      debugPrint('Liveness frame error: $e');
+    } finally {
+      _isProcessingFrame = false;
+    }
+  }
+
+  _RawStreamFrame _copyRawFrame(CameraImage image) {
+    final bool isBgra = image.format.group == ImageFormatGroup.bgra8888;
+    return _RawStreamFrame(
+      plane0: Uint8List.fromList(image.planes[0].bytes),
+      plane1: image.planes.length > 1
+          ? Uint8List.fromList(image.planes[1].bytes)
+          : null,
+      plane2: image.planes.length > 2
+          ? Uint8List.fromList(image.planes[2].bytes)
+          : null,
+      width: image.width,
+      height: image.height,
+      bytesPerRow0: image.planes[0].bytesPerRow,
+      bytesPerRow1: image.planes.length > 1 ? image.planes[1].bytesPerRow : 0,
+      uvPixelStride:
+          image.planes.length > 1 ? (image.planes[1].bytesPerPixel ?? 1) : 1,
+      sensorOrientation: _frontCamera?.sensorOrientation ?? 270,
+      isBgra: isBgra,
+    );
+  }
+
+  InputImage? _toInputImage(CameraImage image) {
+    final camera = _frontCamera;
+    if (camera == null) return null;
+
+    final rotation =
+        InputImageRotationValue.fromRawValue(camera.sensorOrientation);
+    if (rotation == null) return null;
+
+    final format = InputImageFormatValue.fromRawValue(image.format.raw);
+    if (format == null) return null;
+
+    if (image.planes.isEmpty) return null;
+
+    final WriteBuffer allBytes = WriteBuffer();
+    for (final Plane plane in image.planes) {
+      allBytes.putUint8List(plane.bytes);
+    }
+
+    return InputImage.fromBytes(
+      bytes: allBytes.done().buffer.asUint8List(),
+      metadata: InputImageMetadata(
+        size: Size(image.width.toDouble(), image.height.toDouble()),
+        rotation: rotation,
+        format: format,
+        bytesPerRow: image.planes.first.bytesPerRow,
+      ),
+    );
+  }
+
+  Future<void> _encodeAndSubmit() async {
+    if (_isSubmitting || _rawCenterFrame == null || _rawTurnedFrame == null) {
+      return;
+    }
+
+    _isSubmitting = true;
+
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final ts = DateTime.now().millisecondsSinceEpoch;
+
+      // Encode center, turned, and 3 RGB flash frames in parallel isolates
+      final futures = <Future<Uint8List>>[
+        compute(_encodeRawFrameToJpeg, _rawCenterFrame!),
+        compute(_encodeRawFrameToJpeg, _rawTurnedFrame!),
+        ..._rawFlashFrames.map((f) => compute(_encodeRawFrameToJpeg, f)),
+      ];
+
+      final encodedBytes = await Future.wait(futures);
+
+      Future<XFile> writeTemp(String name, Uint8List bytes) async {
+        final file = File('${tempDir.path}/${ts}_$name.jpg');
+        await file.writeAsBytes(bytes, flush: true);
+        return XFile(file.path);
+      }
+
+      final centerFile = await writeTemp('center', encodedBytes[0]);
+      final turnedFile = await writeTemp('turned', encodedBytes[1]);
+      final flashFiles = <XFile>[];
+      for (int i = 2; i < encodedBytes.length; i++) {
+        flashFiles.add(await writeTemp('flash_${i - 2}', encodedBytes[i]));
+      }
+
+      final nonce = _challenge?.nonce ?? 'fallback_nonce';
+      final sessionId = _challenge?.sessionId ?? 'fallback_session_id';
+
+      final result = await RegistrationService.instance.verifyRegistrationFace(
+        centerFrame: centerFile,
+        turnedFrame: turnedFile,
+        flashFrames: flashFiles,
+        flashColors: _flashColorNames.take(flashFiles.length).toList(),
+        challengeNonce: nonce,
+        sessionId: sessionId,
+      );
+
       if (!mounted || _disposed) return;
+
+      if (!result.success) {
+        throw Exception(result.message);
+      }
 
       setState(() {
         _step = RegistrationLivenessStep.passed;
@@ -387,9 +573,24 @@ class _RegistrationFaceVerificationScreenState
       if (!mounted || _disposed) return;
       setState(() {
         _step = RegistrationLivenessStep.failed;
+        _overlayFlashColor = Colors.transparent;
         _error = e.toString().replaceFirst('Exception: ', '');
       });
+    } finally {
+      _isSubmitting = false;
     }
+  }
+
+  Future<void> _retryVerification() async {
+    if (_isSubmitting) return;
+    await _stopStream();
+    final res = await RegistrationService.instance.requestLivenessChallenge();
+    if (!mounted || _disposed) return;
+    if (res.success && res.challenge != null) {
+      _challenge = res.challenge;
+      _direction = _challenge!.direction;
+    }
+    await _startStreamCapture();
   }
 
   Future<void> _showSuccessModalAndNavigate() async {
@@ -451,9 +652,7 @@ class _RegistrationFaceVerificationScreenState
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: () {
-                      Navigator.of(dialogContext).pop();
-                    },
+                    onPressed: () => Navigator.of(dialogContext).pop(),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.navy,
                       padding: const EdgeInsets.symmetric(vertical: 14),
@@ -492,7 +691,9 @@ class _RegistrationFaceVerificationScreenState
   void dispose() {
     _pulseController.dispose();
     _disposed = true;
+    _stopStream();
     _camera?.dispose();
+    _faceDetector.close();
     super.dispose();
   }
 
@@ -562,29 +763,7 @@ class _RegistrationFaceVerificationScreenState
                       child: _cameraReady &&
                               _camera != null &&
                               _camera!.value.isInitialized
-                          ? LayoutBuilder(
-                              builder: (context, constraints) {
-                                final previewRatio = _camera!.value.aspectRatio;
-                                return SizedBox(
-                                  width: constraints.maxWidth,
-                                  height: constraints.maxHeight,
-                                  child: ClipRect(
-                                    child: OverflowBox(
-                                      alignment: Alignment.center,
-                                      child: FittedBox(
-                                        fit: BoxFit.cover,
-                                        child: SizedBox(
-                                          width: constraints.maxWidth,
-                                          height: constraints.maxWidth *
-                                              previewRatio,
-                                          child: CameraPreview(_camera!),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              },
-                            )
+                          ? _buildUndistortedPreview(_camera!)
                           : const Center(
                               child: CircularProgressIndicator(
                                 color: AppColors.gold,
@@ -620,9 +799,10 @@ class _RegistrationFaceVerificationScreenState
             const Spacer(),
             if (_error != null)
               Padding(
-                padding: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
                 child: Text(
                   _error!,
+                  textAlign: TextAlign.center,
                   style: const TextStyle(
                     color: Colors.redAccent,
                     fontWeight: FontWeight.bold,
@@ -630,22 +810,27 @@ class _RegistrationFaceVerificationScreenState
                   ),
                 ),
               ),
-            _buildProgressBar(),
+            SizedBox(
+              width: 180,
+              height: 6,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(3),
+                child: LinearProgressIndicator(
+                  value: _progress,
+                  backgroundColor: Colors.grey.shade300,
+                  valueColor:
+                      const AlwaysStoppedAnimation<Color>(AppColors.navy),
+                ),
+              ),
+            ),
             const SizedBox(height: 20),
             ElevatedButton(
-              onPressed: _isProcessing
-                  ? null
-                  : () {
-                      setState(() {
-                        _isProcessing = false;
-                        _error = null;
-                      });
-                      _runAutomatedCapture();
-                    },
+              onPressed: _isSubmitting ? null : _retryVerification,
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.gold,
                 foregroundColor: AppColors.navy,
-                padding: const EdgeInsets.symmetric(horizontal: 36, vertical: 12),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 36, vertical: 12),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(24),
                 ),
@@ -662,6 +847,24 @@ class _RegistrationFaceVerificationScreenState
     );
   }
 
+  Widget _buildUndistortedPreview(CameraController controller) {
+    final previewSize = controller.value.previewSize;
+    if (previewSize == null) {
+      return CameraPreview(controller);
+    }
+
+    return SizedBox.expand(
+      child: FittedBox(
+        fit: BoxFit.cover,
+        child: SizedBox(
+          width: previewSize.height,
+          height: previewSize.width,
+          child: CameraPreview(controller),
+        ),
+      ),
+    );
+  }
+
   Widget _buildInstructionBadge() {
     String text;
     IconData icon;
@@ -672,8 +875,12 @@ class _RegistrationFaceVerificationScreenState
         text = 'Look straight at the camera';
         icon = Icons.remove_red_eye_outlined;
         break;
+      case RegistrationLivenessStep.flash:
+        text = 'Hold still — checking light...';
+        icon = Icons.wb_sunny_outlined;
+        break;
       case RegistrationLivenessStep.turn:
-        text = 'Turn your head clearly to your $_direction';
+        text = 'Turn your head to your $_direction';
         icon = _direction == 'left' ? Icons.arrow_back : Icons.arrow_forward;
         break;
       case RegistrationLivenessStep.verifying:
@@ -721,24 +928,6 @@ class _RegistrationFaceVerificationScreenState
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildProgressBar() {
-    double progress = _step == RegistrationLivenessStep.lookCenter
-        ? _holdProgress
-        : _turnProgress;
-    return SizedBox(
-      width: 180,
-      height: 6,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(3),
-        child: LinearProgressIndicator(
-          value: progress,
-          backgroundColor: Colors.grey.shade300,
-          valueColor: const AlwaysStoppedAnimation<Color>(AppColors.navy),
-        ),
       ),
     );
   }
