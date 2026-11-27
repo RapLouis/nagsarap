@@ -3,12 +3,12 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Models\Student;
-use App\Models\Event;
 use App\Models\Attendance;
+use App\Models\Event;
+use App\Models\Student;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 
 class AnalyticsController extends Controller
@@ -20,233 +20,263 @@ class AnalyticsController extends Controller
     public function index(Request $request)
     {
         $now = Carbon::now();
+        $today = $now->toDateString();
 
-        // ── Dynamic Date Range Filter ────────────────────────────────────────
+        // ── Dynamic Date Range & Directory Filters ───────────────────────────
 
-        $range = $request->input('range', '12m');
+        $range = in_array($request->input('range'), ['month', 'semester', '12m'], true)
+            ? $request->input('range')
+            : '12m';
+
+        $search = trim((string) $request->input('search', ''));
+
+        $status = in_array($request->input('status'), ['all', 'held', 'upcoming'], true)
+            ? $request->input('status')
+            : 'all';
+
+        $sort = in_array(
+            $request->input('sort'),
+            ['recent', 'highest_turnout', 'lowest_turnout', 'lowest_confidence'],
+            true
+        )
+            ? $request->input('sort')
+            : 'recent';
 
         $startDate = match ($range) {
             'month' => $now->copy()->startOfMonth(),
-
-            'semester' => $now->copy()
-                ->subMonths(5)
-                ->startOfMonth(),
-
-            default => $now->copy()
-                ->subMonths(11)
-                ->startOfMonth(),
+            'semester' => $now->copy()->subMonths(5)->startOfMonth(),
+            default => $now->copy()->subMonths(11)->startOfMonth(),
         };
 
-        // ── Current / Previous Month ─────────────────────────────────────────
+        $startDateStr = $startDate->toDateString();
+
+        // ── Current / Previous Month Boundaries ──────────────────────────────
 
         $thisMonthStart = $now->copy()->startOfMonth();
+        $lastMonthStart = $now->copy()->subMonth()->startOfMonth();
+        $lastMonthEnd = $now->copy()->subMonth()->endOfMonth();
 
-        $lastMonthStart = $now->copy()
-            ->subMonth()
-            ->startOfMonth();
-
-        $lastMonthEnd = $now->copy()
-            ->subMonth()
-            ->endOfMonth();
-
-        // ── Core Counts ──────────────────────────────────────────────────────
+        // ── Core Counts & Pre-Aggregated Subqueries ──────────────────────────
 
         $totalStudents = Student::whereNotNull('face_embedding')->count();
 
-        // Updated to query through the child event_days table
-        $totalEvents = Event::whereHas('days', function ($query) use ($startDate) {
-            $query->where('event_date', '>=', $startDate);
-        })->count();
-
-        $totalAttendances = Attendance::where(
-            'logged_at',
-            '>=',
-            $startDate
-        )->count();
-
-        // ── Global Attendance Rate ───────────────────────────────────────────
-
-        $globalAttendanceRate = (
-            $totalEvents > 0 &&
-            $totalStudents > 0
-        )
-            ? round(
-                ($totalAttendances / ($totalStudents * $totalEvents)) * 100,
-                2
+        // Subquery: aggregate event_days per event_id first to avoid Cartesian joins
+        $daysSubquery = DB::table('event_days')
+            ->select(
+                'event_id',
+                DB::raw('MIN(event_date) as start_date'),
+                DB::raw('MAX(event_date) as end_date'),
+                DB::raw('COUNT(DISTINCT event_day_id) as total_days')
             )
+            ->groupBy('event_id');
+
+        // Subquery: aggregate attendances per event_id within the selected window
+        $attendanceSubquery = DB::table('attendances')
+            ->select(
+                'event_id',
+                DB::raw('COUNT(attendance_id) as attended'),
+                DB::raw("SUM(CASE WHEN status IN ('success', 'present') THEN 1 ELSE 0 END) as successful"),
+                DB::raw('ROUND(AVG(confidence_score), 4) as avg_confidence')
+            )
+            ->where('logged_at', '>=', $startDate)
+            ->groupBy('event_id');
+
+        // Total events overlapping the selected period
+        $totalEvents = DB::table('events as e')
+            ->joinSub($daysSubquery, 'ed', 'ed.event_id', '=', 'e.event_id')
+            ->where('ed.end_date', '>=', $startDateStr)
+            ->count();
+
+        // Held events count (events that have started on or before today) for accurate turnout rate
+        $heldEventsCount = DB::table('events as e')
+            ->joinSub($daysSubquery, 'ed', 'ed.event_id', '=', 'e.event_id')
+            ->where('ed.end_date', '>=', $startDateStr)
+            ->where('ed.start_date', '<=', $today)
+            ->count();
+
+        $attendanceTotals = Attendance::where('logged_at', '>=', $startDate)
+            ->selectRaw('COUNT(*) as total')
+            ->selectRaw("SUM(CASE WHEN status IN ('success', 'present') THEN 1 ELSE 0 END) as successful")
+            ->first();
+
+        $totalAttendances = (int) ($attendanceTotals->total ?? 0);
+        $successfulVerifications = (int) ($attendanceTotals->successful ?? 0);
+
+        // ── Global Attendance & Biometric Success Rates ──────────────────────
+
+        $globalAttendanceRate = ($heldEventsCount > 0 && $totalStudents > 0)
+            ? min(100, round(($totalAttendances / ($totalStudents * $heldEventsCount)) * 100, 2))
             : 0;
 
-        // ── Biometric Success Rate ───────────────────────────────────────────
-
-        $successfulVerifications = Attendance::where(
-                'logged_at',
-                '>=',
-                $startDate
-            )
-            ->whereIn('status', ['success', 'present'])
-            ->count();
-
         $biometricSuccessRate = $totalAttendances > 0
-            ? round(
-                ($successfulVerifications / $totalAttendances) * 100,
-                2
-            )
-            : 100;
+            ? round(($successfulVerifications / $totalAttendances) * 100, 2)
+            : 0;
 
-        // ── KPI Deltas ───────────────────────────────────────────────────────
-        // Current month compared with previous month
+        // ── KPI Deltas (Current Month vs. Previous Month) ────────────────────
 
-        $thisMonthAttendances = Attendance::where(
-            'logged_at',
-            '>=',
-            $thisMonthStart
-        )->count();
+        $thisMonthStats = Attendance::where('logged_at', '>=', $thisMonthStart)
+            ->selectRaw('COUNT(*) as total')
+            ->selectRaw("SUM(CASE WHEN status IN ('success', 'present') THEN 1 ELSE 0 END) as successful")
+            ->first();
 
-        $lastMonthAttendances = Attendance::whereBetween(
-            'logged_at',
-            [$lastMonthStart, $lastMonthEnd]
-        )->count();
+        $lastMonthStats = Attendance::whereBetween('logged_at', [$lastMonthStart, $lastMonthEnd])
+            ->selectRaw('COUNT(*) as total')
+            ->selectRaw("SUM(CASE WHEN status IN ('success', 'present') THEN 1 ELSE 0 END) as successful")
+            ->first();
 
-        $thisMonthSuccess = Attendance::whereIn(
-                'status',
-                ['success', 'present']
-            )
-            ->where('logged_at', '>=', $thisMonthStart)
-            ->count();
-
-        $lastMonthSuccess = Attendance::whereIn(
-                'status',
-                ['success', 'present']
-            )
-            ->whereBetween(
-                'logged_at',
-                [$lastMonthStart, $lastMonthEnd]
-            )
-            ->count();
+        $thisMonthAttendances = (int) ($thisMonthStats->total ?? 0);
+        $lastMonthAttendances = (int) ($lastMonthStats->total ?? 0);
+        $thisMonthSuccess = (int) ($thisMonthStats->successful ?? 0);
+        $lastMonthSuccess = (int) ($lastMonthStats->successful ?? 0);
 
         $thisMonthRate = $thisMonthAttendances > 0
-            ? round(
-                ($thisMonthSuccess / $thisMonthAttendances) * 100,
-                2
-            )
-            : 100;
+            ? round(($thisMonthSuccess / $thisMonthAttendances) * 100, 2)
+            : null;
 
         $lastMonthRate = $lastMonthAttendances > 0
-            ? round(
-                ($lastMonthSuccess / $lastMonthAttendances) * 100,
-                2
-            )
-            : 100;
+            ? round(($lastMonthSuccess / $lastMonthAttendances) * 100, 2)
+            : null;
 
         $deltas = [
             'attendances' => $lastMonthAttendances > 0
-                ? round(
-                    (
-                        ($thisMonthAttendances - $lastMonthAttendances)
-                        / $lastMonthAttendances
-                    ) * 100,
-                    1
-                )
+                ? round((($thisMonthAttendances - $lastMonthAttendances) / $lastMonthAttendances) * 100, 1)
                 : null,
 
-            'biometricSuccessRate' => $lastMonthRate > 0
-                ? round(
-                    (
-                        ($thisMonthRate - $lastMonthRate)
-                        / $lastMonthRate
-                    ) * 100,
-                    1
-                )
+            'biometricSuccessRate' => ($thisMonthRate !== null && $lastMonthRate !== null && $lastMonthRate > 0)
+                ? round((($thisMonthRate - $lastMonthRate) / $lastMonthRate) * 100, 1)
                 : null,
         ];
 
         // ── Monthly Attendance Trend ─────────────────────────────────────────
 
         $monthlyTrend = Attendance::select(
-                DB::raw(
-                    "DATE_FORMAT(logged_at, '%b %Y') as month"
-                ),
-                DB::raw(
-                    "DATE_FORMAT(logged_at, '%Y-%m') as sort_key"
-                ),
+                DB::raw("DATE_FORMAT(logged_at, '%b %Y') as month"),
+                DB::raw("DATE_FORMAT(logged_at, '%Y-%m') as sort_key"),
                 DB::raw('COUNT(*) as total'),
-                DB::raw(
-                    "SUM(
-                        CASE
-                            WHEN status IN ('success', 'present') THEN 1
-                            ELSE 0
-                        END
-                    ) as successful"
-                ),
-                DB::raw(
-                    'ROUND(AVG(confidence_score), 4) as avg_confidence'
-                )
+                DB::raw("SUM(CASE WHEN status IN ('success', 'present') THEN 1 ELSE 0 END) as successful"),
+                DB::raw('ROUND(AVG(confidence_score), 4) as avg_confidence')
             )
             ->where('logged_at', '>=', $startDate)
             ->groupBy('month', 'sort_key')
             ->orderBy('sort_key')
             ->get()
-            ->map(fn ($row) => [
-                'month' => $row->month,
-                'total' => (int) $row->total,
-                'successful' => (int) $row->successful,
-                'avg_confidence' => (float) (
-                    $row->avg_confidence ?? 0
-                ),
-            ]);
+            ->map(function ($row) {
+                $total = (int) $row->total;
+                $successful = (int) $row->successful;
 
-        // ── Per-Event Summary (Joined with event_days) ────────────────────────
+                return [
+                    'month' => $row->month,
+                    'total' => $total,
+                    'successful' => $successful,
+                    'pass_rate' => $total > 0 ? round(($successful / $total) * 100, 1) : 0,
+                    'avg_confidence' => (float) ($row->avg_confidence ?? 0),
+                ];
+            });
 
-        $eventSummary = Event::select(
-                'events.event_id',
-                'events.title',
-                DB::raw('MIN(ed.event_date) as start_date'),
-                DB::raw('MAX(ed.event_date) as end_date'),
-                DB::raw('COUNT(DISTINCT ed.event_day_id) as total_days'),
-                DB::raw('COUNT(a.attendance_id) as attended'),
-                DB::raw(
-                    "SUM(
-                        CASE
-                            WHEN a.status IN ('success', 'present') THEN 1
-                            ELSE 0
-                        END
-                    ) as successful"
-                ),
-                DB::raw(
-                    'ROUND(AVG(a.confidence_score), 4) as avg_confidence'
-                )
-            )
-            ->join('event_days as ed', 'ed.event_id', '=', 'events.event_id')
-            ->leftJoin(
-                'attendances as a',
-                'a.event_id',
-                '=',
-                'events.event_id'
-            )
-            ->where(
-                'ed.event_date',
-                '>=',
-                $startDate
-            )
-            ->groupBy(
-                'events.event_id',
-                'events.title'
-            )
-            ->orderByDesc('start_date')
-            ->limit(20)
-            ->get()
-            ->map(fn ($row) => [
-                'id' => $row->event_id,
-                'event' => $row->title,
-                'date' => $row->total_days > 1 
-                    ? "{$row->start_date} to {$row->end_date}" 
+        // ── Base Event Analytics Query (Safe, Non-Multiplying Joins) ─────────
+
+        $baseEventQuery = DB::table('events as e')
+            ->joinSub($daysSubquery, 'ed', 'ed.event_id', '=', 'e.event_id')
+            ->leftJoinSub($attendanceSubquery, 'att', 'att.event_id', '=', 'e.event_id')
+            ->where('ed.end_date', '>=', $startDateStr)
+            ->select(
+                'e.event_id as id',
+                'e.title as event',
+                'e.location',
+                'ed.start_date',
+                'ed.end_date',
+                'ed.total_days',
+                DB::raw('COALESCE(att.attended, 0) as attended'),
+                DB::raw('COALESCE(att.successful, 0) as successful'),
+                DB::raw('COALESCE(att.avg_confidence, 0) as avg_confidence')
+            );
+
+        $formatEventRow = function ($row) use ($today) {
+            $totalDays = (int) $row->total_days;
+            $attended = (int) $row->attended;
+            $successful = (int) $row->successful;
+            $isUpcoming = $row->start_date > $today && $attended === 0;
+
+            return [
+                'id' => (int) $row->id,
+                'event' => $row->event,
+                'location' => $row->location,
+                'date' => $totalDays > 1
+                    ? "{$row->start_date} to {$row->end_date}"
                     : $row->start_date,
-                'attended' => (int) $row->attended,
-                'successful' => (int) $row->successful,
-                'avg_confidence' => (float) (
-                    $row->avg_confidence ?? 0
-                ),
-            ]);
+                'start_date' => $row->start_date,
+                'end_date' => $row->end_date,
+                'total_days' => $totalDays,
+                'is_upcoming' => $isUpcoming,
+                'attended' => $attended,
+                'successful' => $successful,
+                'pass_rate' => $attended > 0 ? round(($successful / $attended) * 100, 1) : 0,
+                'avg_confidence' => $attended > 0 ? round((float) $row->avg_confidence, 4) : 0,
+            ];
+        };
+
+        // ── Top 8 Ranked Events (For Scale-Safe Bar Chart) ───────────────────
+
+        $highestTurnoutEvents = (clone $baseEventQuery)
+            ->where('ed.start_date', '<=', $today)
+            ->whereRaw('COALESCE(att.attended, 0) > 0')
+            ->orderByDesc('attended')
+            ->orderByDesc('ed.start_date')
+            ->limit(8)
+            ->get()
+            ->map($formatEventRow)
+            ->values();
+
+        $lowestTurnoutEvents = (clone $baseEventQuery)
+            ->where('ed.start_date', '<=', $today)
+            ->whereRaw('COALESCE(att.attended, 0) > 0')
+            ->orderBy('attended')
+            ->orderByDesc('ed.start_date')
+            ->limit(8)
+            ->get()
+            ->map($formatEventRow)
+            ->values();
+
+        // ── Paginated Event Directory (Handles 1,000+ Events) ────────────────
+
+        $directoryQuery = clone $baseEventQuery;
+
+        if ($search !== '') {
+            $directoryQuery->where(function ($q) use ($search) {
+                $q->where('e.title', 'like', "%{$search}%")
+                  ->orWhere('e.location', 'like', "%{$search}%");
+            });
+        }
+
+        if ($status === 'held') {
+            $directoryQuery->where('ed.start_date', '<=', $today);
+        } elseif ($status === 'upcoming') {
+            $directoryQuery->where('ed.start_date', '>', $today);
+        }
+
+        match ($sort) {
+            'highest_turnout' => $directoryQuery
+                ->orderByDesc('attended')
+                ->orderByDesc('ed.start_date'),
+            'lowest_turnout' => $directoryQuery
+                ->where('ed.start_date', '<=', $today)
+                ->orderBy('attended')
+                ->orderByDesc('ed.start_date'),
+            'lowest_confidence' => $directoryQuery
+                ->whereRaw('COALESCE(att.attended, 0) > 0')
+                ->orderBy('avg_confidence')
+                ->orderByDesc('ed.start_date'),
+            default => $directoryQuery
+                ->orderByDesc('ed.start_date')
+                ->orderByDesc('e.event_id'),
+        };
+
+        // Force relative path so ngrok / reverse proxies never emit localhost URLs
+        $eventDirectory = $directoryQuery
+            ->paginate(15)
+            ->withPath($request->getPathInfo())
+            ->withQueryString()
+            ->through($formatEventRow);
 
         // ── Hour-of-Day Distribution ─────────────────────────────────────────
 
@@ -256,31 +286,29 @@ class AnalyticsController extends Controller
             )
             ->whereIn('status', ['success', 'present'])
             ->where('logged_at', '>=', $startDate)
-            ->groupBy(
-                DB::raw('HOUR(logged_at)')
-            )
+            ->groupBy(DB::raw('HOUR(logged_at)'))
             ->orderBy('hour')
             ->get()
             ->map(fn ($row) => [
                 'hour' => (int) $row->hour,
-                'label' => Carbon::createFromTime(
-                    $row->hour
-                )->format('g A'),
+                'label' => Carbon::createFromTime((int) $row->hour)->format('g A'),
                 'count' => (int) $row->count,
             ]);
 
         // ── Course / Degree Breakdown ────────────────────────────────────────
 
         $courseBreakdown = Student::select(
-                'degree as course',
-                DB::raw('count(*) as total')
+                DB::raw("COALESCE(degree, 'Unspecified') as course"),
+                DB::raw('COUNT(*) as total'),
+                DB::raw('SUM(CASE WHEN face_embedding IS NOT NULL THEN 1 ELSE 0 END) as enrolled_biometric')
             )
-            ->groupBy('degree')
+            ->groupBy(DB::raw("COALESCE(degree, 'Unspecified')"))
             ->orderByDesc('total')
             ->get()
             ->map(fn ($row) => [
-                'course' => $row->course ?? 'Unspecified',
+                'course' => $row->course,
                 'total' => (int) $row->total,
+                'enrolled_biometric' => (int) $row->enrolled_biometric,
             ]);
 
         // ── Return Global Analytics ──────────────────────────────────────────
@@ -289,6 +317,7 @@ class AnalyticsController extends Controller
             'metrics' => [
                 'totalStudents' => $totalStudents,
                 'totalEvents' => $totalEvents,
+                'heldEvents' => $heldEventsCount,
                 'globalAttendanceRate' => $globalAttendanceRate,
                 'biometricSuccessRate' => $biometricSuccessRate,
             ],
@@ -299,16 +328,26 @@ class AnalyticsController extends Controller
 
             'monthlyTrend' => $monthlyTrend,
 
-            'eventSummary' => $eventSummary,
+            'topEvents' => [
+                'highestTurnout' => $highestTurnoutEvents,
+                'lowestTurnout' => $lowestTurnoutEvents,
+            ],
+
+            'eventDirectory' => $eventDirectory,
+
+            // Backwards-compatible fallback
+            'eventSummary' => $highestTurnoutEvents,
 
             'hourlyDistribution' => $hourlyDistribution,
 
             'filters' => [
                 'range' => $range,
+                'search' => $search,
+                'status' => $status,
+                'sort' => $sort,
             ],
         ]);
     }
-
 
     // ─────────────────────────────────────────────────────────────────────────
     // PER-EVENT DRILL-DOWN ANALYTICS
@@ -316,76 +355,73 @@ class AnalyticsController extends Controller
 
     public function showEvent(Event $event)
     {
-        // Eager-load child days relationship
-        $event->load('days');
+        $event->load(['days' => fn ($q) => $q->orderBy('event_date')]);
 
-        // ── Event-level Counts ────────────────────────────────────────────────
+        // ── Event-level Counts (Single Aggregate Query) ──────────────────────
 
-        $totalAttendees = Attendance::where(
-            'event_id',
-            $event->event_id
-        )->count();
+        $eventTotals = Attendance::where('event_id', $event->event_id)
+            ->selectRaw('COUNT(*) as total')
+            ->selectRaw("SUM(CASE WHEN status IN ('success', 'present') THEN 1 ELSE 0 END) as successful")
+            ->selectRaw("AVG(CASE WHEN status IN ('success', 'present') THEN confidence_score ELSE NULL END) as avg_confidence")
+            ->first();
 
-        $successfulCheckins = Attendance::where(
-                'event_id',
-                $event->event_id
-            )
-            ->whereIn('status', ['success', 'present'])
-            ->count();
-
-        $avgConfidence = Attendance::where(
-                'event_id',
-                $event->event_id
-            )
-            ->whereIn('status', ['success', 'present'])
-            ->avg('confidence_score');
+        $totalAttendees = (int) ($eventTotals->total ?? 0);
+        $successfulCheckins = (int) ($eventTotals->successful ?? 0);
+        $avgConfidence = (float) ($eventTotals->avg_confidence ?? 0);
 
         $eventSuccessRate = $totalAttendees > 0
-            ? round(
-                ($successfulCheckins / $totalAttendees) * 100,
-                2
-            )
+            ? round(($successfulCheckins / $totalAttendees) * 100, 2)
             : 0;
 
-        // ── Per-Day Breakdown (Multi-Day Support) ─────────────────────────────
+        // ── Per-Day Breakdown (Single Grouped Query — No N+1 Loop) ───────────
 
-        $dailyBreakdown = $event->days->map(function ($day) use ($event) {
-            $dateStr = $day->event_date instanceof Carbon 
-                ? $day->event_date->format('Y-m-d') 
+        $dailyStatsByDate = Attendance::where('event_id', $event->event_id)
+            ->select(
+                DB::raw('DATE(logged_at) as log_date'),
+                DB::raw('COUNT(*) as attendees'),
+                DB::raw("SUM(CASE WHEN status IN ('success', 'present') THEN 1 ELSE 0 END) as successful")
+            )
+            ->groupBy(DB::raw('DATE(logged_at)'))
+            ->get()
+            ->keyBy('log_date');
+
+        $dailyBreakdown = $event->days->map(function ($day) use ($dailyStatsByDate) {
+            $dateStr = $day->event_date instanceof Carbon
+                ? $day->event_date->format('Y-m-d')
                 : Carbon::parse($day->event_date)->format('Y-m-d');
 
-            $attendeesCount = Attendance::where('event_id', $event->event_id)
-                ->whereDate('logged_at', $dateStr)
-                ->count();
-
-            $successfulCount = Attendance::where('event_id', $event->event_id)
-                ->whereDate('logged_at', $dateStr)
-                ->whereIn('status', ['success', 'present'])
-                ->count();
+            $stats = $dailyStatsByDate->get($dateStr);
 
             return [
                 'date' => $dateStr,
-                'slots' => $day->slots, // JSON array of time slots for this specific day
-                'attendees' => $attendeesCount,
-                'successful' => $successfulCount,
+                'slots' => $day->slots,
+                'attendees' => (int) ($stats->attendees ?? 0),
+                'successful' => (int) ($stats->successful ?? 0),
             ];
         });
 
-        // ── Department / Degree Breakdown (With Registrants vs Checked In) ────
+        // ── Department / Degree Breakdown (Pre-Aggregated Per Student) ───────
+
+        $studentEventStats = DB::table('attendances')
+            ->select(
+                'student_id',
+                DB::raw('COUNT(*) as checkins'),
+                DB::raw("MAX(CASE WHEN status IN ('success', 'present') THEN 1 ELSE 0 END) as has_verified"),
+                DB::raw('AVG(confidence_score) as avg_confidence')
+            )
+            ->where('event_id', $event->event_id)
+            ->groupBy('student_id');
 
         $departmentBreakdown = DB::table('students as s')
+            ->leftJoinSub($studentEventStats, 'sa', 'sa.student_id', '=', 's.student_id')
             ->select(
                 DB::raw("COALESCE(s.degree, 'Unspecified') as course"),
-                DB::raw('COUNT(s.student_id) as total'),
-                DB::raw("SUM(CASE WHEN a.attendance_id IS NOT NULL THEN 1 ELSE 0 END) as checked_in"),
-                DB::raw("SUM(CASE WHEN a.attendance_id IS NOT NULL AND a.status IN ('success', 'present') THEN 1 ELSE 0 END) as successful"),
-                DB::raw("SUM(CASE WHEN a.attendance_id IS NULL THEN 1 ELSE 0 END) as no_show"),
-                DB::raw('ROUND(AVG(a.confidence_score), 4) as avg_confidence')
+                DB::raw('COUNT(DISTINCT s.student_id) as total'),
+                DB::raw('SUM(CASE WHEN sa.student_id IS NOT NULL THEN 1 ELSE 0 END) as checked_in'),
+                DB::raw('SUM(COALESCE(sa.has_verified, 0)) as successful'),
+                DB::raw('SUM(CASE WHEN sa.student_id IS NULL THEN 1 ELSE 0 END) as no_show'),
+                DB::raw('ROUND(AVG(sa.avg_confidence), 4) as avg_confidence')
             )
-            ->leftJoin('attendances as a', function($join) use ($event) {
-                $join->on('s.student_id', '=', 'a.student_id')
-                     ->where('a.event_id', '=', $event->event_id);
-            })
             ->groupBy(DB::raw("COALESCE(s.degree, 'Unspecified')"))
             ->orderByDesc('total')
             ->get()
@@ -414,6 +450,7 @@ class AnalyticsController extends Controller
         $runningTotal = 0;
         $checkinTimeline = $rawTimeline->map(function ($row) use (&$runningTotal) {
             $runningTotal += (int) $row->count;
+
             return [
                 'label' => $row->label,
                 'count' => (int) $row->count,
@@ -425,30 +462,16 @@ class AnalyticsController extends Controller
         // ── Student Attendance Roster ─────────────────────────────────────────
 
         $roster = DB::table('attendances as a')
-            ->join(
-                'students as s',
-                's.student_id',
-                '=',
-                'a.student_id'
-            )
+            ->join('students as s', 's.student_id', '=', 'a.student_id')
             ->select(
                 's.student_id',
-                DB::raw(
-                    "CONCAT(
-                        s.firstname,
-                        ' ',
-                        s.surname
-                    ) as name"
-                ),
+                DB::raw("CONCAT(s.firstname, ' ', s.surname) as name"),
                 's.degree as course',
                 'a.status',
                 'a.confidence_score',
                 'a.logged_at'
             )
-            ->where(
-                'a.event_id',
-                $event->event_id
-            )
+            ->where('a.event_id', $event->event_id)
             ->orderBy('a.logged_at')
             ->get()
             ->map(fn ($row) => [
@@ -456,35 +479,36 @@ class AnalyticsController extends Controller
                 'name' => $row->name,
                 'course' => $row->course ?? 'Unspecified',
                 'status' => $row->status,
-                'confidence_score' => round(
-                    (float) $row->confidence_score,
-                    4
-                ),
-                'logged_at' => Carbon::parse(
-                    $row->logged_at
-                )->format('Y-m-d H:i:s'),
+                'confidence_score' => round((float) $row->confidence_score, 4),
+                'logged_at' => Carbon::parse($row->logged_at)->format('Y-m-d H:i:s'),
             ]);
 
-        // ── Flagged Low-Confidence Check-ins (e.g. Confidence < 70% or 0.70) ──
+        // ── Flagged Low-Confidence Check-ins (Confidence < 0.70) ─────────────
 
-        $flaggedRoster = DB::table('attendances as a')
+        $flaggedQuery = DB::table('attendances as a')
             ->join('students as s', 's.student_id', '=', 'a.student_id')
+            ->where('a.event_id', $event->event_id)
+            ->where('a.confidence_score', '<', 0.70);
+
+        $flaggedCount = (clone $flaggedQuery)->count();
+
+        $flaggedRoster = $flaggedQuery
             ->select(
                 's.student_id',
                 DB::raw("CONCAT(s.firstname, ' ', s.surname) as name"),
                 's.degree as course',
+                'a.status',
                 'a.confidence_score',
                 'a.logged_at'
             )
-            ->where('a.event_id', $event->event_id)
-            ->where('a.confidence_score', '<', 0.70)
             ->orderBy('a.confidence_score', 'asc')
-            ->limit(5)
+            ->limit(50)
             ->get()
             ->map(fn ($row) => [
                 'student_id' => $row->student_id,
                 'name' => $row->name,
                 'course' => $row->course ?? 'Unspecified',
+                'status' => $row->status,
                 'confidence_score' => round((float) $row->confidence_score, 4),
                 'logged_at' => Carbon::parse($row->logged_at)->format('Y-m-d H:i:s'),
             ]);
@@ -497,8 +521,11 @@ class AnalyticsController extends Controller
                 'title' => $event->title,
                 'description' => $event->description,
                 'location' => $event->location,
+                'created_at' => $event->created_at?->toIso8601String(),
                 'schedules' => $event->days->map(fn ($d) => [
-                    'date' => $d->event_date instanceof Carbon ? $d->event_date->format('Y-m-d') : $d->event_date,
+                    'date' => $d->event_date instanceof Carbon
+                        ? $d->event_date->format('Y-m-d')
+                        : $d->event_date,
                     'slots' => $d->slots,
                 ]),
             ],
@@ -507,15 +534,13 @@ class AnalyticsController extends Controller
                 'totalAttendees' => $totalAttendees,
                 'successfulCheckins' => $successfulCheckins,
                 'eventSuccessRate' => $eventSuccessRate,
-                'avgConfidence' => round(
-                    (float) ($avgConfidence ?? 0),
-                    4
-                ),
-                'dailyBreakdown' => $dailyBreakdown, // Day-by-day stats & slots
+                'avgConfidence' => round($avgConfidence, 4),
+                'dailyBreakdown' => $dailyBreakdown,
                 'departmentBreakdown' => $departmentBreakdown,
                 'checkinTimeline' => $checkinTimeline,
                 'roster' => $roster,
                 'flaggedRoster' => $flaggedRoster,
+                'flaggedCount' => $flaggedCount,
             ],
         ]);
     }

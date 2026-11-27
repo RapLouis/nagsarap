@@ -80,6 +80,12 @@ class FortifyServiceProvider extends ServiceProvider
                     return $user;
                 }
 
+                if ($user->role === 'organizer' && $user->status === 'inactive') {
+                    throw ValidationException::withMessages([
+                        Fortify::username() => ['Your organizer account is inactive. Please contact an administrator.'],
+                    ]);
+                }
+
                 return $user;
             }
 

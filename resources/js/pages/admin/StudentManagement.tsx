@@ -19,6 +19,7 @@ import {
     ArrowUp,
     ArrowDown,
     ArrowUpDown,
+    FilterX,
 } from 'lucide-react';
 
 type Student = {
@@ -71,6 +72,8 @@ const COLUMNS: { key: SortableColumn; label: string }[] = [
     { key: 'verification_status', label: 'Status' },
 ];
 
+const fmt = new Intl.NumberFormat('en-PH');
+
 export default function StudentManagement({
     students,
     availableDegrees = [],
@@ -91,6 +94,7 @@ export default function StudentManagement({
     const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
+    const [showBackToTop, setShowBackToTop] = useState(false);
 
     useEffect(() => {
         if (successMessage) {
@@ -98,6 +102,14 @@ export default function StudentManagement({
             return () => clearTimeout(timer);
         }
     }, [successMessage]);
+
+    useEffect(() => {
+        const handleScroll = () => {
+            setShowBackToTop(window.scrollY > 480);
+        };
+        window.addEventListener('scroll', handleScroll, { passive: true });
+        return () => window.removeEventListener('scroll', handleScroll);
+    }, []);
 
     const applyFilters = (newFilters: Record<string, string>) => {
         setIsLoading(true);
@@ -205,7 +217,17 @@ export default function StudentManagement({
         <>
             <Head title="Student Management | 4ttnd Attendance System" />
 
-            <div className="min-h-screen space-y-4 bg-[#F5F6FA] p-3 font-sans text-gray-900 antialiased sm:p-5">
+            {/* Screen reader live announcement for record updates */}
+            <div role="status" aria-live="polite" className="sr-only">
+                {isLoading
+                    ? 'Updating student records...'
+                    : `Showing ${students.data.length}${
+                          typeof students.total === 'number' ? ` of ${students.total}` : ''
+                      } student records`}
+            </div>
+
+            <div className="w-full space-y-3.5 bg-[#F5F6FA] font-sans text-gray-900 antialiased">
+                {/* OPERATION FEEDBACK BANNER */}
                 {successMessage && (
                     <div
                         role="status"
@@ -214,7 +236,7 @@ export default function StudentManagement({
                     >
                         <div className="flex items-center gap-2.5 text-xs font-bold sm:text-sm">
                             <CheckCircle2
-                                className="h-5 w-5 shrink-0 text-emerald-600"
+                                className="h-4 w-4 shrink-0 text-emerald-600"
                                 aria-hidden="true"
                             />
                             <span>{successMessage}</span>
@@ -223,26 +245,32 @@ export default function StudentManagement({
                             type="button"
                             onClick={() => setSuccessMessage(null)}
                             aria-label="Dismiss notification"
-                            className="inline-flex min-h-[38px] min-w-[38px] items-center justify-center rounded-lg text-emerald-700 transition-colors hover:bg-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                            className="inline-flex min-h-[38px] min-w-[38px] items-center justify-center rounded-xl text-emerald-700 transition-colors hover:bg-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                         >
                             <X className="h-4 w-4" aria-hidden="true" />
                         </button>
                     </div>
                 )}
 
-                {/* PAGE HEADER */}
-                <header className="flex flex-col gap-2 rounded-2xl border border-gray-200/80 bg-white p-4 shadow-xs sm:flex-row sm:items-center sm:justify-between sm:p-5">
-                    <div className="space-y-0.5">
-                        <h1 className="text-xl font-black tracking-tight text-[#1B1F5C] sm:text-2xl">
+                {/* COMPACT PAGE IDENTITY HEADER */}
+                <header className="flex flex-col gap-2 rounded-2xl border border-gray-200/80 bg-white p-4 shadow-xs sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0 space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <span className="inline-flex items-center rounded-md border border-[#1B1F5C]/15 bg-[#1B1F5C]/5 px-2.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-[#1B1F5C]">
+                                Student Directory & Biometrics
+                            </span>
+                        </div>
+                        <h1 className="text-lg font-black tracking-tight text-[#1B1F5C] sm:text-xl">
                             Student Management
                         </h1>
                         <p className="text-xs font-medium text-gray-600">
-                            View, search, filter, and manage registered student accounts and facial verification status.
+                            Search, filter, update profiles, and audit facial verification status for
+                            enrolled students
                         </p>
                     </div>
                 </header>
 
-                {/* STAT CARDS (QUICK STATUS FILTERS) */}
+                {/* INTERACTIVE STAT CARDS (QUICK STATUS FILTERS) */}
                 <section
                     aria-label="Student Account Statistics"
                     className="grid grid-cols-1 gap-3 sm:grid-cols-3"
@@ -251,6 +279,7 @@ export default function StudentManagement({
                         icon={Users}
                         iconClass="border-[#1B1F5C]/15 bg-[#1B1F5C]/5 text-[#1B1F5C]"
                         label="Total Students"
+                        sub="All enrolled accounts"
                         value={totalCount}
                         active={selectedStatus === 'all'}
                         onClick={() => filterByStatus('all')}
@@ -259,6 +288,7 @@ export default function StudentManagement({
                         icon={UserCheck}
                         iconClass="border-emerald-200/80 bg-emerald-50 text-emerald-700"
                         label="Verified Accounts"
+                        sub="Biometric profile active"
                         value={verifiedCount}
                         active={selectedStatus === 'verified'}
                         onClick={() => filterByStatus('verified')}
@@ -267,57 +297,70 @@ export default function StudentManagement({
                         icon={ShieldAlert}
                         iconClass="border-amber-200/80 bg-amber-50 text-amber-800"
                         label="Pending Verification"
+                        sub="Awaiting face enrollment"
                         value={pendingCount}
                         active={selectedStatus === 'pending_face_verification'}
                         onClick={() => filterByStatus('pending_face_verification')}
                     />
                 </section>
 
-                {/* FILTER TOOLBAR */}
+                {/* COMPACT FILTER & SEARCH TOOLBAR */}
                 <section
                     aria-label="Student Filter Controls"
                     className="space-y-3 rounded-2xl border border-gray-200/80 bg-white p-4 shadow-xs"
                 >
                     <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-center">
                         <div className="flex flex-wrap items-center gap-2">
-                            <div className="mr-1 flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wider text-gray-500">
-                                <Filter className="h-3.5 w-3.5 text-[#1B1F5C]" aria-hidden="true" />
+                            <div className="mr-0.5 flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wider text-gray-500">
+                                <Filter className="h-3.5 w-3.5 text-[#F5A623]" aria-hidden="true" />
                                 <span>Filter</span>
                             </div>
 
-                            <select
-                                aria-label="Filter by Degree or Program"
-                                value={selectedDegree}
-                                onChange={(e) => {
-                                    setSelectedDegree(e.target.value);
-                                    applyFilters({ degree: e.target.value, page: '1' });
-                                }}
-                                className="min-h-[38px] rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-xs font-bold text-[#1B1F5C] transition-colors focus-visible:border-[#F5A623] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
-                            >
-                                <option value="all">All Degrees &amp; Programs</option>
-                                {availableDegrees.map((deg) => (
-                                    <option key={deg} value={deg}>
-                                        {deg}
-                                    </option>
-                                ))}
-                            </select>
+                            <div>
+                                <label htmlFor="student-degree-filter" className="sr-only">
+                                    Filter by Degree or Program
+                                </label>
+                                <select
+                                    id="student-degree-filter"
+                                    aria-label="Filter by Degree or Program"
+                                    value={selectedDegree}
+                                    onChange={(e) => {
+                                        setSelectedDegree(e.target.value);
+                                        applyFilters({ degree: e.target.value, page: '1' });
+                                    }}
+                                    className="min-h-[38px] rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-xs font-bold text-[#1B1F5C] transition-colors hover:border-gray-400 focus-visible:border-[#F5A623] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                >
+                                    <option value="all">All Degrees & Programs</option>
+                                    {availableDegrees.map((deg) => (
+                                        <option key={deg} value={deg}>
+                                            {deg}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
 
-                            <select
-                                aria-label="Filter by Year and Section"
-                                value={selectedSection}
-                                onChange={(e) => {
-                                    setSelectedSection(e.target.value);
-                                    applyFilters({ year_section: e.target.value, page: '1' });
-                                }}
-                                className="min-h-[38px] rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-xs font-bold text-[#1B1F5C] transition-colors focus-visible:border-[#F5A623] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
-                            >
-                                <option value="all">All Years &amp; Sections</option>
-                                {availableSections.map((sec) => (
-                                    <option key={sec} value={sec}>
-                                        {sec}
-                                    </option>
-                                ))}
-                            </select>
+                            <div>
+                                <label htmlFor="student-section-filter" className="sr-only">
+                                    Filter by Year and Section
+                                </label>
+                                <select
+                                    id="student-section-filter"
+                                    aria-label="Filter by Year and Section"
+                                    value={selectedSection}
+                                    onChange={(e) => {
+                                        setSelectedSection(e.target.value);
+                                        applyFilters({ year_section: e.target.value, page: '1' });
+                                    }}
+                                    className="min-h-[38px] rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-xs font-bold text-[#1B1F5C] transition-colors hover:border-gray-400 focus-visible:border-[#F5A623] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                >
+                                    <option value="all">All Years & Sections</option>
+                                    {availableSections.map((sec) => (
+                                        <option key={sec} value={sec}>
+                                            {sec}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
                         </div>
 
                         <form
@@ -326,24 +369,28 @@ export default function StudentManagement({
                             className="flex w-full items-center gap-2 lg:w-auto"
                         >
                             <div className="relative flex-1 lg:w-72">
+                                <label htmlFor="student-directory-search" className="sr-only">
+                                    Search students by student number, name, or email
+                                </label>
                                 <Search
-                                    className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400"
+                                    className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400"
                                     aria-hidden="true"
                                 />
                                 <input
+                                    id="student-directory-search"
                                     type="text"
                                     aria-label="Search students by student number, name, or email"
-                                    placeholder="Search student no., name..."
+                                    placeholder="Search student no., name, or email..."
                                     value={search}
                                     onChange={(e) => setSearch(e.target.value)}
-                                    className="min-h-[38px] w-full rounded-xl border border-gray-300 bg-white py-1.5 pl-9 pr-8 text-xs font-medium text-gray-900 placeholder:text-gray-400 focus-visible:border-[#F5A623] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                    className="min-h-[38px] w-full rounded-xl border border-gray-300 bg-white py-1.5 pl-8 pr-8 text-xs font-medium text-gray-900 placeholder:text-gray-400 transition-colors focus-visible:border-[#F5A623] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                 />
                                 {search && (
                                     <button
                                         type="button"
                                         onClick={() => removeFilter('search')}
                                         aria-label="Clear search text"
-                                        className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                        className="absolute right-1.5 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                     >
                                         <X className="h-3.5 w-3.5" aria-hidden="true" />
                                     </button>
@@ -352,7 +399,7 @@ export default function StudentManagement({
                             <button
                                 type="submit"
                                 disabled={isLoading}
-                                className="inline-flex min-h-[38px] shrink-0 items-center justify-center rounded-xl bg-[#1B1F5C] px-3.5 py-1.5 text-xs font-bold text-white transition-colors hover:bg-[#131644] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] disabled:opacity-60"
+                                className="inline-flex min-h-[38px] shrink-0 items-center justify-center rounded-xl bg-[#1B1F5C] px-4 py-1.5 text-xs font-bold text-white shadow-2xs transition-colors hover:bg-[#131644] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] disabled:opacity-60"
                             >
                                 Search
                             </button>
@@ -383,7 +430,9 @@ export default function StudentManagement({
                                 )}
                                 {selectedStatus !== 'all' && (
                                     <FilterChip
-                                        label={`Status: ${selectedStatus === 'verified' ? 'Verified' : 'Pending'}`}
+                                        label={`Status: ${
+                                            selectedStatus === 'verified' ? 'Verified' : 'Pending'
+                                        }`}
                                         onRemove={() => removeFilter('status')}
                                     />
                                 )}
@@ -391,9 +440,12 @@ export default function StudentManagement({
                             <button
                                 type="button"
                                 onClick={resetAllFilters}
-                                className="inline-flex min-h-[32px] items-center gap-1 rounded-lg px-2 py-1 text-xs font-bold text-gray-600 transition-colors hover:bg-rose-50 hover:text-rose-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                className="inline-flex min-h-[32px] items-center gap-1 rounded-lg border border-gray-200 bg-[#F5F6FA] px-2.5 py-1 text-xs font-bold text-[#1B1F5C] transition-colors hover:bg-gray-200/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                             >
-                                <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                                <RotateCcw
+                                    className="h-3 w-3 text-[#F5A623]"
+                                    aria-hidden="true"
+                                />
                                 <span>Reset All</span>
                             </button>
                         </div>
@@ -401,15 +453,15 @@ export default function StudentManagement({
                 </section>
 
                 {/* RECORDS CONTAINER (MOBILE CARDS + DESKTOP TABLE) */}
-                <main
+                <section
                     aria-label="Student Directory"
-                    className="relative overflow-hidden rounded-2xl border border-gray-200/80 bg-white shadow-xs"
+                    className="relative min-w-0 overflow-hidden rounded-2xl border border-gray-200/80 bg-white shadow-xs"
                 >
                     {isLoading && (
                         <div
                             role="status"
                             aria-live="polite"
-                            className="absolute inset-0 z-20 flex items-center justify-center bg-white/75"
+                            className="absolute inset-0 z-20 flex items-center justify-center bg-white/80"
                         >
                             <div className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-xs font-bold text-[#1B1F5C] shadow-xs">
                                 <Loader2
@@ -422,15 +474,20 @@ export default function StudentManagement({
                     )}
 
                     {/* MOBILE VIEW (< md): Compact Stacked Cards */}
-                    <div className="divide-y divide-gray-100 md:hidden" aria-live="polite">
+                    <div className="divide-y divide-gray-100 md:hidden">
                         {students.data.length > 0 ? (
                             students.data.map((student) => {
-                                const initials = `${student.firstname?.[0] || ''}${student.surname?.[0] || ''}`.toUpperCase();
+                                const initials = `${student.firstname?.[0] || ''}${
+                                    student.surname?.[0] || ''
+                                }`.toUpperCase();
                                 const isVerified = student.verification_status === 'verified';
                                 const fullName = `${student.firstname} ${student.surname}`;
 
                                 return (
-                                    <article key={student.student_id} className="space-y-2.5 p-3.5">
+                                    <article
+                                        key={student.student_id}
+                                        className="space-y-2.5 p-3.5"
+                                    >
                                         <div className="flex items-start justify-between gap-2">
                                             <div className="flex min-w-0 items-center gap-2.5">
                                                 <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#1B1F5C]/15 bg-[#1B1F5C]/5 text-xs font-black text-[#1B1F5C]">
@@ -448,20 +505,22 @@ export default function StudentManagement({
                                             <StatusBadge isVerified={isVerified} />
                                         </div>
 
-                                        <div className="space-y-0.5 pl-11 text-xs text-gray-600">
+                                        <div className="space-y-0.5 rounded-xl border border-gray-100 bg-[#F5F6FA]/70 px-3 py-2 text-xs text-gray-600">
                                             <p className="truncate">{student.email}</p>
-                                            <p className="font-medium text-gray-700">
+                                            <p className="font-semibold text-gray-700">
                                                 {student.degree || 'N/A'}
-                                                {student.year_section ? ` • ${student.year_section}` : ''}
+                                                {student.year_section
+                                                    ? ` • ${student.year_section}`
+                                                    : ''}
                                             </p>
                                         </div>
 
-                                        <div className="flex items-center justify-end gap-2 border-t border-gray-100 pt-2">
+                                        <div className="flex items-center justify-end gap-2 pt-0.5">
                                             <button
                                                 type="button"
                                                 onClick={() => setEditingStudent(student)}
                                                 aria-label={`Edit ${fullName}`}
-                                                className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-bold text-[#1B1F5C] transition-colors hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                                className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-xs font-bold text-[#1B1F5C] transition-colors hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                             >
                                                 <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
                                                 <span>Edit</span>
@@ -470,7 +529,7 @@ export default function StudentManagement({
                                                 type="button"
                                                 onClick={() => promptDelete(student)}
                                                 aria-label={`Delete ${fullName}`}
-                                                className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50/70 px-3 py-1.5 text-xs font-bold text-rose-700 transition-colors hover:bg-rose-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                                className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-700 transition-colors hover:bg-rose-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                             >
                                                 <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                                                 <span>Delete</span>
@@ -489,8 +548,8 @@ export default function StudentManagement({
 
                     {/* DESKTOP & TABLET VIEW (>= md): High-Density Data Table */}
                     <div className="hidden overflow-x-auto md:block">
-                        <table className="w-full text-left text-xs text-gray-700 sm:text-sm">
-                            <thead className="border-b border-gray-200/80 bg-gray-50/80 text-[10px] font-extrabold uppercase tracking-wider text-gray-500">
+                        <table className="w-full text-left text-xs text-gray-700">
+                            <thead className="border-b border-gray-200/80 bg-[#F5F6FA]/80 text-[10px] font-extrabold uppercase tracking-wider text-gray-500">
                                 <tr>
                                     {COLUMNS.map((col) => {
                                         const isSorted = sort === col.key;
@@ -505,7 +564,7 @@ export default function StudentManagement({
                                                 key={col.key}
                                                 scope="col"
                                                 aria-sort={ariaSort}
-                                                className="px-4 py-3 lg:px-5"
+                                                className="px-4 py-2.5 lg:px-5"
                                             >
                                                 <button
                                                     type="button"
@@ -535,29 +594,32 @@ export default function StudentManagement({
                                             </th>
                                         );
                                     })}
-                                    <th scope="col" className="px-4 py-3 text-right lg:px-5">
+                                    <th scope="col" className="px-4 py-2.5 text-right lg:px-5">
                                         Actions
                                     </th>
                                 </tr>
                             </thead>
-                            <tbody className="divide-y divide-gray-100 text-xs sm:text-sm" aria-live="polite">
+                            <tbody className="divide-y divide-gray-100 text-xs">
                                 {students.data.length > 0 ? (
                                     students.data.map((student) => {
-                                        const initials = `${student.firstname?.[0] || ''}${student.surname?.[0] || ''}`.toUpperCase();
-                                        const isVerified = student.verification_status === 'verified';
+                                        const initials = `${student.firstname?.[0] || ''}${
+                                            student.surname?.[0] || ''
+                                        }`.toUpperCase();
+                                        const isVerified =
+                                            student.verification_status === 'verified';
                                         const fullName = `${student.firstname} ${student.surname}`;
 
                                         return (
                                             <tr
                                                 key={student.student_id}
-                                                className="transition-colors hover:bg-[#F5F6FA]/70"
+                                                className="transition-colors hover:bg-[#F5F6FA]/80"
                                             >
-                                                <td className="whitespace-nowrap px-4 py-3 font-mono text-xs font-bold text-[#1B1F5C] lg:px-5">
+                                                <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs font-bold text-[#1B1F5C] lg:px-5">
                                                     {student.student_number}
                                                 </td>
-                                                <td className="px-4 py-3 font-bold text-gray-900 lg:px-5">
+                                                <td className="px-4 py-2.5 font-bold text-gray-900 lg:px-5">
                                                     <div className="flex items-center gap-2.5">
-                                                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-[#1B1F5C]/15 bg-[#1B1F5C]/5 text-xs font-black text-[#1B1F5C]">
+                                                        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-[#1B1F5C]/15 bg-[#1B1F5C]/5 text-[11px] font-black text-[#1B1F5C]">
                                                             {initials || 'ST'}
                                                         </div>
                                                         <span className="font-extrabold text-gray-900">
@@ -565,33 +627,41 @@ export default function StudentManagement({
                                                         </span>
                                                     </div>
                                                 </td>
-                                                <td className="px-4 py-3 text-xs font-medium text-gray-600 lg:px-5">
+                                                <td className="px-4 py-2.5 text-xs font-medium text-gray-600 lg:px-5">
                                                     {student.email}
                                                 </td>
-                                                <td className="whitespace-nowrap px-4 py-3 text-xs font-medium text-gray-700 lg:px-5">
+                                                <td className="whitespace-nowrap px-4 py-2.5 text-xs font-semibold text-gray-700 lg:px-5">
                                                     {student.degree || 'N/A'}
                                                     {student.year_section
-                                                        ? ` - ${student.year_section}`
+                                                        ? ` • ${student.year_section}`
                                                         : ''}
                                                 </td>
-                                                <td className="whitespace-nowrap px-4 py-3 lg:px-5">
+                                                <td className="whitespace-nowrap px-4 py-2.5 lg:px-5">
                                                     <StatusBadge isVerified={isVerified} />
                                                 </td>
-                                                <td className="whitespace-nowrap px-4 py-3 text-right lg:px-5">
+                                                <td className="whitespace-nowrap px-4 py-2.5 text-right lg:px-5">
                                                     <div className="inline-flex items-center justify-end gap-1">
                                                         <ActionButton
                                                             title={`Edit ${fullName}`}
-                                                            onClick={() => setEditingStudent(student)}
+                                                            onClick={() =>
+                                                                setEditingStudent(student)
+                                                            }
                                                             className="hover:bg-[#1B1F5C]/10 hover:text-[#1B1F5C]"
                                                         >
-                                                            <Pencil className="h-4 w-4" aria-hidden="true" />
+                                                            <Pencil
+                                                                className="h-3.5 w-3.5"
+                                                                aria-hidden="true"
+                                                            />
                                                         </ActionButton>
                                                         <ActionButton
                                                             title={`Delete ${fullName}`}
                                                             onClick={() => promptDelete(student)}
                                                             className="hover:bg-rose-50 hover:text-rose-700"
                                                         >
-                                                            <Trash2 className="h-4 w-4" aria-hidden="true" />
+                                                            <Trash2
+                                                                className="h-3.5 w-3.5"
+                                                                aria-hidden="true"
+                                                            />
                                                         </ActionButton>
                                                     </div>
                                                 </td>
@@ -616,19 +686,19 @@ export default function StudentManagement({
                     {students.links && students.links.length > 3 && (
                         <nav
                             aria-label="Student directory pagination"
-                            className="flex flex-col items-center justify-between gap-2.5 border-t border-gray-200/80 bg-gray-50/60 px-4 py-3 sm:flex-row lg:px-5"
+                            className="flex flex-col items-center justify-between gap-2.5 border-t border-gray-200/80 bg-[#F5F6FA]/60 px-4 py-3 sm:flex-row lg:px-5"
                         >
                             <p className="text-xs font-medium text-gray-600">
                                 Showing{' '}
-                                <span className="font-bold text-gray-900">
-                                    {students.data.length}
+                                <span className="font-mono font-bold text-gray-900">
+                                    {fmt.format(students.data.length)}
                                 </span>
                                 {typeof students.total === 'number' && (
                                     <>
                                         {' '}
                                         of{' '}
-                                        <span className="font-bold text-gray-900">
-                                            {students.total.toLocaleString()}
+                                        <span className="font-mono font-bold text-gray-900">
+                                            {fmt.format(students.total)}
                                         </span>
                                     </>
                                 )}{' '}
@@ -650,7 +720,7 @@ export default function StudentManagement({
                                             }
                                             className={`min-h-[38px] min-w-[38px] rounded-xl px-3 py-1 text-xs font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] ${
                                                 link.active
-                                                    ? 'cursor-default bg-[#1B1F5C] text-white'
+                                                    ? 'cursor-default bg-[#1B1F5C] text-white shadow-2xs'
                                                     : 'border border-gray-200 bg-white text-gray-700 hover:bg-gray-100'
                                             }`}
                                             dangerouslySetInnerHTML={{ __html: link.label }}
@@ -667,8 +737,27 @@ export default function StudentManagement({
                             </div>
                         </nav>
                     )}
-                </main>
+                </section>
             </div>
+
+            {/* Subtle Back-to-Top Floating Button */}
+            {showBackToTop && (
+                <button
+                    type="button"
+                    onClick={() =>
+                        window.scrollTo({
+                            top: 0,
+                            behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+                                ? 'auto'
+                                : 'smooth',
+                        })
+                    }
+                    aria-label="Scroll back to top"
+                    className="fixed bottom-5 right-5 z-30 inline-flex h-11 w-11 items-center justify-center rounded-xl border border-gray-200 bg-white text-[#1B1F5C] shadow-xs transition-colors hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                >
+                    <ArrowUp className="h-4 w-4 text-[#F5A623]" aria-hidden="true" />
+                </button>
+            )}
 
             <DeleteModal
                 isOpen={isDeleteModalOpen}
@@ -691,16 +780,16 @@ export default function StudentManagement({
 function StatusBadge({ isVerified }: { isVerified: boolean }) {
     return (
         <span
-            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-bold ${
+            className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${
                 isVerified
                     ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
                     : 'border-amber-200 bg-amber-50 text-amber-800'
             }`}
         >
             {isVerified ? (
-                <UserCheck className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
+                <UserCheck className="h-3 w-3 text-emerald-600" aria-hidden="true" />
             ) : (
-                <ShieldAlert className="h-3.5 w-3.5 text-amber-600" aria-hidden="true" />
+                <ShieldAlert className="h-3 w-3 text-amber-600" aria-hidden="true" />
             )}
             <span>{isVerified ? 'Verified' : 'Pending'}</span>
         </span>
@@ -715,14 +804,18 @@ function EmptyRecordsState({
     onReset: () => void;
 }) {
     return (
-        <div className="flex flex-col items-center justify-center space-y-2.5 px-6 py-14 text-center">
-            <div className="rounded-2xl border border-[#1B1F5C]/15 bg-[#1B1F5C]/5 p-3 text-[#1B1F5C]">
-                <UserX className="h-7 w-7" aria-hidden="true" />
+        <div className="flex min-h-[210px] flex-col items-center justify-center space-y-2.5 px-6 py-10 text-center">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#1B1F5C]/15 bg-[#F5F6FA] text-[#1B1F5C]">
+                {hasActiveFilters ? (
+                    <FilterX className="h-5 w-5 text-[#F5A623]" aria-hidden="true" />
+                ) : (
+                    <UserX className="h-5 w-5" aria-hidden="true" />
+                )}
             </div>
-            <p className="text-sm font-bold text-gray-900">
+            <p className="text-sm font-extrabold text-[#1B1F5C]">
                 {hasActiveFilters ? 'No matching student records' : 'No students registered yet'}
             </p>
-            <p className="max-w-xs text-xs text-gray-500">
+            <p className="max-w-xs text-xs font-medium text-gray-600">
                 {hasActiveFilters
                     ? 'Try adjusting your search query or clearing active filters to view matching students.'
                     : 'Registered student accounts and their facial verification status will appear here.'}
@@ -747,6 +840,7 @@ function StatCard({
     icon: Icon,
     iconClass,
     label,
+    sub,
     value,
     active,
     onClick,
@@ -754,6 +848,7 @@ function StatCard({
     icon: React.ElementType;
     iconClass: string;
     label: string;
+    sub: string;
     value: number;
     active: boolean;
     onClick: () => void;
@@ -763,22 +858,30 @@ function StatCard({
             type="button"
             aria-pressed={active}
             onClick={onClick}
-            className={`flex min-h-[44px] items-center gap-3.5 rounded-2xl border bg-white p-4 text-left shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] ${
+            className={`flex min-h-[44px] items-center justify-between gap-3 rounded-2xl border bg-white p-4 text-left shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] ${
                 active
                     ? 'border-[#1B1F5C] ring-1 ring-[#1B1F5C]'
                     : 'border-gray-200/80 hover:border-gray-300'
             }`}
         >
+            <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                    <p className="text-[11px] font-extrabold uppercase tracking-wider text-gray-500">
+                        {label}
+                    </p>
+                    {active && (
+                        <span className="rounded-md bg-[#1B1F5C] px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-wider text-white">
+                            Active
+                        </span>
+                    )}
+                </div>
+                <p className="mt-1 font-mono text-2xl font-black tracking-tight text-gray-900">
+                    {fmt.format(value)}
+                </p>
+                <p className="mt-0.5 text-[11px] font-medium text-gray-500">{sub}</p>
+            </div>
             <div className={`shrink-0 rounded-xl border p-2.5 ${iconClass}`}>
                 <Icon className="h-5 w-5" aria-hidden="true" />
-            </div>
-            <div>
-                <p className="text-[11px] font-extrabold uppercase tracking-wider text-gray-600">
-                    {label}
-                </p>
-                <p className="text-xl font-black tracking-tight text-gray-900">
-                    {value.toLocaleString()}
-                </p>
             </div>
         </button>
     );
@@ -817,7 +920,7 @@ function ActionButton({
             title={title}
             aria-label={title}
             onClick={onClick}
-            className={`inline-flex min-h-[38px] min-w-[38px] items-center justify-center rounded-lg p-2 text-gray-500 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] ${className}`}
+            className={`inline-flex min-h-[38px] min-w-[38px] items-center justify-center rounded-xl p-2 text-gray-500 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] ${className}`}
         >
             {children}
         </button>

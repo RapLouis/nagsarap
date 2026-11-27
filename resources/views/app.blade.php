@@ -19,13 +19,18 @@
             })();
         </script>
 
-        {{-- Inline style to set the HTML background color based on our theme in app.css --}}
+        {{-- Inline style to set the HTML background color matching the 4ttnd #F5F6FA canvas --}}
         <style>
-            html {
-                background-color: oklch(1 0 0);
+            html,
+            body {
+                background-color: #F5F6FA;
+                margin: 0;
+                padding: 0;
+                overflow-x: clip;
             }
 
-            html.dark {
+            html.dark,
+            html.dark body {
                 background-color: oklch(0.145 0 0);
             }
         </style>
@@ -39,10 +44,10 @@
         @viteReactRefresh
         @vite(['resources/css/app.css', 'resources/js/app.tsx', "resources/js/pages/{$page['component']}.tsx"])
         <x-inertia::head>
-            <title>{{ config('app.name', 'Laravel') }}</title>
+            <title>{{ config('app.name', '4ttnd Attendance System') }}</title>
         </x-inertia::head>
     </head>
-    <body class="font-sans antialiased">
+    <body class="min-h-screen bg-[#F5F6FA] font-sans antialiased">
         <x-inertia::app />
     </body>
 </html>

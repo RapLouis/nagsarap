@@ -19,6 +19,8 @@ import {
     RotateCcw,
     CheckCircle2,
     Loader2,
+    FilterX,
+    ArrowUp,
 } from 'lucide-react';
 
 interface OrganizerItem {
@@ -40,6 +42,8 @@ interface PageProps {
     };
 }
 
+const fmt = new Intl.NumberFormat('en-PH');
+
 export default function OrganizersManagement({ organizers = [], flash }: PageProps) {
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -51,6 +55,7 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
     const [isDeleting, setIsDeleting] = useState(false);
     const [togglingId, setTogglingId] = useState<number | null>(null);
     const [dismissedFlash, setDismissedFlash] = useState<string | null>(null);
+    const [showBackToTop, setShowBackToTop] = useState(false);
 
     const { data, setData, post, processing, errors, reset, clearErrors } = useForm({
         name: '',
@@ -75,6 +80,14 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [showCreateModal, showDeleteModal, processing, isDeleting]);
+
+    useEffect(() => {
+        const handleScroll = () => {
+            setShowBackToTop(window.scrollY > 480);
+        };
+        window.addEventListener('scroll', handleScroll, { passive: true });
+        return () => window.removeEventListener('scroll', handleScroll);
+    }, []);
 
     const generateNewKeyCode = () => {
         const prefix = '4TTND-ORG';
@@ -176,7 +189,14 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
         <>
             <Head title="Organizer Keys & Access Control | 4ttend" />
 
-            <div className="min-h-screen space-y-4 bg-[#F5F6FA] p-3 font-sans text-gray-900 antialiased sm:p-5">
+            {/* Screen reader announcement for live filter and clipboard updates */}
+            <div role="status" aria-live="polite" className="sr-only">
+                {copiedId !== null
+                    ? 'Organizer access key copied to clipboard.'
+                    : `Showing ${filteredOrganizers.length} of ${organizers.length} organizer access keys`}
+            </div>
+
+            <div className="w-full space-y-3.5 bg-[#F5F6FA] font-sans text-gray-900 antialiased">
                 {/* FLASH NOTIFICATIONS */}
                 {activeFlashSuccess && (
                     <div
@@ -186,7 +206,7 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                     >
                         <div className="flex items-center gap-2.5 text-xs font-bold sm:text-sm">
                             <CheckCircle2
-                                className="h-5 w-5 shrink-0 text-emerald-600"
+                                className="h-4 w-4 shrink-0 text-emerald-600"
                                 aria-hidden="true"
                             />
                             <span>{activeFlashSuccess}</span>
@@ -195,7 +215,7 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                             type="button"
                             onClick={() => setDismissedFlash(activeFlashSuccess)}
                             aria-label="Dismiss notification"
-                            className="inline-flex min-h-[38px] min-w-[38px] items-center justify-center rounded-lg text-emerald-700 transition-colors hover:bg-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                            className="inline-flex min-h-[38px] min-w-[38px] items-center justify-center rounded-xl text-emerald-700 transition-colors hover:bg-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                         >
                             <X className="h-4 w-4" aria-hidden="true" />
                         </button>
@@ -209,7 +229,7 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                     >
                         <div className="flex items-center gap-2.5 text-xs font-bold sm:text-sm">
                             <ShieldAlert
-                                className="h-5 w-5 shrink-0 text-rose-600"
+                                className="h-4 w-4 shrink-0 text-rose-600"
                                 aria-hidden="true"
                             />
                             <span>{activeFlashError}</span>
@@ -218,34 +238,35 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                             type="button"
                             onClick={() => setDismissedFlash(activeFlashError)}
                             aria-label="Dismiss error alert"
-                            className="inline-flex min-h-[38px] min-w-[38px] items-center justify-center rounded-lg text-rose-700 transition-colors hover:bg-rose-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                            className="inline-flex min-h-[38px] min-w-[38px] items-center justify-center rounded-xl text-rose-700 transition-colors hover:bg-rose-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                         >
                             <X className="h-4 w-4" aria-hidden="true" />
                         </button>
                     </div>
                 )}
 
-                {/* EXECUTIVE HEADER & PRIMARY CTA */}
-                <header className="flex flex-col justify-between gap-3 rounded-2xl border border-gray-200/80 bg-white p-4 shadow-xs sm:flex-row sm:items-center sm:p-5">
-                    <div className="space-y-1">
+                {/* COMPACT EXECUTIVE HEADER & PRIMARY CTA */}
+                <header className="flex flex-col justify-between gap-3 rounded-2xl border border-gray-200/80 bg-white p-4 shadow-xs sm:flex-row sm:items-center">
+                    <div className="min-w-0 space-y-1">
                         <div className="flex flex-wrap items-center gap-2">
-                            <h1 className="text-xl font-black tracking-tight text-[#1B1F5C] sm:text-2xl">
-                                Organizer Access Management
-                            </h1>
-                            <span className="inline-flex items-center gap-1 rounded-full border border-[#1B1F5C]/15 bg-[#1B1F5C]/5 px-2.5 py-0.5 text-[11px] font-bold text-[#1B1F5C]">
+                            <span className="inline-flex items-center gap-1.5 rounded-full border border-[#1B1F5C]/15 bg-[#1B1F5C]/5 px-2.5 py-0.5 text-[11px] font-bold text-[#1B1F5C]">
                                 <KeyRound className="h-3 w-3 text-[#F5A623]" aria-hidden="true" />
-                                <span>Security Realm</span>
+                                <span>Access Control & Security Realm</span>
                             </span>
                         </div>
+                        <h1 className="text-lg font-black tracking-tight text-[#1B1F5C] sm:text-xl">
+                            Organizer Access Management
+                        </h1>
                         <p className="text-xs font-medium text-gray-600">
-                            Provision security keys, suspend or activate credentials, and monitor event execution access privileges.
+                            Provision security keys, suspend or activate credentials, and audit
+                            event execution privileges
                         </p>
                     </div>
 
                     <button
                         type="button"
                         onClick={openCreateModal}
-                        className="inline-flex min-h-[44px] shrink-0 cursor-pointer items-center justify-center gap-2 rounded-xl bg-[#1B1F5C] px-4 py-2.5 text-xs font-bold text-white shadow-xs transition-colors hover:bg-[#131644] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] active:scale-[0.99] motion-reduce:transform-none"
+                        className="inline-flex min-h-[44px] shrink-0 cursor-pointer items-center justify-center gap-2 rounded-xl bg-[#1B1F5C] px-4 py-2.5 text-xs font-bold text-white shadow-2xs transition-colors hover:bg-[#131644] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] active:scale-[0.99] motion-reduce:transform-none"
                     >
                         <Plus className="h-4 w-4 text-[#FFD600]" aria-hidden="true" />
                         <span>Issue Organizer Key</span>
@@ -257,116 +278,78 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                     aria-label="Key Management Statistics"
                     className="grid grid-cols-1 gap-3 sm:grid-cols-3"
                 >
-                    <button
-                        type="button"
-                        aria-pressed={statusFilter === 'active'}
+                    <OrganizerStatCard
+                        label="Active Organizers"
+                        sub="Fully authorized access"
+                        count={activeCount}
+                        active={statusFilter === 'active'}
                         onClick={() =>
                             setStatusFilter((prev) => (prev === 'active' ? 'all' : 'active'))
                         }
-                        className={`flex min-h-[44px] items-center justify-between rounded-2xl border bg-white p-4 text-left shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] ${
-                            statusFilter === 'active'
-                                ? 'border-[#1B1F5C] ring-1 ring-[#1B1F5C]'
-                                : 'border-gray-200/80 hover:border-gray-300'
-                        }`}
-                    >
-                        <div>
-                            <span className="block text-[11px] font-extrabold uppercase tracking-wider text-gray-600">
-                                Active Organizers
-                            </span>
-                            <span className="text-2xl font-black tracking-tight text-[#1B1F5C]">
-                                {activeCount}
-                            </span>
-                            <span className="mt-0.5 block text-[11px] font-bold text-emerald-700">
-                                Fully Authorized
-                            </span>
-                        </div>
-                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-emerald-200/80 bg-emerald-50 text-emerald-700">
-                            <UserCheck className="h-5 w-5" aria-hidden="true" />
-                        </div>
-                    </button>
+                        valueClass="text-[#1B1F5C]"
+                        subClass="text-emerald-700"
+                        icon={<UserCheck className="h-5 w-5" aria-hidden="true" />}
+                        iconClass="border-emerald-200/80 bg-emerald-50 text-emerald-700"
+                    />
 
-                    <button
-                        type="button"
-                        aria-pressed={statusFilter === 'pending'}
+                    <OrganizerStatCard
+                        label="Pending Invitations"
+                        sub="Awaiting initial activation"
+                        count={pendingCount}
+                        active={statusFilter === 'pending'}
                         onClick={() =>
                             setStatusFilter((prev) => (prev === 'pending' ? 'all' : 'pending'))
                         }
-                        className={`flex min-h-[44px] items-center justify-between rounded-2xl border bg-white p-4 text-left shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] ${
-                            statusFilter === 'pending'
-                                ? 'border-[#1B1F5C] ring-1 ring-[#1B1F5C]'
-                                : 'border-gray-200/80 hover:border-gray-300'
-                        }`}
-                    >
-                        <div>
-                            <span className="block text-[11px] font-extrabold uppercase tracking-wider text-gray-600">
-                                Pending Invitations
-                            </span>
-                            <span className="text-2xl font-black tracking-tight text-amber-700">
-                                {pendingCount}
-                            </span>
-                            <span className="mt-0.5 block text-[11px] font-bold text-amber-800">
-                                Awaiting Activation
-                            </span>
-                        </div>
-                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-200/80 bg-amber-50 text-amber-800">
-                            <Key className="h-5 w-5" aria-hidden="true" />
-                        </div>
-                    </button>
+                        valueClass="text-amber-700"
+                        subClass="text-amber-800"
+                        icon={<Key className="h-5 w-5" aria-hidden="true" />}
+                        iconClass="border-amber-200/80 bg-amber-50 text-amber-800"
+                    />
 
-                    <button
-                        type="button"
-                        aria-pressed={statusFilter === 'suspended'}
+                    <OrganizerStatCard
+                        label="Suspended Keys"
+                        sub="Execution access revoked"
+                        count={suspendedCount}
+                        active={statusFilter === 'suspended'}
                         onClick={() =>
                             setStatusFilter((prev) => (prev === 'suspended' ? 'all' : 'suspended'))
                         }
-                        className={`flex min-h-[44px] items-center justify-between rounded-2xl border bg-white p-4 text-left shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] ${
-                            statusFilter === 'suspended'
-                                ? 'border-[#1B1F5C] ring-1 ring-[#1B1F5C]'
-                                : 'border-gray-200/80 hover:border-gray-300'
-                        }`}
-                    >
-                        <div>
-                            <span className="block text-[11px] font-extrabold uppercase tracking-wider text-gray-600">
-                                Suspended Keys
-                            </span>
-                            <span className="text-2xl font-black tracking-tight text-rose-700">
-                                {suspendedCount}
-                            </span>
-                            <span className="mt-0.5 block text-[11px] font-bold text-rose-700">
-                                Access Revoked
-                            </span>
-                        </div>
-                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-200/80 bg-rose-50 text-rose-700">
-                            <UserX className="h-5 w-5" aria-hidden="true" />
-                        </div>
-                    </button>
+                        valueClass="text-rose-700"
+                        subClass="text-rose-700"
+                        icon={<UserX className="h-5 w-5" aria-hidden="true" />}
+                        iconClass="border-rose-200/80 bg-rose-50 text-rose-700"
+                    />
                 </section>
 
                 {/* SEARCH, FILTER & RECORDS WORKSPACE */}
-                <main
+                <section
                     aria-label="Organizer Keys Directory"
-                    className="space-y-4 rounded-2xl border border-gray-200/80 bg-white p-4 shadow-xs sm:p-5"
+                    className="min-w-0 space-y-3.5 rounded-2xl border border-gray-200/80 bg-white p-4 shadow-xs"
                 >
-                    <div className="flex flex-col justify-between gap-3 border-b border-gray-100 pb-3.5 sm:flex-row sm:items-center">
+                    <div className="flex flex-col justify-between gap-3 border-b border-gray-100 pb-3 lg:flex-row lg:items-center">
                         <div className="relative max-w-md flex-1">
+                            <label htmlFor="organizer-directory-search" className="sr-only">
+                                Search organizer keys by name, email, department, or key code
+                            </label>
                             <Search
-                                className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400"
+                                className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400"
                                 aria-hidden="true"
                             />
                             <input
+                                id="organizer-directory-search"
                                 type="text"
                                 aria-label="Search organizer keys by name, email, department, or key code"
                                 value={search}
                                 onChange={(e) => setSearch(e.target.value)}
                                 placeholder="Search by name, email, department, or key code..."
-                                className="min-h-[38px] w-full rounded-xl border border-gray-300 bg-white pl-10 pr-8 text-xs font-medium text-gray-900 placeholder:text-gray-400 focus-visible:border-[#F5A623] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                className="min-h-[38px] w-full rounded-xl border border-gray-300 bg-white pl-9 pr-8 text-xs font-medium text-gray-900 placeholder:text-gray-400 transition-colors focus-visible:border-[#F5A623] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                             />
                             {search && (
                                 <button
                                     type="button"
                                     onClick={() => setSearch('')}
                                     aria-label="Clear search query"
-                                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                    className="absolute right-1.5 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                 >
                                     <X className="h-3.5 w-3.5" aria-hidden="true" />
                                 </button>
@@ -374,18 +357,23 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded-md border border-gray-200 bg-[#F5F6FA] px-2 py-1 font-mono text-[11px] font-bold text-gray-700">
+                                {fmt.format(filteredOrganizers.length)} of{' '}
+                                {fmt.format(organizers.length)}
+                            </span>
+
                             <label
                                 htmlFor="organizer-status-filter"
-                                className="inline-flex items-center gap-1.5 text-xs font-extrabold text-gray-700"
+                                className="inline-flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wider text-gray-500"
                             >
-                                <Filter className="h-4 w-4 text-[#F5A623]" aria-hidden="true" />
-                                <span>Filter Status:</span>
+                                <Filter className="h-3.5 w-3.5 text-[#F5A623]" aria-hidden="true" />
+                                <span>Status</span>
                             </label>
                             <select
                                 id="organizer-status-filter"
                                 value={statusFilter}
                                 onChange={(e) => setStatusFilter(e.target.value)}
-                                className="min-h-[38px] rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-xs font-bold text-gray-800 focus-visible:border-[#F5A623] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                className="min-h-[38px] rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-xs font-bold text-[#1B1F5C] transition-colors hover:border-gray-400 focus-visible:border-[#F5A623] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                             >
                                 <option value="all">All Keys ({organizers.length})</option>
                                 <option value="active">Active Only</option>
@@ -397,9 +385,12 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                                 <button
                                     type="button"
                                     onClick={resetFilters}
-                                    className="inline-flex min-h-[38px] items-center gap-1 rounded-xl border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-xs font-bold text-gray-700 transition-colors hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                    className="inline-flex min-h-[38px] items-center gap-1 rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-xs font-bold text-[#1B1F5C] transition-colors hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                 >
-                                    <RotateCcw className="h-3.5 w-3.5 text-[#F5A623]" aria-hidden="true" />
+                                    <RotateCcw
+                                        className="h-3.5 w-3.5 text-[#F5A623]"
+                                        aria-hidden="true"
+                                    />
                                     <span>Reset</span>
                                 </button>
                             )}
@@ -410,14 +401,14 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                     {filteredOrganizers.length > 0 ? (
                         <>
                             {/* MOBILE CARD VIEW (< md) */}
-                            <div className="space-y-2.5 md:hidden" aria-live="polite">
+                            <div className="space-y-2.5 md:hidden">
                                 {filteredOrganizers.map((org) => {
                                     const isToggling = togglingId === org.id;
                                     const isActive = org.status === 'active';
                                     return (
                                         <article
                                             key={org.id}
-                                            className="space-y-3 rounded-xl border border-gray-200/80 bg-[#F5F6FA]/70 p-3.5"
+                                            className="space-y-2.5 rounded-xl border border-gray-200/80 bg-[#F5F6FA]/70 p-3.5"
                                         >
                                             <div className="flex items-start justify-between gap-2">
                                                 <div className="min-w-0">
@@ -429,16 +420,19 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                                                     </p>
                                                     <p className="mt-0.5 text-[11px] font-semibold text-gray-500">
                                                         {org.department || 'General Admin'} •{' '}
-                                                        <span className="font-bold text-gray-800">
-                                                            {org.events_managed_count} event
-                                                            {org.events_managed_count === 1 ? '' : 's'}
+                                                        <span className="font-mono font-bold text-gray-800">
+                                                            {fmt.format(org.events_managed_count)}{' '}
+                                                            event
+                                                            {org.events_managed_count === 1
+                                                                ? ''
+                                                                : 's'}
                                                         </span>
                                                     </p>
                                                 </div>
                                                 <OrganizerStatusBadge status={org.status} />
                                             </div>
 
-                                            <div className="flex items-center justify-between gap-2 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5">
+                                            <div className="flex items-center justify-between gap-2 rounded-xl border border-gray-200 bg-white px-3 py-1">
                                                 <span className="truncate font-mono text-xs font-bold text-[#1B1F5C]">
                                                     {org.key_code}
                                                 </span>
@@ -446,7 +440,7 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                                                     type="button"
                                                     onClick={() => handleCopyKey(org.id, org.key_code)}
                                                     aria-label={`Copy access key for ${org.name}`}
-                                                    className="inline-flex min-h-[38px] shrink-0 items-center gap-1 rounded-md px-2 text-xs font-bold text-[#1B1F5C] hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                                    className="inline-flex min-h-[38px] shrink-0 items-center gap-1 rounded-lg px-2 text-xs font-bold text-[#1B1F5C] transition-colors hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                                 >
                                                     {copiedId === org.id ? (
                                                         <>
@@ -454,11 +448,16 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                                                                 className="h-3.5 w-3.5 text-emerald-600"
                                                                 aria-hidden="true"
                                                             />
-                                                            <span className="text-emerald-700">Copied</span>
+                                                            <span className="text-emerald-700">
+                                                                Copied
+                                                            </span>
                                                         </>
                                                     ) : (
                                                         <>
-                                                            <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                                                            <Copy
+                                                                className="h-3.5 w-3.5"
+                                                                aria-hidden="true"
+                                                            />
                                                             <span>Copy</span>
                                                         </>
                                                     )}
@@ -475,13 +474,13 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                                                             ? `Suspend access for ${org.name}`
                                                             : `Activate access for ${org.name}`
                                                     }
-                                                    className={`inline-flex min-h-[38px] items-center justify-center rounded-lg border px-3 py-1.5 text-xs font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] disabled:opacity-60 ${
+                                                    className={`inline-flex min-h-[38px] items-center justify-center rounded-xl border px-3 py-1.5 text-xs font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] disabled:opacity-60 ${
                                                         isActive
                                                             ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
                                                             : 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
                                                     }`}
                                                 >
-                                                    {isActive ? 'Suspend' : 'Activate'}
+                                                    {isToggling ? 'Updating...' : isActive ? 'Suspend' : 'Activate'}
                                                 </button>
 
                                                 <button
@@ -491,7 +490,7 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                                                         setShowDeleteModal(true);
                                                     }}
                                                     aria-label={`Delete key record for ${org.name}`}
-                                                    className="inline-flex min-h-[38px] items-center gap-1 rounded-lg border border-rose-200 bg-rose-50/70 px-3 py-1.5 text-xs font-bold text-rose-700 transition-colors hover:bg-rose-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                                    className="inline-flex min-h-[38px] items-center gap-1 rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-700 transition-colors hover:bg-rose-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                                 >
                                                     <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                                                     <span>Delete</span>
@@ -507,36 +506,36 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                                 <table className="w-full text-left text-xs text-gray-700">
                                     <thead>
                                         <tr className="border-b border-gray-200/80 text-[10px] font-extrabold uppercase tracking-wider text-gray-500">
-                                            <th scope="col" className="pb-3 pr-4">
+                                            <th scope="col" className="pb-2.5 pr-4">
                                                 Organizer
                                             </th>
-                                            <th scope="col" className="pb-3 pr-4">
+                                            <th scope="col" className="pb-2.5 pr-4">
                                                 Department
                                             </th>
-                                            <th scope="col" className="pb-3 pr-4">
+                                            <th scope="col" className="pb-2.5 pr-4">
                                                 Key Access Code
                                             </th>
-                                            <th scope="col" className="pb-3 pr-4">
+                                            <th scope="col" className="pb-2.5 pr-4">
                                                 Status
                                             </th>
-                                            <th scope="col" className="pb-3 pr-4 text-center">
+                                            <th scope="col" className="pb-2.5 pr-4 text-center">
                                                 Managed Events
                                             </th>
-                                            <th scope="col" className="pb-3 text-right">
+                                            <th scope="col" className="pb-2.5 text-right">
                                                 Actions
                                             </th>
                                         </tr>
                                     </thead>
-                                    <tbody className="divide-y divide-gray-100" aria-live="polite">
+                                    <tbody className="divide-y divide-gray-100">
                                         {filteredOrganizers.map((org) => {
                                             const isToggling = togglingId === org.id;
                                             const isActive = org.status === 'active';
                                             return (
                                                 <tr
                                                     key={org.id}
-                                                    className="transition-colors hover:bg-[#F5F6FA]/70"
+                                                    className="transition-colors hover:bg-[#F5F6FA]/80"
                                                 >
-                                                    <td className="py-3 pr-4">
+                                                    <td className="py-2.5 pr-4">
                                                         <p className="font-extrabold text-gray-900">
                                                             {org.name}
                                                         </p>
@@ -544,11 +543,11 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                                                             {org.email}
                                                         </p>
                                                     </td>
-                                                    <td className="py-3 pr-4 font-semibold text-gray-700">
+                                                    <td className="py-2.5 pr-4 font-semibold text-gray-700">
                                                         {org.department || 'General Admin'}
                                                     </td>
-                                                    <td className="py-3 pr-4">
-                                                        <div className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1 font-mono text-xs font-bold text-[#1B1F5C]">
+                                                    <td className="py-2.5 pr-4">
+                                                        <div className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-[#F5F6FA] px-2.5 py-0.5 font-mono text-xs font-bold text-[#1B1F5C]">
                                                             <span>{org.key_code}</span>
                                                             <button
                                                                 type="button"
@@ -561,7 +560,7 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                                                                         : `Copy key code for ${org.name}`
                                                                 }
                                                                 title="Copy Key Code"
-                                                                className="inline-flex min-h-[28px] min-w-[28px] items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-200/70 hover:text-[#1B1F5C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                                                className="inline-flex min-h-[32px] min-w-[32px] items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-200/70 hover:text-[#1B1F5C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                                             >
                                                                 {copiedId === org.id ? (
                                                                     <Check
@@ -577,15 +576,15 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                                                             </button>
                                                         </div>
                                                     </td>
-                                                    <td className="py-3 pr-4">
+                                                    <td className="py-2.5 pr-4">
                                                         <OrganizerStatusBadge status={org.status} />
                                                     </td>
-                                                    <td className="py-3 pr-4 text-center">
-                                                        <span className="rounded-md bg-gray-100 px-2 py-0.5 text-xs font-extrabold text-gray-900">
-                                                            {org.events_managed_count}
+                                                    <td className="py-2.5 pr-4 text-center">
+                                                        <span className="rounded-md border border-gray-200 bg-[#F5F6FA] px-2 py-0.5 font-mono text-xs font-extrabold text-gray-900">
+                                                            {fmt.format(org.events_managed_count)}
                                                         </span>
                                                     </td>
-                                                    <td className="py-3 text-right">
+                                                    <td className="py-2.5 text-right">
                                                         <div className="inline-flex items-center justify-end gap-1.5">
                                                             <button
                                                                 type="button"
@@ -601,13 +600,17 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                                                                         ? 'Suspend Access'
                                                                         : 'Activate Access'
                                                                 }
-                                                                className={`min-h-[38px] rounded-lg border px-3 py-1.5 text-xs font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] disabled:opacity-60 ${
+                                                                className={`min-h-[38px] rounded-xl border px-3 py-1.5 text-xs font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] disabled:opacity-60 ${
                                                                     isActive
                                                                         ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
                                                                         : 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
                                                                 }`}
                                                             >
-                                                                {isActive ? 'Suspend' : 'Activate'}
+                                                                {isToggling
+                                                                    ? 'Updating...'
+                                                                    : isActive
+                                                                      ? 'Suspend'
+                                                                      : 'Activate'}
                                                             </button>
 
                                                             <button
@@ -618,7 +621,7 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                                                                 }}
                                                                 aria-label={`Delete key record for ${org.name}`}
                                                                 title="Delete Key Record"
-                                                                className="inline-flex min-h-[38px] min-w-[38px] items-center justify-center rounded-lg p-2 text-gray-500 transition-colors hover:bg-rose-50 hover:text-rose-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                                                className="inline-flex min-h-[38px] min-w-[38px] items-center justify-center rounded-xl p-2 text-gray-500 transition-colors hover:bg-rose-50 hover:text-rose-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                                             >
                                                                 <Trash2
                                                                     className="h-4 w-4"
@@ -635,16 +638,20 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                             </div>
                         </>
                     ) : (
-                        <div className="space-y-2.5 py-14 text-center">
-                            <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl border border-[#1B1F5C]/15 bg-[#1B1F5C]/5 text-[#1B1F5C]">
-                                <KeyRound className="h-5 w-5" aria-hidden="true" />
+                        <div className="flex min-h-[210px] flex-col items-center justify-center space-y-2.5 rounded-xl border border-dashed border-gray-200 bg-[#F5F6FA]/70 p-6 text-center">
+                            <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#1B1F5C]/15 bg-white text-[#1B1F5C] shadow-2xs">
+                                {hasActiveFilters ? (
+                                    <FilterX className="h-5 w-5 text-[#F5A623]" aria-hidden="true" />
+                                ) : (
+                                    <KeyRound className="h-5 w-5" aria-hidden="true" />
+                                )}
                             </div>
-                            <p className="text-sm font-bold text-gray-900">
+                            <p className="text-sm font-extrabold text-[#1B1F5C]">
                                 {hasActiveFilters
                                     ? 'No organizer keys match your filters'
                                     : 'No organizer keys issued yet'}
                             </p>
-                            <p className="mx-auto max-w-xs text-xs text-gray-500">
+                            <p className="max-w-xs text-xs font-medium text-gray-600">
                                 {hasActiveFilters
                                     ? 'Try clearing your search term or switching the status filter to view issued keys.'
                                     : 'Issue an organizer access key to authorize faculty or student event coordinators.'}
@@ -666,7 +673,7 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                                     <button
                                         type="button"
                                         onClick={openCreateModal}
-                                        className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl bg-[#1B1F5C] px-3.5 py-1.5 text-xs font-bold text-white transition-colors hover:bg-[#131644] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                        className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl bg-[#1B1F5C] px-3.5 py-1.5 text-xs font-bold text-white shadow-2xs transition-colors hover:bg-[#131644] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                     >
                                         <Plus className="h-3.5 w-3.5 text-[#FFD600]" aria-hidden="true" />
                                         <span>Issue Organizer Key</span>
@@ -675,7 +682,7 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                             </div>
                         </div>
                     )}
-                </main>
+                </section>
 
                 {/* MODAL: ISSUE NEW ORGANIZER KEY */}
                 {showCreateModal && (
@@ -690,7 +697,7 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                         }}
                         className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4"
                     >
-                        <div className="w-full max-w-md space-y-4 rounded-2xl border border-gray-200/80 bg-white p-5 shadow-lg sm:p-6">
+                        <div className="w-full max-w-md space-y-4 rounded-2xl border border-gray-200/80 bg-white p-5 shadow-lg">
                             <div className="flex items-center justify-between border-b border-gray-100 pb-3">
                                 <h2
                                     id="issue-key-modal-title"
@@ -704,7 +711,7 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                                     disabled={processing}
                                     onClick={() => setShowCreateModal(false)}
                                     aria-label="Close issue key dialog"
-                                    className="inline-flex min-h-[38px] min-w-[38px] items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                    className="inline-flex min-h-[38px] min-w-[38px] items-center justify-center rounded-xl text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                 >
                                     <X className="h-4 w-4" aria-hidden="true" />
                                 </button>
@@ -726,7 +733,7 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                                         placeholder="e.g., Dr. Juan Dela Cruz"
                                         aria-invalid={Boolean(errors.name)}
                                         aria-describedby={errors.name ? 'name-error' : undefined}
-                                        className="min-h-[38px] w-full rounded-xl border border-gray-300 bg-white px-3 text-xs text-gray-900 focus-visible:border-[#F5A623] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                        className="min-h-[38px] w-full rounded-xl border border-gray-300 bg-white px-3 text-xs text-gray-900 transition-colors focus-visible:border-[#F5A623] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                         required
                                     />
                                     {errors.name && (
@@ -755,7 +762,7 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                                         placeholder="e.g., organizer@mmsu.edu.ph"
                                         aria-invalid={Boolean(errors.email)}
                                         aria-describedby={errors.email ? 'email-error' : undefined}
-                                        className="min-h-[38px] w-full rounded-xl border border-gray-300 bg-white px-3 text-xs text-gray-900 focus-visible:border-[#F5A623] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                        className="min-h-[38px] w-full rounded-xl border border-gray-300 bg-white px-3 text-xs text-gray-900 transition-colors focus-visible:border-[#F5A623] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                         required
                                     />
                                     {errors.email && (
@@ -787,7 +794,7 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                                         aria-describedby={
                                             errors.department ? 'department-error' : undefined
                                         }
-                                        className="min-h-[38px] w-full rounded-xl border border-gray-300 bg-white px-3 text-xs text-gray-900 focus-visible:border-[#F5A623] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                        className="min-h-[38px] w-full rounded-xl border border-gray-300 bg-white px-3 text-xs text-gray-900 transition-colors focus-visible:border-[#F5A623] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                     />
                                     <datalist id="department-options">
                                         <option value="CCIS">
@@ -821,7 +828,7 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                                         <button
                                             type="button"
                                             onClick={generateNewKeyCode}
-                                            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-bold text-[#1B1F5C] hover:bg-gray-100 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                            className="inline-flex min-h-[28px] items-center gap-1 rounded-lg px-2 py-0.5 text-[11px] font-bold text-[#1B1F5C] transition-colors hover:bg-gray-100 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                         >
                                             <RefreshCw
                                                 className="h-3 w-3 text-[#F5A623]"
@@ -835,7 +842,7 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                                         type="text"
                                         value={data.key_code}
                                         readOnly
-                                        className="min-h-[38px] w-full rounded-xl border border-gray-200 bg-gray-50 px-3 font-mono text-xs font-extrabold text-[#1B1F5C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                        className="min-h-[38px] w-full rounded-xl border border-gray-200 bg-[#F5F6FA] px-3 font-mono text-xs font-extrabold text-[#1B1F5C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                     />
                                 </div>
 
@@ -844,14 +851,14 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                                         type="button"
                                         disabled={processing}
                                         onClick={() => setShowCreateModal(false)}
-                                        className="min-h-[38px] rounded-xl bg-gray-100 px-4 py-2 text-xs font-bold text-gray-700 transition-colors hover:bg-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                        className="min-h-[38px] rounded-xl border border-gray-300 bg-white px-4 py-2 text-xs font-bold text-gray-700 transition-colors hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                     >
                                         Cancel
                                     </button>
                                     <button
                                         type="submit"
                                         disabled={processing}
-                                        className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl bg-[#1B1F5C] px-4 py-2 text-xs font-bold text-white shadow-xs transition-colors hover:bg-[#131644] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] disabled:opacity-60"
+                                        className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl bg-[#1B1F5C] px-4 py-2 text-xs font-bold text-white shadow-2xs transition-colors hover:bg-[#131644] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] disabled:opacity-60"
                                     >
                                         {processing && (
                                             <Loader2
@@ -910,7 +917,7 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                                         setShowDeleteModal(false);
                                         setSelectedOrganizer(null);
                                     }}
-                                    className="min-h-[38px] rounded-xl bg-gray-100 px-4 py-2 text-xs font-bold text-gray-700 transition-colors hover:bg-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                                    className="min-h-[38px] rounded-xl border border-gray-300 bg-white px-4 py-2 text-xs font-bold text-gray-700 transition-colors hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
                                 >
                                     Cancel
                                 </button>
@@ -918,7 +925,7 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                                     type="button"
                                     disabled={isDeleting}
                                     onClick={handleDeleteKey}
-                                    className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-bold text-white shadow-xs transition-colors hover:bg-rose-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] disabled:opacity-60"
+                                    className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-bold text-white shadow-2xs transition-colors hover:bg-rose-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] disabled:opacity-60"
                                 >
                                     {isDeleting && (
                                         <Loader2
@@ -933,7 +940,83 @@ export default function OrganizersManagement({ organizers = [], flash }: PagePro
                     </div>
                 )}
             </div>
+
+            {/* Subtle Back-to-Top Floating Button */}
+            {showBackToTop && (
+                <button
+                    type="button"
+                    onClick={() =>
+                        window.scrollTo({
+                            top: 0,
+                            behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+                                ? 'auto'
+                                : 'smooth',
+                        })
+                    }
+                    aria-label="Scroll back to top"
+                    className="fixed bottom-5 right-5 z-30 inline-flex h-11 w-11 items-center justify-center rounded-xl border border-gray-200 bg-white text-[#1B1F5C] shadow-xs transition-colors hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623]"
+                >
+                    <ArrowUp className="h-4 w-4 text-[#F5A623]" aria-hidden="true" />
+                </button>
+            )}
         </>
+    );
+}
+
+function OrganizerStatCard({
+    label,
+    sub,
+    count,
+    active,
+    onClick,
+    valueClass,
+    subClass,
+    icon,
+    iconClass,
+}: {
+    label: string;
+    sub: string;
+    count: number;
+    active: boolean;
+    onClick: () => void;
+    valueClass: string;
+    subClass: string;
+    icon: React.ReactNode;
+    iconClass: string;
+}) {
+    return (
+        <button
+            type="button"
+            aria-pressed={active}
+            onClick={onClick}
+            className={`flex min-h-[44px] items-center justify-between gap-3 rounded-2xl border bg-white p-4 text-left shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] ${
+                active
+                    ? 'border-[#1B1F5C] ring-1 ring-[#1B1F5C]'
+                    : 'border-gray-200/80 hover:border-gray-300'
+            }`}
+        >
+            <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                    <span className="block text-[11px] font-extrabold uppercase tracking-wider text-gray-500">
+                        {label}
+                    </span>
+                    {active && (
+                        <span className="rounded-md bg-[#1B1F5C] px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-wider text-white">
+                            Active
+                        </span>
+                    )}
+                </div>
+                <span className={`mt-1 block font-mono text-2xl font-black tracking-tight ${valueClass}`}>
+                    {fmt.format(count)}
+                </span>
+                <span className={`mt-0.5 block text-[11px] font-bold ${subClass}`}>{sub}</span>
+            </div>
+            <div
+                className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${iconClass}`}
+            >
+                {icon}
+            </div>
+        </button>
     );
 }
 

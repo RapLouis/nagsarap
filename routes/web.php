@@ -229,10 +229,8 @@ Route::middleware(['auth', 'verified', EnsurePasswordIsChanged::class])->group(f
     Route::patch('/notifications/{notification}/read', [StudentNotificationController::class, 'markAsRead'])->name('notifications.read');
     Route::patch('/notifications/read-all', [StudentNotificationController::class, 'markAllAsRead'])->name('notifications.read-all');
 
-    Route::get('/calendar', [App\Http\Controllers\StudentDashboardController::class, 'calendar'])
-    ->name('calendar');
-
-    
+    Route::get('/calendar', [StudentDashboardController::class, 'calendar'])
+        ->name('calendar');
 });
 
 require __DIR__.'/settings.php';

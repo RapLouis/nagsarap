@@ -11,20 +11,20 @@ export default function AdminLayout({ children, title = 'Dashboard' }: AdminLayo
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
     return (
-        <div className="flex h-screen bg-[#F5F6FA] overflow-hidden font-sans text-gray-900 antialiased">
-            {/* Dedicated Admin Sidebar with accessible mobile drawer state */}
-            <AdminSidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
+        <div className="flex min-h-screen bg-[#F5F6FA] font-sans text-gray-900 antialiased">
+            {/* Sticky Desktop Sidebar + Accessible Mobile Drawer */}
+            <div className="lg:sticky lg:top-0 lg:h-screen lg:shrink-0">
+                <AdminSidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
+            </div>
 
             {/* Main Content Pane */}
-            <div className="flex-1 flex flex-col min-w-0 h-screen overflow-y-auto">
-                {/* Dedicated Admin Header with mobile menu toggle */}
-                <AdminHeader 
-                    title={title} 
-                    onOpenSidebar={() => setIsSidebarOpen(true)} 
+            <div className="flex flex-1 flex-col min-w-0">
+                <AdminHeader
+                    title={title}
+                    onOpenSidebar={() => setIsSidebarOpen(true)}
                 />
 
-                {/* Dashboard Page View Content */}
-                <main className="p-4 sm:p-6 lg:p-8 pt-4 flex-1">
+                <main className="flex-1 p-4 pt-4 sm:p-6 lg:p-8">
                     {children}
                 </main>
             </div>
