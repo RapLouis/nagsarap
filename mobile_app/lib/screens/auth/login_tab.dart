@@ -28,24 +28,20 @@ class _LoginTabState extends State<LoginTab> {
   }
 
   void formatStudentNumber(String value) {
-    var numbers = value.replaceAll(RegExp(r'[^0-9]'), '');
+    var sanitized = value.replaceAll(RegExp(r'[^0-9-]'), '');
 
-    if (numbers.length > 8) {
-      numbers = numbers.substring(0, 8);
+    if (sanitized.length > 9) {
+      sanitized = sanitized.substring(0, 9);
     }
 
-    String formatted;
+    if (studentNumberController.text != sanitized) {
+      final offset = studentNumberController.selection.baseOffset;
+      final clampedOffset =
+          offset < 0 ? sanitized.length : offset.clamp(0, sanitized.length);
 
-    if (numbers.length > 2) {
-      formatted = '${numbers.substring(0, 2)}-${numbers.substring(2)}';
-    } else {
-      formatted = numbers;
-    }
-
-    if (studentNumberController.text != formatted) {
       studentNumberController.value = TextEditingValue(
-        text: formatted,
-        selection: TextSelection.collapsed(offset: formatted.length),
+        text: sanitized,
+        selection: TextSelection.collapsed(offset: clampedOffset),
       );
     }
   }
@@ -235,7 +231,7 @@ class _LoginTabState extends State<LoginTab> {
             label: 'Student ID',
             hint: '12-345678',
             controller: studentNumberController,
-            keyboardType: TextInputType.number,
+            keyboardType: TextInputType.datetime,
             textInputAction: TextInputAction.next,
             prefixIcon: const Icon(
               Icons.tag_rounded,

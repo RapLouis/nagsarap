@@ -1,6 +1,5 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 import '../../main.dart';
@@ -12,6 +11,7 @@ import '../../services/auth_service.dart';
 import '../../services/event_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/profile_service.dart';
+import '../../services/sanction_service.dart';
 import '../../widgets/main_bottom_navigation.dart';
 
 import '../attendance/attendance_face_verification_screen.dart';
@@ -52,8 +52,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _attendanceCount = 0;
   int _unreadCount = 0;
   int _pendingOfflineCount = 0;
-
-  String _latestAttendanceStatus = 'No record';
 
   Uint8List? _profilePhoto;
 
@@ -151,6 +149,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return '';
   }
 
+  bool _readBool(dynamic value) {
+    if (value is bool) return value;
+    if (value is num) return value != 0;
+    if (value is String) {
+      final normalized = value.trim().toLowerCase();
+      return normalized == 'true' || normalized == '1';
+    }
+    return false;
+  }
+
   Future<void> _restoreIdentity() async {
     try {
       final result = await AuthService.instance.me();
@@ -186,7 +194,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
-  Widget _profileAvatar({double radius = 18}) {
+  Future<void> _refreshSanctionsQuietly() async {
+    try {
+      await SanctionService.instance.getSanctions();
+    } catch (_) {}
+  }
+
+  Widget _profileAvatar({double radius = 17}) {
     return CircleAvatar(
       radius: radius,
       backgroundColor: const Color(0xFFE2E8F0),
@@ -194,12 +208,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _profilePhoto != null ? MemoryImage(_profilePhoto!) : null,
       child: _profilePhoto == null
           ? Icon(
-              Icons.badge_rounded,
-              color: const Color(0xFF64748B),
-              size: radius * 1.2,
+              Icons.person_rounded,
+              color: navy,
+              size: radius * 1.15,
             )
           : null,
     );
+  }
+
+  Future<void> _reloadPage() async {
+    HapticFeedback.lightImpact();
+    await Future.wait([
+      _loadDashboard(showMainLoader: true),
+      _restoreIdentity(),
+      _loadProfilePhoto(),
+    ]);
   }
 
   Future<void> _loadDashboard({bool showMainLoader = true}) async {
@@ -261,6 +284,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           await AttendanceHistoryService.instance.getHistory();
       final notificationResult =
           await NotificationService.instance.getNotifications();
+      _refreshSanctionsQuietly();
+
       final pendingAfter =
           await AttendanceService.instance.pendingOfflineCount();
 
@@ -279,19 +304,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
         if (historyResult.success) {
           _historyRecords = historyResult.records;
-          _attendanceCount = historyResult.records.length;
-
-          if (historyResult.records.isEmpty) {
-            _latestAttendanceStatus = 'No record';
-          } else {
-            _latestAttendanceStatus = _formatStatus(
-              historyResult.records.first.status,
-            );
-          }
+          _attendanceCount =
+              historyResult.records.where((r) => r.isRecorded).length;
         } else {
           _historyRecords = const [];
           _attendanceCount = 0;
-          _latestAttendanceStatus = 'Unavailable';
         }
 
         if (notificationResult.success) {
@@ -320,64 +337,89 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<EventItem> get _upcomingEvents =>
       _events.where((event) => event.isUpcoming).toList();
 
+  bool _hasRawTimeIn(EventItem event) {
+    final raw = event.raw;
+    return _readBool(
+      raw['has_time_in'] ??
+          raw['student_has_time_in'] ??
+          raw['time_in_recorded'],
+    );
+  }
+
+  bool _hasRawTimeOut(EventItem event) {
+    final raw = event.raw;
+    return _readBool(
+      raw['has_time_out'] ??
+          raw['student_has_time_out'] ??
+          raw['time_out_recorded'],
+    );
+  }
+
   int _getAttendanceCountForEvent(EventItem event) {
+    final recordedHistory = _historyRecords.where((r) => r.isRecorded);
+    int historyCount = 0;
     if (event.id != null) {
-      return _historyRecords.where((r) => r.eventId == event.id).length;
+      historyCount = recordedHistory.where((r) => r.eventId == event.id).length;
+    } else {
+      final cleanName = event.name.trim().toLowerCase();
+      historyCount = recordedHistory
+          .where((r) => r.eventName.trim().toLowerCase() == cleanName)
+          .length;
     }
-    final cleanName = event.name.trim().toLowerCase();
-    return _historyRecords
-        .where((r) => r.eventName.trim().toLowerCase() == cleanName)
-        .length;
+
+    int rawCount = 0;
+    if (_hasRawTimeIn(event)) rawCount++;
+    if (_hasRawTimeOut(event)) rawCount++;
+
+    return historyCount > rawCount ? historyCount : rawCount;
   }
 
   bool _hasTimeInForEvent(EventItem event) =>
-      _getAttendanceCountForEvent(event) >= 1;
+      _hasRawTimeIn(event) || _getAttendanceCountForEvent(event) >= 1;
 
   bool _hasTimeOutForEvent(EventItem event) =>
-      _getAttendanceCountForEvent(event) >= 2;
+      _hasRawTimeOut(event) || _getAttendanceCountForEvent(event) >= 2;
 
- bool _isEventWindowActive(EventItem event) {
+  AttendanceSessionType? _getActiveSessionForEvent(EventItem event) {
+    if (!event.isToday) return null;
+
+    final hasTimeIn = _hasTimeInForEvent(event);
+    final hasTimeOut = _hasTimeOutForEvent(event);
+    if (hasTimeIn && hasTimeOut) return null;
+
     final now = DateTime.now();
 
-    final timeInStr = _getTimeInWindow(event);
-    final timeOutStr = _getTimeOutWindow(event);
+    bool isInsideWindow(String windowStr) {
+      final parts =
+          windowStr.split(RegExp(r'[-–]')).map((s) => s.trim()).toList();
+      if (parts.length < 2) return false;
 
-    final timeInParts = timeInStr.split('–').map((s) => s.trim()).toList();
-    final timeOutParts = timeOutStr.split('–').map((s) => s.trim()).toList();
+      final start = _parseTimeToDateTime(parts[0]);
+      final end = _parseTimeToDateTime(parts[1]);
+      if (start == null || end == null) return false;
 
-    final inStart = timeInParts.isNotEmpty ? _parseTimeToDateTime(timeInParts[0]) : null;
-    final inEnd = timeInParts.length > 1 ? _parseTimeToDateTime(timeInParts[1]) : null;
-
-    final outStart = timeOutParts.isNotEmpty ? _parseTimeToDateTime(timeOutParts[0]) : null;
-    final outEnd = timeOutParts.length > 1 ? _parseTimeToDateTime(timeOutParts[1]) : null;
-
-    final count = _getAttendanceCountForEvent(event);
-    if (count >= 2) return false;
-
-    const margin = Duration(minutes: 15);
-
-    // 1. Check Time-Out Window (if Time-Out not yet completed)
-    if (count < 2 && outStart != null) {
-      final startBound = outStart.subtract(margin);
-      final endBound = (outEnd ?? outStart.add(const Duration(hours: 4))).add(margin);
-      if ((now.isAfter(startBound) || now.isAtSameMomentAs(startBound)) &&
-          (now.isBefore(endBound) || now.isAtSameMomentAs(endBound))) {
-        return true;
+      DateTime adjustedEnd = end;
+      if (adjustedEnd.isBefore(start)) {
+        adjustedEnd = adjustedEnd.add(const Duration(days: 1));
       }
+
+      return (now.isAfter(start) || now.isAtSameMomentAs(start)) &&
+          (now.isBefore(adjustedEnd) || now.isAtSameMomentAs(adjustedEnd));
     }
 
-    // 2. Check Time-In Window (if Time-In not yet completed)
-    if (count == 0 && inStart != null) {
-      final startBound = inStart.subtract(margin);
-      final endBound = (inEnd ?? outStart ?? inStart.add(const Duration(hours: 4))).add(margin);
-      if ((now.isAfter(startBound) || now.isAtSameMomentAs(startBound)) &&
-          (now.isBefore(endBound) || now.isAtSameMomentAs(endBound))) {
-        return true;
-      }
+    if (!hasTimeOut && isInsideWindow(_getTimeOutWindow(event))) {
+      return AttendanceSessionType.timeOut;
     }
 
-    return false;
+    if (!hasTimeIn && isInsideWindow(_getTimeInWindow(event))) {
+      return AttendanceSessionType.timeIn;
+    }
+
+    return null;
   }
+
+  bool _isEventWindowActive(EventItem event) =>
+      _getActiveSessionForEvent(event) != null;
 
   Future<void> _openHistory() async {
     await Navigator.of(context).push(
@@ -414,6 +456,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           studentName: _firstName,
           hasTimeIn: hasTimeIn,
           hasTimeOut: hasTimeOut,
+          timeInWindow: _getTimeInWindow(event),
+          timeOutWindow: _getTimeOutWindow(event),
         ),
       ),
     );
@@ -423,7 +467,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
- Future<void> _openAttendanceScanner() async {
+  Future<void> _openAttendanceScanner() async {
     final today = _todayEvents;
 
     if (today.isEmpty) {
@@ -432,15 +476,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         SnackBar(
           content: const Row(
             children: [
-              Icon(Icons.info_outline_rounded, color: Colors.white, size: 18),
+              Icon(Icons.info_outline_rounded, color: gold, size: 18),
               SizedBox(width: 10),
-              Text('There is no event scheduled for today.'),
+              Text('No event is scheduled for today.'),
             ],
           ),
           backgroundColor: navy,
           behavior: SnackBarBehavior.floating,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         ),
       );
       return;
@@ -459,7 +502,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         backgroundColor: Theme.of(context).cardColor,
         showDragHandle: true,
         shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
         builder: (BuildContext sheetContext) {
           final isDark = themeController.isDarkMode;
@@ -481,81 +524,94 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ),
                   const SizedBox(height: 4),
                   const Text(
-                    'Choose an event to record attendance.',
+                    'Choose an active event to record attendance.',
                     style: TextStyle(color: muted, fontSize: 12.5),
                   ),
                   const SizedBox(height: 16),
                   for (final event in today) ...[
                     Builder(
                       builder: (ctx) {
-                        final isActive = _isEventWindowActive(event);
+                        final activeSession = _getActiveSessionForEvent(event);
+                        final isActive = activeSession != null;
                         final count = _getAttendanceCountForEvent(event);
                         final isCompleted = count >= 2;
 
+                        final subtitleText = isCompleted
+                            ? 'Completed (2/2)'
+                            : (activeSession == AttendanceSessionType.timeOut
+                                ? 'Time-Out open now'
+                                : (activeSession ==
+                                        AttendanceSessionType.timeIn
+                                    ? 'Time-In open now'
+                                    : 'Outside attendance window'));
+
                         return Opacity(
-                          opacity: isActive ? 1.0 : 0.5,
+                          opacity: isActive ? 1.0 : 0.6,
                           child: Container(
-                            margin: const EdgeInsets.only(bottom: 8),
+                            margin: const EdgeInsets.only(bottom: 10),
                             decoration: BoxDecoration(
                               color: isDark
                                   ? const Color(0xFF1E293B)
                                   : const Color(0xFFF8FAFC),
-                              borderRadius: BorderRadius.circular(10),
+                              borderRadius: BorderRadius.circular(12),
                               border: Border.all(
                                 color: isActive
                                     ? gold
                                     : (isDark
                                         ? const Color(0xFF334155)
                                         : const Color(0xFFE2E8F0)),
+                                width: isActive ? 1.4 : 1.0,
                               ),
                             ),
                             child: ListTile(
                               contentPadding: const EdgeInsets.symmetric(
                                 horizontal: 14,
-                                vertical: 2,
+                                vertical: 4,
                               ),
                               leading: Container(
-                                width: 36,
-                                height: 36,
+                                width: 38,
+                                height: 38,
                                 decoration: BoxDecoration(
-                                  color: (isActive ? gold : muted)
-                                      .withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(8),
+                                  color: (isActive
+                                          ? const Color(0xFF10B981)
+                                          : muted)
+                                      .withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(10),
                                 ),
                                 child: Icon(
                                   isActive
-                                      ? Icons.event_available_rounded
-                                      : Icons.lock_rounded,
-                                  color: isActive ? gold : muted,
-                                  size: 18,
+                                      ? Icons.qr_code_scanner_rounded
+                                      : Icons.lock_clock_rounded,
+                                  color: isActive
+                                      ? const Color(0xFF10B981)
+                                      : muted,
+                                  size: 19,
                                 ),
                               ),
                               title: Text(
                                 event.name,
                                 style: TextStyle(
-                                  fontWeight: FontWeight.w600,
+                                  fontWeight: FontWeight.w700,
                                   fontSize: 14,
                                   color: isDark ? Colors.white : navy,
                                 ),
                               ),
                               subtitle: Text(
-                                isCompleted
-                                    ? 'Completed (2/2)'
-                                    : (isActive
-                                        ? 'Window Active'
-                                        : 'Window Closed / Locked'),
+                                subtitleText,
                                 style: TextStyle(
                                   fontSize: 11.5,
-                                  color: isActive ? const Color(0xFF16A34A) : muted,
+                                  color: isActive
+                                      ? const Color(0xFF16A34A)
+                                      : muted,
                                   fontWeight: FontWeight.w600,
                                 ),
                               ),
                               trailing: Icon(
                                 isActive
                                     ? Icons.arrow_forward_ios_rounded
-                                    : Icons.lock_outline_rounded,
-                                color: isActive ? muted : Colors.grey,
-                                size: 14,
+                                    : Icons.info_outline_rounded,
+                                color: isActive ? navy : muted,
+                                size: 15,
                               ),
                               onTap: isActive
                                   ? () => Navigator.pop(sheetContext, event)
@@ -582,16 +638,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  void _showEventDetailModal(EventItem event) {
-    final count = _getAttendanceCountForEvent(event);
-    final isCompleted = count >= 2;
-    final isTimeInDone = count == 1;
-    final isWindowActive = _isEventWindowActive(event);
-    final isDark = themeController.isDarkMode;
+  String _formatDate(EventItem event) {
+    final parsed = event.date;
+    if (parsed != null) {
+      return DateFormat('EEEE, MMMM d, yyyy').format(parsed);
+    }
+    return event.eventDate.isNotEmpty ? event.eventDate : 'Date TBA';
+  }
 
-    final timeInWindow = _getTimeInWindow(event);
-    final timeOutWindow = _getTimeOutWindow(event);
-    final venueLocation = event.venue.isNotEmpty ? event.venue : 'Main Campus';
+  void _showSummaryDetails(String category) {
+    final isToday = category == 'Today';
+    final items = isToday ? _todayEvents : _upcomingEvents;
+    final isDark = themeController.isDarkMode;
 
     showModalBottomSheet<void>(
       context: context,
@@ -602,7 +660,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
           decoration: BoxDecoration(
             color: isDark ? const Color(0xFF1E293B) : Colors.white,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
           ),
           child: SafeArea(
             child: Column(
@@ -611,7 +669,133 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               children: [
                 Center(
                   child: Container(
-                    width: 32,
+                    width: 36,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: isDark
+                          ? const Color(0xFF475569)
+                          : const Color(0xFFCBD5E1),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      "$category's Events (${items.length})",
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: isDark ? Colors.white : navy,
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      icon: Icon(
+                        Icons.close_rounded,
+                        color: isDark ? Colors.white70 : muted,
+                        size: 20,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                if (items.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 20),
+                    child: Center(
+                      child: Text(
+                        isToday
+                            ? 'No events scheduled for today.'
+                            : 'No upcoming events scheduled.',
+                        style: const TextStyle(color: muted, fontSize: 13),
+                      ),
+                    ),
+                  )
+                else
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: MediaQuery.of(context).size.height * 0.45,
+                    ),
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: items.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (_, index) {
+                        final evt = items[index];
+                        return ListTile(
+                          tileColor: isDark
+                              ? const Color(0xFF0F172A)
+                              : const Color(0xFFF8FAFC),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          title: Text(
+                            evt.name,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 14,
+                              color: isDark ? Colors.white : navy,
+                            ),
+                          ),
+                          subtitle: Text(
+                            '${_formatDate(evt)} • ${_getTimeInWindow(evt)}',
+                            style: const TextStyle(fontSize: 12, color: muted),
+                          ),
+                          trailing: const Icon(
+                            Icons.chevron_right_rounded,
+                            color: muted,
+                          ),
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            _showEventDetailModal(evt);
+                          },
+                        );
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showEventDetailModal(EventItem event) {
+    final count = _getAttendanceCountForEvent(event);
+    final isCompleted = count >= 2;
+    final isTimeInDone = count == 1;
+    final activeSession = _getActiveSessionForEvent(event);
+    final isWindowActive = activeSession != null;
+    final isDark = themeController.isDarkMode;
+
+    final timeInWindow = _getTimeInWindow(event);
+    final timeOutWindow = _getTimeOutWindow(event);
+    final venueLocation =
+        event.venue.isNotEmpty ? event.venue : 'Main Campus';
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return Container(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E293B) : Colors.white,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 36,
                     height: 4,
                     decoration: BoxDecoration(
                       color: isDark
@@ -626,13 +810,51 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Expanded(
-                      child: Text(
-                        event.name,
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          color: isDark ? Colors.white : navy,
-                        ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            event.name,
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                              color: isDark ? Colors.white : navy,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 9,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: isCompleted
+                                  ? const Color(0xFFDCFCE7)
+                                  : (isTimeInDone
+                                      ? const Color(0xFFFEF3C7)
+                                      : (isDark
+                                          ? const Color(0xFF334155)
+                                          : const Color(0xFFEEF2FF))),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              isCompleted
+                                  ? 'Completed ($count/2)'
+                                  : (isTimeInDone
+                                      ? 'Time-In Recorded ($count/2)'
+                                      : 'Attendance Status ($count/2)'),
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w700,
+                                color: isCompleted
+                                    ? const Color(0xFF15803D)
+                                    : (isTimeInDone
+                                        ? const Color(0xFF92400E)
+                                        : (isDark ? gold : navy)),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                     IconButton(
@@ -645,113 +867,66 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
                 if (event.description.isNotEmpty) ...[
-                  Text(
-                    'Event Details',
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w600,
-                      color: isDark ? Colors.white70 : navy,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 12),
                   Text(
                     event.description,
                     style: TextStyle(
-                      fontSize: 12.5,
-                      height: 1.35,
-                      color: isDark ? const Color(0xFFCBD5E1) : Colors.black87,
+                      fontSize: 13,
+                      height: 1.4,
+                      color: isDark
+                          ? const Color(0xFFCBD5E1)
+                          : const Color(0xFF334155),
                     ),
                   ),
-                  const SizedBox(height: 12),
                 ],
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: isCompleted
-                        ? const Color(0xFFDCFCE7)
-                        : (isTimeInDone
-                            ? const Color(0xFFFEF3C7)
-                            : (isDark
-                                ? const Color(0xFF334155)
-                                : const Color(0xFFEEF2FF))),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        isCompleted
-                            ? Icons.verified_rounded
-                            : (isTimeInDone
-                                ? Icons.pending_actions_rounded
-                                : Icons.schedule_rounded),
-                        size: 14,
-                        color: isCompleted
-                            ? const Color(0xFF15803D)
-                            : (isTimeInDone
-                                ? const Color(0xFF92400E)
-                                : (isDark ? gold : navy)),
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        'Attendance Status ($count/2)',
-                        style: TextStyle(
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w700,
-                          color: isCompleted
-                              ? const Color(0xFF15803D)
-                              : (isTimeInDone
-                                  ? const Color(0xFF92400E)
-                                  : (isDark ? Colors.white : navy)),
-                        ),
-                      ),
-                    ],
-                  ),
+                const SizedBox(height: 16),
+                Divider(
+                  height: 1,
+                  color: isDark
+                      ? const Color(0xFF334155)
+                      : const Color(0xFFE2E8F0),
                 ),
                 const SizedBox(height: 14),
-                Divider(
-                  color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
-                ),
-                const SizedBox(height: 12),
-                _modalInfoRow(
-                  Icons.badge_rounded,
-                  'Student Name',
+                _modalDetailRow(
+                  Icons.person_outline_rounded,
+                  'Student',
                   _fullName,
+                  const Color(0xFF3B82F6),
                 ),
                 const SizedBox(height: 10),
-                _modalInfoRow(
-                  Icons.event_available_rounded,
+                _modalDetailRow(
+                  Icons.calendar_today_rounded,
                   'Date',
                   _formatDate(event),
+                  navy,
                 ),
                 const SizedBox(height: 10),
-                _modalInfoRow(
+                _modalDetailRow(
                   Icons.login_rounded,
                   'Time-In Window',
                   timeInWindow,
+                  const Color(0xFF16A34A),
                 ),
                 const SizedBox(height: 10),
-                _modalInfoRow(
+                _modalDetailRow(
                   Icons.logout_rounded,
                   'Time-Out Window',
                   timeOutWindow,
+                  const Color(0xFFDC2626),
                 ),
                 const SizedBox(height: 10),
-                _modalInfoRow(
-                  Icons.place_rounded,
+                _modalDetailRow(
+                  Icons.place_outlined,
                   'Venue',
                   venueLocation,
+                  const Color(0xFFD97706),
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 22),
                 if (isWindowActive && !isCompleted)
                   SizedBox(
                     width: double.infinity,
-                    height: 44,
+                    height: 48,
                     child: ElevatedButton.icon(
                       onPressed: () {
                         Navigator.pop(ctx);
@@ -761,16 +936,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         backgroundColor: isDark ? gold : navy,
                         foregroundColor: isDark ? navy : Colors.white,
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
+                          borderRadius: BorderRadius.circular(12),
                         ),
                         elevation: 0,
                       ),
-                      icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
+                      icon: const Icon(
+                        Icons.face_retouching_natural_rounded,
+                        size: 19,
+                      ),
                       label: Text(
-                        isTimeInDone ? 'Scan Time-Out QR' : 'Scan Face Attendance',
+                        activeSession == AttendanceSessionType.timeOut
+                            ? 'Verify Time-Out Now'
+                            : 'Verify Time-In Now',
                         style: const TextStyle(
-                          fontSize: 13.5,
-                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
                     ),
@@ -778,30 +958,39 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 else
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 12,
+                      horizontal: 16,
+                    ),
                     decoration: BoxDecoration(
-                      color: isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9),
-                      borderRadius: BorderRadius.circular(10),
+                      color: isDark
+                          ? const Color(0xFF0F172A)
+                          : const Color(0xFFF1F5F9),
+                      borderRadius: BorderRadius.circular(12),
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Icon(
-                          isCompleted ? Icons.task_alt_rounded : Icons.lock_rounded,
+                          isCompleted
+                              ? Icons.check_circle_rounded
+                              : Icons.lock_outline_rounded,
                           size: 16,
                           color: isCompleted ? const Color(0xFF16A34A) : muted,
                         ),
-                        const SizedBox(width: 6),
+                        const SizedBox(width: 8),
                         Text(
                           isCompleted
-                              ? 'Attendance Completed Successfully'
-                              : 'Attendance Window Closed',
+                              ? 'Attendance completed for this event.'
+                              : 'Attendance window is currently closed.',
                           style: TextStyle(
                             fontSize: 12.5,
                             fontWeight: FontWeight.w600,
                             color: isCompleted
                                 ? const Color(0xFF16A34A)
-                                : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                                : (isDark
+                                    ? const Color(0xFF94A3B8)
+                                    : const Color(0xFF64748B)),
                           ),
                         ),
                       ],
@@ -815,29 +1004,47 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget _modalInfoRow(IconData icon, String label, String value) {
+  Widget _modalDetailRow(
+    IconData icon,
+    String label,
+    String value,
+    Color iconColor,
+  ) {
     final isDark = themeController.isDarkMode;
+    final effectiveColor =
+        (isDark && iconColor == navy) ? gold : iconColor;
 
     return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(icon, size: 16, color: gold),
-        const SizedBox(width: 10),
+        Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: effectiveColor.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(icon, size: 16, color: effectiveColor),
+        ),
+        const SizedBox(width: 12),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 label,
-                style: const TextStyle(fontSize: 11, color: muted),
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: muted,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
               const SizedBox(height: 1),
               Text(
                 value,
                 style: TextStyle(
-                  fontSize: 12.5,
+                  fontSize: 13,
                   fontWeight: FontWeight.w600,
-                  color: isDark ? Colors.white : navy,
+                  color: isDark ? Colors.white : const Color(0xFF0F172A),
                 ),
               ),
             ],
@@ -851,12 +1058,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final clean = timeStr.trim();
     if (clean.isEmpty || clean.toLowerCase() == 'tba') return 'TBA';
 
-    const formats = ['HH:mm:ss', 'HH:mm', 'h:mm a', 'hh:mm a'];
-    for (final format in formats) {
-      try {
-        final parsed = DateFormat(format, 'en_US').parseLoose(clean);
-        return DateFormat('h:mm a').format(parsed);
-      } catch (_) {}
+    final parsed = _parseTimeToDateTime(clean);
+    if (parsed != null) {
+      return DateFormat('h:mm a').format(parsed);
     }
     return clean;
   }
@@ -865,13 +1069,51 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final clean = timeStr.trim();
     if (clean.isEmpty || clean.toLowerCase() == 'tba') return null;
     final now = DateTime.now();
-    const formats = ['HH:mm:ss', 'HH:mm', 'h:mm a', 'hh:mm a'];
-    for (final format in formats) {
-      try {
-        final parsed = DateFormat(format, 'en_US').parseLoose(clean);
-        return DateTime(now.year, now.month, now.day, parsed.hour, parsed.minute, parsed.second);
-      } catch (_) {}
+
+    final amPmMatch = RegExp(
+      r'(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)',
+      caseSensitive: false,
+    ).firstMatch(clean);
+
+    if (amPmMatch != null) {
+      int hour = int.parse(amPmMatch.group(1)!);
+      final minute = int.parse(amPmMatch.group(2)!);
+      final second =
+          amPmMatch.group(3) != null ? int.parse(amPmMatch.group(3)!) : 0;
+      final period = amPmMatch.group(4)!.toUpperCase();
+
+      if (period == 'PM' && hour < 12) hour += 12;
+      if (period == 'AM' && hour == 12) hour = 0;
+
+      return DateTime(now.year, now.month, now.day, hour, minute, second);
     }
+
+    final h24Match = RegExp(
+      r'\b([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?\b',
+    ).firstMatch(clean);
+
+    if (h24Match != null) {
+      final hour = int.parse(h24Match.group(1)!);
+      final minute = int.parse(h24Match.group(2)!);
+      final second =
+          h24Match.group(3) != null ? int.parse(h24Match.group(3)!) : 0;
+
+      return DateTime(now.year, now.month, now.day, hour, minute, second);
+    }
+
+    final iso = DateTime.tryParse(clean);
+    if (iso != null) {
+      final local = iso.toLocal();
+      return DateTime(
+        now.year,
+        now.month,
+        now.day,
+        local.hour,
+        local.minute,
+        local.second,
+      );
+    }
+
     return null;
   }
 
@@ -899,19 +1141,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     final rawStart = _extractEventProperty(event, [
-      'time_in_start',
-      'timeInStart',
-      'time_in_start_time',
-      'timeInStartTime',
-      'time_in_window_start',
-      'timeInWindowStart',
-      'time_in_from',
-      'timeInFrom',
-      'time_in_open',
-      'timeInOpen',
-      'timein_start',
-      'in_start',
-    ]) ?? event.startTime;
+          'time_in_start',
+          'timeInStart',
+          'time_in_start_time',
+          'timeInStartTime',
+          'time_in_window_start',
+          'timeInWindowStart',
+          'time_in_from',
+          'timeInFrom',
+          'time_in_open',
+          'timeInOpen',
+          'timein_start',
+          'in_start',
+        ]) ??
+        event.startTime;
 
     final rawEnd = _extractEventProperty(event, [
       'time_in_end',
@@ -987,19 +1230,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     final rawEnd = _extractEventProperty(event, [
-      'time_out_end',
-      'timeOutEnd',
-      'time_out_end_time',
-      'timeOutEndTime',
-      'time_out_window_end',
-      'timeOutWindowEnd',
-      'time_out_to',
-      'timeOutTo',
-      'time_out_close',
-      'timeOutClose',
-      'timeout_end',
-      'out_end',
-    ]) ?? event.endTime;
+          'time_out_end',
+          'timeOutEnd',
+          'time_out_end_time',
+          'timeOutEndTime',
+          'time_out_window_end',
+          'timeOutWindowEnd',
+          'time_out_to',
+          'timeOutTo',
+          'time_out_close',
+          'timeOutClose',
+          'timeout_end',
+          'out_end',
+        ]) ??
+        event.endTime;
 
     final rawStart = _extractEventProperty(event, [
       'time_out_start',
@@ -1055,12 +1299,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return '${_formatTime12Hour(event.startTime)} – $endStr';
   }
 
-  String _getDisplayWindow(EventItem event) {
-    return _getTimeInWindow(event);
-  }
-
   String? _findInMap(Map map, List<String> targetKeys) {
-    final cleanTargets = targetKeys.map((k) => k.toLowerCase().replaceAll('_', '')).toList();
+    final cleanTargets =
+        targetKeys.map((k) => k.toLowerCase().replaceAll('_', '')).toList();
 
     for (final entry in map.entries) {
       final keyStr = entry.key.toString().toLowerCase().replaceAll('_', '');
@@ -1093,7 +1334,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final foundInRaw = _findInMap(event.raw, keys);
     if (foundInRaw != null) return foundInRaw;
 
-    final cleanTargets = keys.map((k) => k.toLowerCase().replaceAll('_', '')).toList();
+    final cleanTargets =
+        keys.map((k) => k.toLowerCase().replaceAll('_', '')).toList();
     for (final entry in event.raw.entries) {
       final keyClean = entry.key.toString().toLowerCase().replaceAll('_', '');
       if (cleanTargets.contains(keyClean) && entry.value != null) {
@@ -1109,154 +1351,198 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = themeController.isDarkMode;
-    final dateString = DateFormat('EEE, MMM d').format(DateTime.now());
+    return ListenableBuilder(
+      listenable: themeController,
+      builder: (context, _) {
+        final isDark = themeController.isDarkMode;
+        final dateString = DateFormat('EEE, MMM d').format(DateTime.now());
 
-    return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(68),
-        child: Container(
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF1E293B) : navy,
-            border: Border(
-              bottom: BorderSide(
-                color: isDark ? const Color(0xFF334155) : Colors.transparent,
-              ),
-            ),
-          ),
-          child: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 52,
-                    height: 52,
-                    child: Container(
-                      decoration: const BoxDecoration(
-                        color: Colors.white,
-                        shape: BoxShape.circle,
-                      ),
-                      clipBehavior: Clip.antiAlias,
-                      child: Transform.scale(
-                        scale: 1.45,
-                        child: Image.asset(
-                          'lib/screens/images/logo.jpeg',
-                          fit: BoxFit.cover,
-                        ),
-                      ),
-                    ),
+        return Scaffold(
+          backgroundColor:
+              isDark ? const Color(0xFF0F172A) : const Color(0xFFF4F6FA),
+          appBar: PreferredSize(
+            preferredSize: const Size.fromHeight(68),
+            child: Container(
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF1E293B) : navy,
+                border: Border(
+                  bottom: BorderSide(
+                    color: isDark
+                        ? const Color(0xFF334155)
+                        : gold.withValues(alpha: 0.35),
+                    width: 1.5,
                   ),
-                  const Spacer(),
-                  Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.end,
+                ),
+              ),
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
                     children: [
-                      Text(
-                        'Welcome, $_firstName',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14.5,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      if (_studentNumber.isNotEmpty) ...[
-                        const SizedBox(height: 1),
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 4,
-                              height: 4,
-                              decoration: const BoxDecoration(
-                                color: gold,
+                      Material(
+                        color: Colors.transparent,
+                        shape: const CircleBorder(),
+                        clipBehavior: Clip.antiAlias,
+                        child: InkWell(
+                          customBorder: const CircleBorder(),
+                          onTap: _dashboardBusy ? null : _reloadPage,
+                          child: SizedBox(
+                            width: 48,
+                            height: 48,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: Colors.white,
                                 shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: gold.withValues(alpha: 0.8),
+                                  width: 1.5,
+                                ),
+                              ),
+                              clipBehavior: Clip.antiAlias,
+                              child: Transform.scale(
+                                scale: 1.45,
+                                child: Image.asset(
+                                  'lib/screens/images/logo.jpeg',
+                                  fit: BoxFit.cover,
+                                ),
                               ),
                             ),
-                            const SizedBox(width: 4),
-                            Text(
-                              _studentNumber,
-                              style: const TextStyle(
-                                color: Color(0xFFCBD5E1),
-                                fontSize: 11,
-                                fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                      const Spacer(),
+                      Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            'Welcome, $_firstName',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.1,
+                            ),
+                          ),
+                          if (_studentNumber.isNotEmpty) ...[
+                            const SizedBox(height: 2),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 1.5,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                _studentNumber,
+                                style: const TextStyle(
+                                  color: gold,
+                                  fontSize: 10.5,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 0.4,
+                                ),
                               ),
                             ),
                           ],
+                        ],
+                      ),
+                      const SizedBox(width: 10),
+                      InkWell(
+                        borderRadius: BorderRadius.circular(22),
+                        onTap: _openProfile,
+                        child: Container(
+                          padding: const EdgeInsets.all(2),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(color: gold, width: 1.8),
+                          ),
+                          child: _profileAvatar(radius: 17),
                         ),
-                      ],
+                      ),
                     ],
                   ),
-                  const SizedBox(width: 10),
-                  InkWell(
-                    borderRadius: BorderRadius.circular(20),
-                    onTap: _openProfile,
-                    child: Container(
-                      padding: const EdgeInsets.all(1.5),
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(color: gold, width: 1.5),
-                      ),
-                      child: _profileAvatar(radius: 16),
-                    ),
-                  ),
-                ],
+                ),
               ),
             ),
           ),
-        ),
+          body: RefreshIndicator(
+            color: gold,
+            onRefresh: () => _loadDashboard(showMainLoader: false),
+            child: _loading
+                ? const Center(
+                    child: CircularProgressIndicator(color: gold),
+                  )
+                : ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.fromLTRB(16, 18, 16, 110),
+                    children: [
+                      if (_pendingOfflineCount > 0 || _syncingOffline) ...[
+                        _buildPendingOfflineCard(),
+                        const SizedBox(height: 16),
+                      ],
+                      _buildHeaderSection(dateString),
+                      const SizedBox(height: 14),
+                      _buildOverviewSection(),
+                      const SizedBox(height: 22),
+                      _buildEventsSectionHeader(),
+                      const SizedBox(height: 10),
+                      if (_error != null)
+                        _buildErrorWidget()
+                      else if (_todayEvents.isEmpty)
+                        _buildEmptyEventsWidget()
+                      else
+                        ..._todayEvents.map(
+                          (evt) => Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: _buildEventCard(evt, today: true),
+                          ),
+                        ),
+                      if (_upcomingEvents.isNotEmpty) ...[
+                        const SizedBox(height: 14),
+                        _buildUpcomingSection(),
+                      ],
+                    ],
+                  ),
+          ),
+          bottomNavigationBar: MainBottomNavigation(
+            currentIndex: 0,
+            notificationBadge: _unreadCount,
+            onHomeRefresh: () => _loadDashboard(showMainLoader: false),
+            onScan: _openAttendanceScanner,
+          ),
+          floatingActionButton: MainBottomNavigation.scannerButton(
+            context,
+            currentIndex: 0,
+            onPressed: _openAttendanceScanner,
+          ),
+          floatingActionButtonLocation:
+              FloatingActionButtonLocation.centerDocked,
+        );
+      },
+    );
+  }
+
+  BoxDecoration _cardDecoration(bool isDark, {Color? borderColor}) {
+    return BoxDecoration(
+      color: isDark ? const Color(0xFF1E293B) : Colors.white,
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(
+        color: borderColor ??
+            (isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
       ),
-      body: RefreshIndicator(
-        color: gold,
-        onRefresh: () => _loadDashboard(showMainLoader: false),
-        child: _loading
-            ? const Center(
-                child: CircularProgressIndicator(color: gold),
-              )
-            : ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
-                children: [
-                  if (_pendingOfflineCount > 0 || _syncingOffline) ...[
-                    _buildPendingOfflineCard(),
-                    const SizedBox(height: 14),
-                  ],
-                  _buildHeaderSection(dateString),
-                  const SizedBox(height: 14),
-                  _buildMetricsRow(),
-                  const SizedBox(height: 10),
-                  _buildHistoryCard(),
-                  const SizedBox(height: 20),
-                  _buildEventsSectionHeader(),
-                  const SizedBox(height: 10),
-                  if (_error != null)
-                    _buildErrorWidget()
-                  else if (_todayEvents.isEmpty)
-                    _buildEmptyEventsWidget()
-                  else
-                    ..._todayEvents.map((evt) => _buildEventCard(evt, today: true)),
-                  if (_upcomingEvents.isNotEmpty) ...[
-                    const SizedBox(height: 20),
-                    _buildUpcomingSection(),
-                  ],
-                ],
+      boxShadow: isDark
+          ? null
+          : [
+              BoxShadow(
+                color: const Color(0xFF0F172A).withValues(alpha: 0.04),
+                blurRadius: 10,
+                offset: const Offset(0, 3),
               ),
-      ),
-      bottomNavigationBar: MainBottomNavigation(
-        currentIndex: 0,
-        notificationBadge: _unreadCount,
-        onHomeRefresh: () => _loadDashboard(showMainLoader: false),
-        onScan: _openAttendanceScanner,
-      ),
-      floatingActionButton: MainBottomNavigation.scannerButton(
-        context,
-        currentIndex: 0,
-        onPressed: _openAttendanceScanner,
-      ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
+            ],
     );
   }
 
@@ -1271,29 +1557,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              "Today's Activity",
+              'Dashboard',
               style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
+                fontSize: 19,
+                fontWeight: FontWeight.w800,
                 letterSpacing: -0.3,
                 color: isDark ? Colors.white : navy,
               ),
             ),
-            const SizedBox(height: 1),
+            const SizedBox(height: 2),
             Text(
-              'Overview of schedule & check-ins',
+              'Your schedule and check-in summary',
               style: TextStyle(
                 fontSize: 12,
-                color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                color: isDark ? const Color(0xFF94A3B8) : muted,
               ),
             ),
           ],
         ),
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           decoration: BoxDecoration(
             color: isDark ? const Color(0xFF1E293B) : Colors.white,
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(10),
             border: Border.all(
               color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
             ),
@@ -1301,13 +1587,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.calendar_today_rounded, size: 12, color: isDark ? gold : navy),
-              const SizedBox(width: 5),
+              Icon(
+                Icons.calendar_today_rounded,
+                size: 13,
+                color: isDark ? gold : navy,
+              ),
+              const SizedBox(width: 6),
               Text(
                 dateString,
                 style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
                   color: isDark ? gold : navy,
                 ),
               ),
@@ -1318,63 +1608,65 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget _buildMetricsRow() {
+  Widget _buildOverviewSection() {
     final isDark = themeController.isDarkMode;
 
     return Row(
       children: [
         Expanded(
-          child: _metricBox(
-            title: 'Today',
-            count: '${_todayEvents.length}',
-            subtitle: 'Scheduled',
+          child: _statTile(
+            value: '${_todayEvents.length}',
+            label: 'Today',
             icon: Icons.today_rounded,
-            iconColor: const Color(0xFF3B82F6),
+            accent: const Color(0xFF2563EB),
             isDark: isDark,
             onTap: () => _showSummaryDetails('Today'),
           ),
         ),
         const SizedBox(width: 10),
         Expanded(
-          child: _metricBox(
-            title: 'Upcoming',
-            count: '${_upcomingEvents.length}',
-            subtitle: 'Future events',
-            icon: Icons.upcoming_rounded,
-            iconColor: const Color(0xFFF59E0B),
+          child: _statTile(
+            value: '${_upcomingEvents.length}',
+            label: 'Upcoming',
+            icon: Icons.event_repeat_rounded,
+            accent: const Color(0xFFD97706),
             isDark: isDark,
             onTap: () => _showSummaryDetails('Upcoming'),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _statTile(
+            value: '$_attendanceCount',
+            label: 'Records',
+            icon: Icons.verified_outlined,
+            accent: const Color(0xFF059669),
+            isDark: isDark,
+            onTap: _openHistory,
           ),
         ),
       ],
     );
   }
 
-  Widget _metricBox({
-    required String title,
-    required String count,
-    required String subtitle,
+  Widget _statTile({
+    required String value,
+    required String label,
     required IconData icon,
-    required Color iconColor,
+    required Color accent,
     required bool isDark,
     required VoidCallback onTap,
   }) {
     return Container(
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1E293B) : Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
-        ),
-      ),
+      decoration: _cardDecoration(isDark),
       child: Material(
         color: Colors.transparent,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(14),
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(14),
           child: Padding(
-            padding: const EdgeInsets.all(14),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1382,18 +1674,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Container(
-                      padding: const EdgeInsets.all(7),
+                      width: 30,
+                      height: 30,
                       decoration: BoxDecoration(
-                        color: iconColor.withValues(alpha: 0.1),
+                        color: accent.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: Icon(icon, color: iconColor, size: 18),
+                      child: Icon(icon, size: 16, color: accent),
                     ),
                     Text(
-                      count,
+                      value,
                       style: TextStyle(
                         fontSize: 20,
-                        fontWeight: FontWeight.w700,
+                        fontWeight: FontWeight.w800,
                         color: isDark ? Colors.white : navy,
                       ),
                     ),
@@ -1401,93 +1694,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  title,
+                  label,
                   style: TextStyle(
-                    fontSize: 13,
+                    fontSize: 12,
                     fontWeight: FontWeight.w600,
-                    color: isDark ? Colors.white : const Color(0xFF1E293B),
-                  ),
-                ),
-                const SizedBox(height: 1),
-                Text(
-                  subtitle,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: muted,
-                    fontWeight: FontWeight.w500,
+                    color: isDark
+                        ? const Color(0xFFCBD5E1)
+                        : const Color(0xFF334155),
                   ),
                 ),
               ],
             ),
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildHistoryCard() {
-    final isDark = themeController.isDarkMode;
-    final hasRecords = _attendanceCount > 0;
-
-    return InkWell(
-      onTap: _openHistory,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF1E293B) : Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
-          ),
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: gold.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Icon(
-                Icons.history_toggle_off_rounded,
-                color: gold,
-                size: 20,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Attendance History Logs',
-                    style: TextStyle(
-                      fontSize: 13.5,
-                      fontWeight: FontWeight.w600,
-                      color: isDark ? Colors.white : navy,
-                    ),
-                  ),
-                  const SizedBox(height: 1),
-                  Text(
-                    hasRecords
-                        ? '$_attendanceCount recorded • Latest: $_latestAttendanceStatus'
-                        : 'No attendance records logged yet',
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: muted,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const Icon(
-              Icons.arrow_forward_ios_rounded,
-              color: muted,
-              size: 14,
-            ),
-          ],
         ),
       ),
     );
@@ -1501,12 +1719,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       children: [
         Row(
           children: [
-            Icon(Icons.event_note_rounded, size: 16, color: isDark ? gold : navy),
-            const SizedBox(width: 6),
+            Container(
+              width: 4,
+              height: 16,
+              decoration: BoxDecoration(
+                color: gold,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(width: 8),
             Text(
               "Today's Events",
               style: TextStyle(
-                fontSize: 15,
+                fontSize: 15.5,
                 fontWeight: FontWeight.w700,
                 color: isDark ? Colors.white : navy,
                 letterSpacing: -0.2,
@@ -1516,17 +1741,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ),
         if (_todayEvents.isNotEmpty)
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(
-              color: const Color(0xFF10B981).withValues(alpha: 0.1),
+              color: const Color(0xFF10B981).withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(6),
             ),
             child: Text(
-              '${_todayEvents.length} Active',
+              '${_todayEvents.length} Scheduled',
               style: const TextStyle(
-                fontSize: 10.5,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF10B981),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF059669),
               ),
             ),
           ),
@@ -1545,12 +1770,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           children: [
             Row(
               children: [
-                Icon(Icons.upcoming_rounded, size: 16, color: isDark ? gold : navy),
-                const SizedBox(width: 6),
+                Container(
+                  width: 4,
+                  height: 16,
+                  decoration: BoxDecoration(
+                    color: isDark ? gold : navy,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(width: 8),
                 Text(
                   'Upcoming Events',
                   style: TextStyle(
-                    fontSize: 15,
+                    fontSize: 15.5,
                     fontWeight: FontWeight.w700,
                     color: isDark ? Colors.white : navy,
                     letterSpacing: -0.2,
@@ -1558,24 +1790,26 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
               ],
             ),
-            TextButton(
+            TextButton.icon(
               onPressed: _openCalendar,
               style: TextButton.styleFrom(
-                foregroundColor: gold,
-                padding: EdgeInsets.zero,
-                minimumSize: const Size(50, 30),
+                foregroundColor: isDark ? gold : navy,
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                minimumSize: const Size(50, 28),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
-              child: const Text(
-                'View Calendar',
+              icon: const Icon(Icons.calendar_month_rounded, size: 15),
+              label: const Text(
+                'Calendar',
                 style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12.5,
                 ),
               ),
             ),
           ],
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 10),
         for (final event in _upcomingEvents.take(3)) ...[
           _buildEventCard(event),
           const SizedBox(height: 10),
@@ -1592,141 +1826,209 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     final count = _getAttendanceCountForEvent(event);
     final isCompleted = count >= 2;
+    final activeSession = today ? _getActiveSessionForEvent(event) : null;
+    final isLiveNow = !isCompleted && activeSession != null;
+
+    final String statusLabel = isCompleted
+        ? 'Completed'
+        : (activeSession == AttendanceSessionType.timeOut
+            ? 'Time-Out Open'
+            : (activeSession == AttendanceSessionType.timeIn
+                ? 'Time-In Open'
+                : (count == 1 ? '1/2 Recorded' : '0/2')));
+
+    final Color statusBg = isCompleted
+        ? (isDark ? const Color(0xFF064E3B) : const Color(0xFFDCFCE7))
+        : (isLiveNow
+            ? (isDark ? const Color(0xFF422006) : const Color(0xFFFEF3C7))
+            : (count == 1
+                ? (isDark ? const Color(0xFF451A03) : const Color(0xFFFEF3C7))
+                : (isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9))));
+
+    final Color statusFg = isCompleted
+        ? (isDark ? const Color(0xFF6EE7B7) : const Color(0xFF15803D))
+        : (isLiveNow
+            ? (isDark ? gold : const Color(0xFFB45309))
+            : (count == 1
+                ? (isDark ? const Color(0xFFFCD34D) : const Color(0xFF92400E))
+                : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF475569))));
+
+    final Color cardBorder = isCompleted
+        ? (isDark ? const Color(0xFF065F46) : const Color(0xFF86EFAC))
+        : (isLiveNow
+            ? gold
+            : (isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0)));
+
+    final bool hasVenue =
+        event.venue.isNotEmpty && event.venue != 'Unspecified Venue';
 
     return Container(
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1E293B) : Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isCompleted
-              ? const Color(0xFF86EFAC)
-              : (count == 1
-                  ? const Color(0xFFFDE68A)
-                  : (isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0))),
-        ),
-      ),
+      decoration: _cardDecoration(isDark, borderColor: cardBorder),
       child: Material(
         color: Colors.transparent,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(14),
         child: InkWell(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(14),
           onTap: () => _showEventDetailModal(event),
           child: Padding(
             padding: const EdgeInsets.all(14),
-            child: Column(
+            child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        event.name,
-                        style: TextStyle(
-                          fontSize: 14.5,
-                          fontWeight: FontWeight.w700,
-                          color: isDark ? Colors.white : navy,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 7,
-                        vertical: 3,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isCompleted
-                            ? const Color(0xFFDCFCE7)
-                            : (count == 1
-                                ? const Color(0xFFFEF3C7)
-                                : navy.withValues(alpha: isDark ? 0.2 : 0.06)),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        '$count/2',
-                        style: TextStyle(
-                          fontSize: 10.5,
-                          fontWeight: FontWeight.w700,
-                          color: isCompleted
-                              ? const Color(0xFF15803D)
-                              : (count == 1
-                                  ? const Color(0xFF92400E)
-                                  : gold),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.login_rounded,
-                      size: 13,
-                      color: Color(0xFF16A34A),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      'Time-In: $timeInWindow',
-                      style: const TextStyle(
-                        fontSize: 11.5,
-                        color: muted,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 3),
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.logout_rounded,
-                      size: 13,
-                      color: Color(0xFFDC2626),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      'Time-Out: $timeOutWindow',
-                      style: const TextStyle(
-                        fontSize: 11.5,
-                        color: muted,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-                if (event.venue.isNotEmpty &&
-                    event.venue != 'Unspecified Venue') ...[
-                  const SizedBox(height: 5),
-                  Row(
+                if (!today && event.date != null) ...[
+                  _dateBadge(event.date!, isDark),
+                  const SizedBox(width: 12),
+                ],
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Icon(
-                        Icons.place_rounded,
-                        size: 13,
-                        color: Color(0xFF3B82F6),
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          event.venue,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 11.5,
-                            color: muted,
-                            fontWeight: FontWeight.w500,
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              event.name,
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                                color: isDark ? Colors.white : navy,
+                              ),
+                            ),
                           ),
-                        ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: statusBg,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (isLiveNow) ...[
+                                  Container(
+                                    width: 6,
+                                    height: 6,
+                                    decoration: const BoxDecoration(
+                                      color: Color(0xFF16A34A),
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 5),
+                                ],
+                                Text(
+                                  statusLabel,
+                                  style: TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w700,
+                                    color: statusFg,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
+                      const SizedBox(height: 10),
+                      _scheduleIconLine(
+                        icon: Icons.login_rounded,
+                        iconColor: const Color(0xFF16A34A),
+                        text: 'Time-In: $timeInWindow',
+                        isDark: isDark,
+                      ),
+                      const SizedBox(height: 5),
+                      _scheduleIconLine(
+                        icon: Icons.logout_rounded,
+                        iconColor: const Color(0xFFDC2626),
+                        text: 'Time-Out: $timeOutWindow',
+                        isDark: isDark,
+                      ),
+                      if (hasVenue) ...[
+                        const SizedBox(height: 5),
+                        _scheduleIconLine(
+                          icon: Icons.place_outlined,
+                          iconColor: const Color(0xFF2563EB),
+                          text: event.venue,
+                          isDark: isDark,
+                        ),
+                      ],
                     ],
                   ),
-                ],
+                ),
               ],
             ),
           ),
         ),
       ),
+    );
+  }
+
+  Widget _dateBadge(DateTime date, bool isDark) {
+    final month = DateFormat('MMM').format(date).toUpperCase();
+    final day = DateFormat('d').format(date);
+
+    return Container(
+      width: 46,
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF0F172A) : const Color(0xFFEEF2FF),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: isDark ? const Color(0xFF334155) : const Color(0xFFDBEAFE),
+        ),
+      ),
+      child: Column(
+        children: [
+          Text(
+            month,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.5,
+              color: isDark ? gold : const Color(0xFF2563EB),
+            ),
+          ),
+          const SizedBox(height: 1),
+          Text(
+            day,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+              color: isDark ? Colors.white : navy,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _scheduleIconLine({
+    required IconData icon,
+    required Color iconColor,
+    required String text,
+    required bool isDark,
+  }) {
+    return Row(
+      children: [
+        Icon(icon, size: 14, color: iconColor),
+        const SizedBox(width: 7),
+        Expanded(
+          child: Text(
+            text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: isDark ? const Color(0xFFCBD5E1) : const Color(0xFF475569),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1739,7 +2041,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       decoration: BoxDecoration(
         color: const Color(0xFFFFFBEB),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: gold.withValues(alpha: 0.5)),
+        border: Border.all(color: gold.withValues(alpha: 0.65)),
       ),
       child: Row(
         children: [
@@ -1748,8 +2050,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             height: 36,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: gold.withValues(alpha: 0.2),
-              borderRadius: BorderRadius.circular(8),
+              color: gold.withValues(alpha: 0.25),
+              borderRadius: BorderRadius.circular(9),
             ),
             child: syncing
                 ? const SizedBox(
@@ -1773,7 +2075,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               children: [
                 Text(
                   syncing
-                      ? 'Synchronizing attendance'
+                      ? 'Syncing offline attendance'
                       : 'Pending offline attendance',
                   style: const TextStyle(
                     color: navy,
@@ -1784,11 +2086,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 const SizedBox(height: 2),
                 Text(
                   syncing
-                      ? 'Verifying saved records with server.'
-                      : '$_pendingOfflineCount record${_pendingOfflineCount == 1 ? '' : 's'} waiting for sync.',
+                      ? 'Uploading saved records to server...'
+                      : '$_pendingOfflineCount record${_pendingOfflineCount == 1 ? '' : 's'} queued for upload.',
                   style: const TextStyle(
                     color: Color(0xFF786200),
-                    fontSize: 11,
+                    fontSize: 11.5,
                   ),
                 ),
               ],
@@ -1809,35 +2111,38 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final isDark = themeController.isDarkMode;
 
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1E293B) : Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
-        ),
-      ),
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 16),
+      decoration: _cardDecoration(isDark),
       child: Column(
         children: [
-          Icon(
-            Icons.event_busy_rounded,
-            size: 32,
-            color: isDark ? gold : navy,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'No events scheduled today',
-            style: TextStyle(
-              fontSize: 13.5,
-              fontWeight: FontWeight.w600,
-              color: isDark ? Colors.white : Colors.black87,
+          Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              color: (isDark ? gold : navy).withValues(alpha: 0.08),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.event_available_rounded,
+              size: 24,
+              color: isDark ? gold : navy,
             ),
           ),
-          const SizedBox(height: 2),
+          const SizedBox(height: 12),
+          Text(
+            'No events scheduled for today.',
+            style: TextStyle(
+              fontSize: 14.5,
+              fontWeight: FontWeight.w700,
+              color: isDark ? Colors.white : navy,
+            ),
+          ),
+          const SizedBox(height: 4),
           const Text(
-            'Check back later or view upcoming events in Calendar.',
+            'Pull down to refresh or check upcoming events below.',
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 11.5, color: muted),
+            style: TextStyle(fontSize: 12, color: muted),
           ),
         ],
       ),
@@ -1848,172 +2153,43 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final isDark = themeController.isDarkMode;
 
     return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1E293B) : Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
-        ),
-      ),
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: _cardDecoration(isDark),
       child: Column(
         children: [
-          const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 30),
-          const SizedBox(height: 6),
-          Text(
-            _error ?? 'Error loading events.',
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 12, color: muted),
+          const Icon(
+            Icons.error_outline_rounded,
+            color: Colors.redAccent,
+            size: 30,
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
+          Text(
+            _error ?? 'Unable to load events.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              color: isDark ? Colors.white70 : muted,
+            ),
+          ),
+          const SizedBox(height: 12),
           ElevatedButton(
-            onPressed: () => _loadDashboard(),
+            onPressed: () => _loadDashboard(showMainLoader: true),
             style: ElevatedButton.styleFrom(
               backgroundColor: isDark ? gold : navy,
               foregroundColor: isDark ? navy : Colors.white,
               elevation: 0,
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(10),
               ),
             ),
-            child: const Text('Retry', style: TextStyle(fontSize: 12)),
+            child: const Text(
+              'Try Again',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
           ),
         ],
       ),
     );
-  }
-
-  Future<void> _showSummaryDetails(String label) async {
-    final events = label == 'Today' ? _todayEvents : _upcomingEvents;
-
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) {
-        final isDark = themeController.isDarkMode;
-        final Color accent = label == 'Today'
-            ? const Color(0xFF3B82F6)
-            : const Color(0xFFF59E0B);
-
-        return Dialog(
-          backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 440),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 32,
-                        height: 32,
-                        decoration: BoxDecoration(
-                          color: accent.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Icon(
-                          label == 'Today'
-                              ? Icons.today_rounded
-                              : Icons.upcoming_rounded,
-                          color: accent,
-                          size: 16,
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          '$label Events',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                            color: isDark ? Colors.white : navy,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: () => Navigator.pop(dialogContext),
-                        icon: Icon(
-                          Icons.close_rounded,
-                          color: isDark ? Colors.white70 : muted,
-                          size: 18,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: events.isEmpty
-                        ? const Center(
-                            child: Text(
-                              'No events scheduled.',
-                              style: TextStyle(color: muted, fontSize: 12),
-                            ),
-                          )
-                        : ListView.separated(
-                            itemCount: events.length,
-                            separatorBuilder: (_, _) =>
-                                const SizedBox(height: 8),
-                            itemBuilder: (_, index) {
-                              final event = events[index];
-                              return Container(
-                                padding: const EdgeInsets.all(10),
-                                decoration: BoxDecoration(
-                                  color: isDark
-                                      ? const Color(0xFF0F172A)
-                                      : const Color(0xFFF8FAFC),
-                                  borderRadius: BorderRadius.circular(10),
-                                  border: Border.all(
-                                    color: isDark
-                                        ? const Color(0xFF334155)
-                                        : const Color(0xFFE2E8F0),
-                                  ),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      event.name,
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w600,
-                                        fontSize: 13,
-                                        color: isDark ? Colors.white : navy,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      '${_formatDate(event)} • ${_getDisplayWindow(event)}',
-                                      style: const TextStyle(
-                                        fontSize: 11,
-                                        color: muted,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            },
-                          ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  String _formatDate(EventItem event) {
-    final date = event.date;
-    if (date == null) return event.eventDate;
-    return DateFormat('MMMM d, yyyy').format(date);
-  }
-
-  String _formatStatus(String value) {
-    return value.toUpperCase();
   }
 }

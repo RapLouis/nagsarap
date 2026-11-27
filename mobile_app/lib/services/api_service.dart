@@ -12,6 +12,9 @@ class ApiService {
 
   static const String _tokenKey = 'auth_token';
 
+  String? _cachedToken;
+  bool _tokenLoaded = false;
+
   late final Dio dio =
       Dio(
           BaseOptions(
@@ -65,15 +68,32 @@ class ApiService {
   }
 
   Future<void> saveToken(String token) async {
-    await _storage.write(key: _tokenKey, value: token);
+    _cachedToken = token;
+    _tokenLoaded = true;
+    try {
+      await _storage.write(key: _tokenKey, value: token);
+    } catch (_) {}
   }
 
-  Future<String?> getToken() {
-    return _storage.read(key: _tokenKey);
+  Future<String?> getToken() async {
+    if (_tokenLoaded) {
+      return _cachedToken;
+    }
+    try {
+      _cachedToken = await _storage.read(key: _tokenKey);
+    } catch (_) {
+      _cachedToken = null;
+    }
+    _tokenLoaded = true;
+    return _cachedToken;
   }
 
-  Future<void> removeToken() {
-    return _storage.delete(key: _tokenKey);
+  Future<void> removeToken() async {
+    _cachedToken = null;
+    _tokenLoaded = true;
+    try {
+      await _storage.delete(key: _tokenKey);
+    } catch (_) {}
   }
 
   Future<bool> hasToken() async {

@@ -171,16 +171,19 @@ class AttendanceService {
     required double locationAccuracy,
     required XFile centerFrame,
     required XFile turnedFrame,
+    required List<XFile> flashFrames,
+    required List<String> flashColors,
     required String challengeNonce,
     required String sessionId,
     String type = 'time_in',
   }) async {
     try {
+      final normalizedType =
+          (type == 'time_out' || type == 'out') ? 'time_out' : 'time_in';
+
       final formData = FormData.fromMap({
         'event_id': eventId,
-        'type': type,
-        'check_in_type': type,
-        'session_type': type,
+        'type': normalizedType,
         'challenge_nonce': challengeNonce,
         'session_id': sessionId,
         'latitude': latitude,
@@ -244,6 +247,7 @@ class AttendanceService {
     required DateTime attendanceTime,
     required XFile centerFrame,
     required XFile turnedFrame,
+    required List<XFile> flashFrames,
     required String livenessDirection,
     String type = 'time_in',
   }) async {
@@ -254,7 +258,8 @@ class AttendanceService {
         return const AttendanceResult(
           success: false,
           code: 'OFFLINE_ALREADY_PENDING',
-          message: 'An offline attendance for this event is already waiting to sync.',
+          message:
+              'An offline attendance for this event is already waiting to sync.',
         );
       }
 
@@ -266,6 +271,7 @@ class AttendanceService {
         attendanceTime: attendanceTime,
         centerFrame: centerFrame,
         turnedFrame: turnedFrame,
+        flashFrames: flashFrames,
         livenessDirection: livenessDirection,
         sessionType: type,
       );
@@ -304,6 +310,11 @@ class AttendanceService {
     }
 
     try {
+      final normalizedType =
+          (record.sessionType == 'time_out' || record.sessionType == 'out')
+              ? 'time_out'
+              : 'time_in';
+
       final formData = FormData.fromMap({
         'event_id': record.eventId,
         'attendance_uuid': record.uuid,
@@ -312,8 +323,8 @@ class AttendanceService {
         'longitude': record.longitude,
         'location_accuracy': record.locationAccuracy,
         'liveness_direction': record.livenessDirection,
-        'session_type': record.sessionType,
-        'type': record.sessionType,
+        'type': normalizedType,
+        'session_type': normalizedType,
         'center_frame': await MultipartFile.fromFile(
           record.centerFramePath,
           filename: 'offline-center.jpg',
@@ -365,6 +376,10 @@ class AttendanceService {
     }
   }
 
+  Future<OfflineSyncResult> syncPendingOfflineAttendance() {
+    return syncPendingAttendances();
+  }
+
   Future<OfflineSyncResult> syncPendingAttendances() {
     final existing = _activeOfflineSync;
 
@@ -395,7 +410,12 @@ class AttendanceService {
     final records = await _offlineStorage.getPendingAttendances();
 
     if (records.isEmpty) {
-      return const OfflineSyncResult(total: 0, synced: 0, remaining: 0);
+      return const OfflineSyncResult(
+        total: 0,
+        synced: 0,
+        remaining: 0,
+        message: 'No pending offline attendance records to sync.',
+      );
     }
 
     var synced = 0;
@@ -412,6 +432,11 @@ class AttendanceService {
       if (result.networkUnavailable) {
         break;
       }
+
+      debugPrint(
+        'OFFLINE SYNC REJECTED BY SERVER (${result.message}). Cleaning up SQLite.',
+      );
+      await _offlineStorage.deletePending(record);
     }
 
     final remaining = await _offlineStorage.pendingCount();
@@ -420,6 +445,8 @@ class AttendanceService {
       total: records.length,
       synced: synced,
       remaining: remaining,
+      message:
+          'Processed $synced of ${records.length} records. Remaining: $remaining',
     );
   }
 
@@ -562,9 +589,11 @@ class OfflineSyncResult {
     required this.total,
     required this.synced,
     required this.remaining,
+    this.message = 'Offline sync completed.',
   });
 
   final int total;
   final int synced;
   final int remaining;
+  final String message;
 }

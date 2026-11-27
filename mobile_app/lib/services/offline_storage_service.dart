@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
 import 'package:camera/camera.dart';
 import 'package:path_provider/path_provider.dart';
+
+typedef JsonMap = Map<String, dynamic>;
 
 class PendingAttendanceRecord {
   const PendingAttendanceRecord({
@@ -15,6 +18,7 @@ class PendingAttendanceRecord {
     required this.locationAccuracy,
     required this.centerFramePath,
     required this.turnedFramePath,
+    required this.flashFramePaths,
     required this.livenessDirection,
     this.sessionType = 'time_in',
   });
@@ -29,10 +33,16 @@ class PendingAttendanceRecord {
 
   final String centerFramePath;
   final String turnedFramePath;
+  final List<String> flashFramePaths;
   final String livenessDirection;
   final String sessionType;
 
-  factory PendingAttendanceRecord.fromJson(Map<String, dynamic> json) {
+  factory PendingAttendanceRecord.fromJson(JsonMap json) {
+    List<String> flashes = [];
+    if (json['flash_frame_paths'] is List) {
+      flashes = List<String>.from(json['flash_frame_paths']);
+    }
+
     return PendingAttendanceRecord(
       uuid: json['uuid'].toString(),
       eventId: _readInt(json['event_id']),
@@ -42,6 +52,7 @@ class PendingAttendanceRecord {
       locationAccuracy: _readDouble(json['location_accuracy']),
       centerFramePath: json['center_frame_path']?.toString() ?? '',
       turnedFramePath: json['turned_frame_path']?.toString() ?? '',
+      flashFramePaths: flashes,
       livenessDirection: json['liveness_direction']?.toString() == 'right'
           ? 'right'
           : 'left',
@@ -51,8 +62,8 @@ class PendingAttendanceRecord {
     );
   }
 
-  Map<String, dynamic> toJson() {
-    return <String, dynamic>{
+  JsonMap toJson() {
+    return {
       'uuid': uuid,
       'event_id': eventId,
       'attendance_time': attendanceTime,
@@ -61,6 +72,7 @@ class PendingAttendanceRecord {
       'location_accuracy': locationAccuracy,
       'center_frame_path': centerFramePath,
       'turned_frame_path': turnedFramePath,
+      'flash_frame_paths': flashFramePaths,
       'liveness_direction': livenessDirection,
       'session_type': sessionType,
     };
@@ -71,8 +83,18 @@ class PendingAttendanceRecord {
       return false;
     }
 
-    return File(centerFramePath).existsSync() &&
-        File(turnedFramePath).existsSync();
+    if (!File(centerFramePath).existsSync() ||
+        !File(turnedFramePath).existsSync()) {
+      return false;
+    }
+
+    for (final path in flashFramePaths) {
+      if (!File(path).existsSync()) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   static int _readInt(dynamic value) {
@@ -120,11 +142,11 @@ class OfflineStorageService {
     return pending;
   }
 
-  Future<void> cacheEvents(List<Map<String, dynamic>> events) async {
+  Future<void> cacheEvents(List<JsonMap> events) async {
     final root = await _rootDirectory();
     final file = File('${root.path}/$_eventsFileName');
 
-    final payload = <String, dynamic>{
+    final payload = {
       'cached_at': DateTime.now().toUtc().toIso8601String(),
       'events': events,
     };
@@ -132,36 +154,44 @@ class OfflineStorageService {
     await file.writeAsString(jsonEncode(payload), flush: true);
   }
 
-  Future<List<Map<String, dynamic>>> loadCachedEvents() async {
+  Future<List<JsonMap>> loadCachedEvents() async {
     try {
       final root = await _rootDirectory();
       final file = File('${root.path}/$_eventsFileName');
 
-      if (!await file.exists()) return <Map<String, dynamic>>[];
+      if (!await file.exists()) {
+        return [];
+      }
 
       final raw = await file.readAsString();
-      if (raw.trim().isEmpty) return <Map<String, dynamic>>[];
+      if (raw.trim().isEmpty) {
+        return [];
+      }
 
       final decoded = jsonDecode(raw);
-      if (decoded is! Map) return <Map<String, dynamic>>[];
+      if (decoded is! Map) {
+        return [];
+      }
 
       final rawEvents = Map<String, dynamic>.from(decoded)['events'];
-      if (rawEvents is! List) return <Map<String, dynamic>>[];
+      if (rawEvents is! List) {
+        return [];
+      }
 
       return rawEvents
-          .whereType<Map>()
+          .whereType()
           .map((item) => Map<String, dynamic>.from(item))
           .toList();
     } catch (_) {
-      return <Map<String, dynamic>>[];
+      return [];
     }
   }
 
-  Future<void> cacheHistory(List<Map<String, dynamic>> history) async {
+  Future<void> cacheHistory(List<JsonMap> history) async {
     final root = await _rootDirectory();
     final file = File('${root.path}/$_historyFileName');
 
-    final payload = <String, dynamic>{
+    final payload = {
       'cached_at': DateTime.now().toUtc().toIso8601String(),
       'history': history,
     };
@@ -169,28 +199,36 @@ class OfflineStorageService {
     await file.writeAsString(jsonEncode(payload), flush: true);
   }
 
-  Future<List<Map<String, dynamic>>> loadCachedHistory() async {
+  Future<List<JsonMap>> loadCachedHistory() async {
     try {
       final root = await _rootDirectory();
       final file = File('${root.path}/$_historyFileName');
 
-      if (!await file.exists()) return <Map<String, dynamic>>[];
+      if (!await file.exists()) {
+        return [];
+      }
 
       final raw = await file.readAsString();
-      if (raw.trim().isEmpty) return <Map<String, dynamic>>[];
+      if (raw.trim().isEmpty) {
+        return [];
+      }
 
       final decoded = jsonDecode(raw);
-      if (decoded is! Map) return <Map<String, dynamic>>[];
+      if (decoded is! Map) {
+        return [];
+      }
 
       final rawHistory = Map<String, dynamic>.from(decoded)['history'];
-      if (rawHistory is! List) return <Map<String, dynamic>>[];
+      if (rawHistory is! List) {
+        return [];
+      }
 
       return rawHistory
-          .whereType<Map>()
+          .whereType()
           .map((item) => Map<String, dynamic>.from(item))
           .toList();
     } catch (_) {
-      return <Map<String, dynamic>>[];
+      return [];
     }
   }
 
@@ -207,6 +245,7 @@ class OfflineStorageService {
     required DateTime attendanceTime,
     required XFile centerFrame,
     required XFile turnedFrame,
+    required List<XFile> flashFrames,
     required String livenessDirection,
     String sessionType = 'time_in',
   }) async {
@@ -219,15 +258,24 @@ class OfflineStorageService {
     try {
       final centerDirectory = Directory('${recordDirectory.path}/center');
       final turnDirectory = Directory('${recordDirectory.path}/turn');
+      final flashDirectory = Directory('${recordDirectory.path}/flash');
 
       await centerDirectory.create(recursive: true);
       await turnDirectory.create(recursive: true);
+      await flashDirectory.create(recursive: true);
 
       final centerPath = '${centerDirectory.path}/center.jpg';
       final turnPath = '${turnDirectory.path}/turned.jpg';
 
       await File(centerFrame.path).copy(centerPath);
       await File(turnedFrame.path).copy(turnPath);
+
+      final List<String> flashPaths = [];
+      for (int i = 0; i < flashFrames.length; i++) {
+        final fPath = '${flashDirectory.path}/flash_$i.jpg';
+        await File(flashFrames[i].path).copy(fPath);
+        flashPaths.add(fPath);
+      }
 
       final record = PendingAttendanceRecord(
         uuid: uuid,
@@ -238,6 +286,7 @@ class OfflineStorageService {
         locationAccuracy: locationAccuracy,
         centerFramePath: centerPath,
         turnedFramePath: turnPath,
+        flashFramePaths: flashPaths,
         livenessDirection: livenessDirection == 'right' ? 'right' : 'left',
         sessionType: sessionType,
       );
@@ -282,7 +331,9 @@ class OfflineStorageService {
     return records;
   }
 
-  Future<int> pendingCount() async => (await getPendingAttendances()).length;
+  Future<int> pendingCount() async {
+    return (await getPendingAttendances()).length;
+  }
 
   Future<void> deletePendingByUuid(String uuid) async {
     final pending = await _pendingDirectory();

@@ -79,7 +79,7 @@ class AttendanceController extends Controller
             ], 422);
         }
 
-        // 1. Strict Time Slot Window Alignment (Supports both Time-In and Time-Out)
+        // 1. Strict Server-Side Time Window Alignment
         $appTimezone = config('app.timezone', 'Asia/Manila');
         $now = Carbon::now($appTimezone);
         $today = $now->toDateString();
@@ -211,7 +211,7 @@ class AttendanceController extends Controller
             ], 422);
         }
 
-        // 5. Save Attendance Record
+        // 5. Save Attendance Record (Server Clock is Enforced)
         try {
             $attendance = $service->record(
                 user: $user,
@@ -257,6 +257,7 @@ class AttendanceController extends Controller
                     'distance_meters' => $attendance->distance_from_event,
                     'allowed_radius_meters' => $event->radius_meters,
                 ],
+                'server_time' => $now->toIso8601String(),
             ],
         ]);
     }
@@ -277,6 +278,15 @@ class AttendanceController extends Controller
             'center_frame' => ['required', 'image', 'mimes:jpeg,jpg,png', 'max:5048'],
             'turned_frame' => ['required', 'image', 'mimes:jpeg,jpg,png', 'max:5048'],
         ]);
+
+        $appTimezone = config('app.timezone', 'Asia/Manila');
+        $serverNow = Carbon::now($appTimezone);
+        $submittedTime = Carbon::parse($validated['attendance_time'], $appTimezone);
+
+        // Anti-Spoofing: Cap future timestamps back to server time if phone clock was set ahead
+        if ($submittedTime->greaterThan($serverNow->copy()->addMinutes(5))) {
+            $validated['attendance_time'] = $serverNow->toDateTimeString();
+        }
 
         $user = $request->user();
         $event = Event::findOrFail($validated['event_id']);

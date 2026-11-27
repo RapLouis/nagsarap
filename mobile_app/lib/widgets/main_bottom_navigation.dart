@@ -25,7 +25,6 @@ class MainBottomNavigation extends StatelessWidget {
     int currentIndex = -1,
     VoidCallback? onPressed,
   }) {
-    // Hide the scanner FAB if not on the Home screen (index 0)
     if (currentIndex != 0) {
       return const SizedBox.shrink();
     }
@@ -57,122 +56,142 @@ class MainBottomNavigation extends StatelessWidget {
     );
   }
 
+  void _navigateToHome(BuildContext context) {
+    if (currentIndex == 0) {
+      onHomeRefresh?.call();
+      return;
+    }
+
+    final navigator = Navigator.of(context);
+    if (navigator.canPop()) {
+      navigator.popUntil((route) => route.isFirst);
+    } else {
+      navigator.pushReplacement(
+        MaterialPageRoute<void>(
+          builder: (_) => const HomeScreen(),
+        ),
+      );
+    }
+  }
+
+  void _navigateToTab(BuildContext context, int targetIndex, Widget screen) {
+    if (currentIndex == targetIndex) return;
+
+    final route = MaterialPageRoute<void>(builder: (_) => screen);
+    final navigator = Navigator.of(context);
+
+    if (currentIndex == 0) {
+      navigator.push(route);
+    } else {
+      navigator.pushReplacement(route);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final isDark = themeController.isDarkMode;
-    final bottomInset = MediaQuery.paddingOf(context).bottom;
-    final backgroundColor = isDark ? const Color(0xFF1E293B) : Colors.white;
-    final unselectedColor =
-        isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
-    final selectedColor =
-        isDark ? const Color(0xFFFFC800) : const Color(0xFF080878);
+    return ListenableBuilder(
+      listenable: themeController,
+      builder: (context, _) {
+        final isDark = themeController.isDarkMode;
+        final bottomInset = MediaQuery.paddingOf(context).bottom;
+        final backgroundColor =
+            isDark ? const Color(0xFF1E293B) : Colors.white;
+        final unselectedColor =
+            isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
+        final selectedColor =
+            isDark ? const Color(0xFFFFC800) : const Color(0xFF080878);
 
-    return Container(
-      decoration: BoxDecoration(
-        color: backgroundColor,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.06),
-            blurRadius: 16,
-            offset: const Offset(0, -4),
+        return Container(
+          decoration: BoxDecoration(
+            color: backgroundColor,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.06),
+                blurRadius: 16,
+                offset: const Offset(0, -4),
+              ),
+            ],
           ),
-        ],
-      ),
-      child: SafeArea(
-        top: false,
-        bottom: true,
-        child: Padding(
-          padding: EdgeInsets.only(
-            top: 8,
-            bottom: bottomInset > 0 ? 0 : 6,
-          ),
-          child: SizedBox(
-            height: 60,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _navItem(
-                  context,
-                  icon: Icons.grid_view_rounded,
-                  label: 'Home',
-                  isSelected: currentIndex == 0,
-                  selectedColor: selectedColor,
-                  unselectedColor: unselectedColor,
-                  onTap: () {
-                    if (currentIndex == 0) {
-                      onHomeRefresh?.call();
-                    } else {
-                      Navigator.of(context).pushAndRemoveUntil(
-                        MaterialPageRoute<void>(
-                          builder: (_) => const HomeScreen(),
+          child: SafeArea(
+            top: false,
+            bottom: true,
+            child: Padding(
+              padding: EdgeInsets.only(
+                top: 6,
+                bottom: bottomInset > 0 ? 0 : 6,
+              ),
+              child: SizedBox(
+                height: 60,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: _navItem(
+                        context,
+                        icon: Icons.grid_view_rounded,
+                        label: 'Home',
+                        isSelected: currentIndex == 0,
+                        selectedColor: selectedColor,
+                        unselectedColor: unselectedColor,
+                        onTap: () => _navigateToHome(context),
+                      ),
+                    ),
+                    Expanded(
+                      child: _navItem(
+                        context,
+                        icon: Icons.notifications_none_rounded,
+                        selectedIcon: Icons.notifications_rounded,
+                        label: 'Notifications',
+                        isSelected: currentIndex == 1,
+                        badgeCount: notificationBadge,
+                        selectedColor: selectedColor,
+                        unselectedColor: unselectedColor,
+                        onTap: () => _navigateToTab(
+                          context,
+                          1,
+                          const NotificationsScreen(),
                         ),
-                        (route) => false,
-                      );
-                    }
-                  },
-                ),
-                _navItem(
-                  context,
-                  icon: Icons.notifications_none_rounded,
-                  selectedIcon: Icons.notifications_rounded,
-                  label: 'Notifications',
-                  isSelected: currentIndex == 1,
-                  badgeCount: notificationBadge,
-                  selectedColor: selectedColor,
-                  unselectedColor: unselectedColor,
-                  onTap: () {
-                    if (currentIndex != 1) {
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => const NotificationsScreen(),
+                      ),
+                    ),
+                    if (currentIndex == 0) const SizedBox(width: 56),
+                    Expanded(
+                      child: _navItem(
+                        context,
+                        icon: Icons.calendar_today_rounded,
+                        selectedIcon: Icons.calendar_month_rounded,
+                        label: 'Calendar',
+                        isSelected: currentIndex == 2,
+                        selectedColor: selectedColor,
+                        unselectedColor: unselectedColor,
+                        onTap: () => _navigateToTab(
+                          context,
+                          2,
+                          const CalendarScreen(),
                         ),
-                      );
-                    }
-                  },
-                ),
-                // Only keep spacing gap for Floating Action Button on Home Screen
-                if (currentIndex == 0) const SizedBox(width: 48),
-                _navItem(
-                  context,
-                  icon: Icons.calendar_today_rounded,
-                  selectedIcon: Icons.calendar_month_rounded,
-                  label: 'Calendar',
-                  isSelected: currentIndex == 2,
-                  selectedColor: selectedColor,
-                  unselectedColor: unselectedColor,
-                  onTap: () {
-                    if (currentIndex != 2) {
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => const CalendarScreen(),
+                      ),
+                    ),
+                    Expanded(
+                      child: _navItem(
+                        context,
+                        icon: Icons.assignment_outlined,
+                        selectedIcon: Icons.assignment_rounded,
+                        label: 'Sanction',
+                        isSelected: currentIndex == 3,
+                        selectedColor: selectedColor,
+                        unselectedColor: unselectedColor,
+                        onTap: () => _navigateToTab(
+                          context,
+                          3,
+                          const SanctionsScreen(),
                         ),
-                      );
-                    }
-                  },
+                      ),
+                    ),
+                  ],
                 ),
-                _navItem(
-                  context,
-                  icon: Icons.assignment_outlined,
-                  selectedIcon: Icons.assignment_rounded,
-                  label: 'Sanction',
-                  isSelected: currentIndex == 3,
-                  selectedColor: selectedColor,
-                  unselectedColor: unselectedColor,
-                  onTap: () {
-                    if (currentIndex != 3) {
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => const SanctionsScreen(),
-                        ),
-                      );
-                    }
-                  },
-                ),
-              ],
+              ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -190,57 +209,61 @@ class MainBottomNavigation extends StatelessWidget {
     final color = isSelected ? selectedColor : unselectedColor;
     final activeIcon = isSelected ? (selectedIcon ?? icon) : icon;
 
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Icon(activeIcon, color: color, size: 22),
-                if (badgeCount > 0)
-                  Positioned(
-                    right: -5,
-                    top: -3,
-                    child: Container(
-                      padding: const EdgeInsets.all(3),
-                      decoration: const BoxDecoration(
-                        color: Color(0xFFEF4444),
-                        shape: BoxShape.circle,
-                      ),
-                      constraints: const BoxConstraints(
-                        minWidth: 14,
-                        minHeight: 14,
-                      ),
-                      child: Text(
-                        '$badgeCount',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 8,
-                          fontWeight: FontWeight.w800,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: SizedBox(
+          height: 60,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Icon(activeIcon, color: color, size: 22),
+                  if (badgeCount > 0)
+                    Positioned(
+                      right: -5,
+                      top: -3,
+                      child: Container(
+                        padding: const EdgeInsets.all(3),
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFEF4444),
+                          shape: BoxShape.circle,
                         ),
-                        textAlign: TextAlign.center,
+                        constraints: const BoxConstraints(
+                          minWidth: 14,
+                          minHeight: 14,
+                        ),
+                        child: Text(
+                          '$badgeCount',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 8,
+                            fontWeight: FontWeight.w800,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
                       ),
                     ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: TextStyle(
-                color: color,
-                fontSize: 10.5,
-                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                letterSpacing: -0.1,
+                ],
               ),
-            ),
-          ],
+              const SizedBox(height: 4),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 10.5,
+                  fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                  letterSpacing: -0.1,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
