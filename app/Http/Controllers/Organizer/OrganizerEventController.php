@@ -12,6 +12,45 @@ use Carbon\Carbon;
 
 class OrganizerEventController extends Controller
 {
+    /**
+     * Normalize slot payloads so disabled morning/afternoon sessions have null time windows.
+     */
+    private function sanitizeSlots(array $slots): array
+    {
+        return array_map(function ($slot) {
+            $morningEnabled = array_key_exists('morning_enabled', $slot)
+                ? (bool) $slot['morning_enabled']
+                : (array_key_exists('has_morning', $slot)
+                    ? (bool) $slot['has_morning']
+                    : (!empty($slot['morning_time_in_start']) || !empty($slot['time_in_start'])));
+
+            $afternoonEnabled = array_key_exists('afternoon_enabled', $slot)
+                ? (bool) $slot['afternoon_enabled']
+                : (array_key_exists('has_afternoon', $slot)
+                    ? (bool) $slot['has_afternoon']
+                    : (!empty($slot['afternoon_time_in_start']) || !empty($slot['afternoon_time_out_start'])));
+
+            return [
+                'morning_enabled'          => $morningEnabled,
+                'afternoon_enabled'        => $afternoonEnabled,
+                'has_morning'              => $morningEnabled,
+                'has_afternoon'            => $afternoonEnabled,
+                'morning_time_in_start'    => $morningEnabled ? ($slot['morning_time_in_start'] ?? $slot['time_in_start'] ?? null) : null,
+                'morning_time_in_end'      => $morningEnabled ? ($slot['morning_time_in_end'] ?? $slot['time_in_end'] ?? null) : null,
+                'morning_time_out_start'   => $morningEnabled ? ($slot['morning_time_out_start'] ?? $slot['time_out_start'] ?? null) : null,
+                'morning_time_out_end'     => $morningEnabled ? ($slot['morning_time_out_end'] ?? $slot['time_out_end'] ?? null) : null,
+                'afternoon_time_in_start'  => $afternoonEnabled ? ($slot['afternoon_time_in_start'] ?? null) : null,
+                'afternoon_time_in_end'    => $afternoonEnabled ? ($slot['afternoon_time_in_end'] ?? null) : null,
+                'afternoon_time_out_start' => $afternoonEnabled ? ($slot['afternoon_time_out_start'] ?? null) : null,
+                'afternoon_time_out_end'   => $afternoonEnabled ? ($slot['afternoon_time_out_end'] ?? null) : null,
+                'time_in_start'            => $morningEnabled ? ($slot['time_in_start'] ?? $slot['morning_time_in_start'] ?? null) : null,
+                'time_in_end'              => $morningEnabled ? ($slot['time_in_end'] ?? $slot['morning_time_in_end'] ?? null) : null,
+                'time_out_start'           => $morningEnabled ? ($slot['time_out_start'] ?? $slot['morning_time_out_start'] ?? null) : null,
+                'time_out_end'             => $morningEnabled ? ($slot['time_out_end'] ?? $slot['morning_time_out_end'] ?? null) : null,
+            ];
+        }, $slots);
+    }
+
     public function index(Request $request)
     {
         $userId = $request->user()->id;
@@ -103,22 +142,36 @@ class OrganizerEventController extends Controller
     public function store(Request $request)
     {
         $validated = $request->validate([
-            'title' => 'required|string|max:255',
-            'description' => 'nullable|string',
-            'location' => 'nullable|string',
-            'is_geofenced' => 'boolean',
-            'geofence_type' => 'in:radius,polygon',
-            'latitude' => 'nullable|numeric',
-            'longitude' => 'nullable|numeric',
-            'radius_meters' => 'integer',
-            'geofence_polygon' => 'nullable|array',
-            'target_scope' => 'in:all,section',
-            'target_sections' => 'nullable|array',
-            'event_date' => 'required|date',
-            'event_end_date' => 'nullable|date|after_or_equal:event_date',
-            'schedules' => 'nullable|array',
-            'is_active' => 'boolean',
-            'official_letter' => 'required|file|mimes:pdf,jpg,jpeg,png|max:5120', // Max 5MB letter file
+            'title'                                       => 'required|string|max:255',
+            'description'                                 => 'nullable|string',
+            'location'                                    => 'nullable|string',
+            'is_geofenced'                                => 'boolean',
+            'geofence_type'                               => 'in:radius,polygon',
+            'latitude'                                    => 'nullable|numeric',
+            'longitude'                                   => 'nullable|numeric',
+            'radius_meters'                               => 'integer',
+            'geofence_polygon'                            => 'nullable|array',
+            'target_scope'                                => 'in:all,section',
+            'target_sections'                             => 'nullable|array',
+            'event_date'                                  => 'required|date',
+            'event_end_date'                              => 'nullable|date|after_or_equal:event_date',
+            'schedules'                                   => 'nullable|array',
+            'schedules.*.date'                            => ['required', 'string'],
+            'schedules.*.slots'                           => ['required', 'array', 'min:1'],
+            'schedules.*.slots.*.morning_enabled'         => ['nullable', 'boolean'],
+            'schedules.*.slots.*.afternoon_enabled'       => ['nullable', 'boolean'],
+            'schedules.*.slots.*.has_morning'             => ['nullable', 'boolean'],
+            'schedules.*.slots.*.has_afternoon'           => ['nullable', 'boolean'],
+            'schedules.*.slots.*.morning_time_in_start'   => ['nullable'],
+            'schedules.*.slots.*.morning_time_in_end'     => ['nullable'],
+            'schedules.*.slots.*.morning_time_out_start'  => ['nullable'],
+            'schedules.*.slots.*.morning_time_out_end'    => ['nullable'],
+            'schedules.*.slots.*.afternoon_time_in_start' => ['nullable'],
+            'schedules.*.slots.*.afternoon_time_in_end'   => ['nullable'],
+            'schedules.*.slots.*.afternoon_time_out_start'=> ['nullable'],
+            'schedules.*.slots.*.afternoon_time_out_end'  => ['nullable'],
+            'is_active'                                   => 'boolean',
+            'official_letter'                             => 'required|file|mimes:pdf,jpg,jpeg,png|max:5120', // Max 5MB letter file
         ]);
 
         // Handle Official Letter Upload
@@ -136,12 +189,12 @@ class OrganizerEventController extends Controller
 
         $event = Event::create($validated);
 
-        // Store schedule days & slots into event_days relation table
+        // Store schedule days & slots into event_days relation table with sanitized slot data
         if (!empty($schedules)) {
             foreach ($schedules as $sched) {
                 $event->days()->create([
                     'event_date' => $sched['date'] ?? $validated['event_date'],
-                    'slots' => $sched['slots'] ?? [],
+                    'slots' => $this->sanitizeSlots($sched['slots'] ?? []),
                 ]);
             }
         }
@@ -156,22 +209,36 @@ class OrganizerEventController extends Controller
         }
 
         $validated = $request->validate([
-            'title' => 'required|string|max:255',
-            'description' => 'nullable|string',
-            'location' => 'nullable|string',
-            'is_geofenced' => 'boolean',
-            'geofence_type' => 'in:radius,polygon',
-            'latitude' => 'nullable|numeric',
-            'longitude' => 'nullable|numeric',
-            'radius_meters' => 'integer',
-            'geofence_polygon' => 'nullable|array',
-            'target_scope' => 'in:all,section',
-            'target_sections' => 'nullable|array',
-            'event_date' => 'required|date',
-            'event_end_date' => 'nullable|date|after_or_equal:event_date',
-            'schedules' => 'nullable|array',
-            'is_active' => 'boolean',
-            'official_letter' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
+            'title'                                       => 'required|string|max:255',
+            'description'                                 => 'nullable|string',
+            'location'                                    => 'nullable|string',
+            'is_geofenced'                                => 'boolean',
+            'geofence_type'                               => 'in:radius,polygon',
+            'latitude'                                    => 'nullable|numeric',
+            'longitude'                                   => 'nullable|numeric',
+            'radius_meters'                               => 'integer',
+            'geofence_polygon'                            => 'nullable|array',
+            'target_scope'                                => 'in:all,section',
+            'target_sections'                             => 'nullable|array',
+            'event_date'                                  => 'required|date',
+            'event_end_date'                              => 'nullable|date|after_or_equal:event_date',
+            'schedules'                                   => 'nullable|array',
+            'schedules.*.date'                            => ['required', 'string'],
+            'schedules.*.slots'                           => ['required', 'array', 'min:1'],
+            'schedules.*.slots.*.morning_enabled'         => ['nullable', 'boolean'],
+            'schedules.*.slots.*.afternoon_enabled'       => ['nullable', 'boolean'],
+            'schedules.*.slots.*.has_morning'             => ['nullable', 'boolean'],
+            'schedules.*.slots.*.has_afternoon'           => ['nullable', 'boolean'],
+            'schedules.*.slots.*.morning_time_in_start'   => ['nullable'],
+            'schedules.*.slots.*.morning_time_in_end'     => ['nullable'],
+            'schedules.*.slots.*.morning_time_out_start'  => ['nullable'],
+            'schedules.*.slots.*.morning_time_out_end'    => ['nullable'],
+            'schedules.*.slots.*.afternoon_time_in_start' => ['nullable'],
+            'schedules.*.slots.*.afternoon_time_in_end'   => ['nullable'],
+            'schedules.*.slots.*.afternoon_time_out_start'=> ['nullable'],
+            'schedules.*.slots.*.afternoon_time_out_end'  => ['nullable'],
+            'is_active'                                   => 'boolean',
+            'official_letter'                             => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
         ]);
 
         // Handle replacement of Official Letter if a new file is provided
@@ -195,7 +262,7 @@ class OrganizerEventController extends Controller
             foreach ($schedules as $sched) {
                 $event->days()->create([
                     'event_date' => $sched['date'] ?? $validated['event_date'],
-                    'slots' => $sched['slots'] ?? [],
+                    'slots' => $this->sanitizeSlots($sched['slots'] ?? []),
                 ]);
             }
         }

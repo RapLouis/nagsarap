@@ -4,11 +4,11 @@ namespace App\Http\Controllers;
 
 use App\Models\Attendance;
 use App\Models\Event;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
-use Carbon\Carbon;
 
 class StudentDashboardController extends Controller
 {
@@ -53,42 +53,29 @@ class StudentDashboardController extends Controller
         };
 
         // Index student attendances by event_id, date, slot_index, and checkpoint_key
-        $attendanceMap = [];
-        if ($student && $student->attendances) {
-            foreach ($student->attendances as $attendance) {
-                $dateStr = Carbon::parse($attendance->event_date)->format('Y-m-d');
-                $key = $attendance->checkpoint_key ?? ($attendance->type === 'in' ? Attendance::MORNING_TIME_IN : Attendance::MORNING_TIME_OUT);
-                $attendanceMap[$attendance->event_id][$dateStr][$attendance->slot_index][$key] = true;
-            }
-        }
+        $attendanceMap = $this->buildAttendanceMap($student);
 
-        // 1. Fetch active events for today with structured slot schedules and 4-checkpoint statuses
+        // 1. Fetch active events for today with structured slot schedules and active checkpoint statuses
         $activeEvents = Event::ongoing()
             ->where($studentEventScope)
             ->with('days')
             ->get()
-            ->transform(function ($event) use ($attendanceMap, $today) {
+            ->transform(function ($event) use ($attendanceMap) {
                 $event->schedules = $event->days->map(function ($day) use ($event, $attendanceMap) {
-                    $dateStr = $day->event_date instanceof Carbon ? $day->event_date->format('Y-m-d') : Carbon::parse($day->event_date)->format('Y-m-d');
-                    
-                    $slotsWithStatus = collect($day->slots ?? [])->map(function ($slot, $index) use ($event, $dateStr, $attendanceMap) {
-                        return array_merge($slot, [
-                            'slot_index'           => $index,
-                            'morning_time_in'      => $attendanceMap[$event->event_id][$dateStr][$index][Attendance::MORNING_TIME_IN] ?? false,
-                            'morning_time_out'     => $attendanceMap[$event->event_id][$dateStr][$index][Attendance::MORNING_TIME_OUT] ?? false,
-                            'afternoon_time_in'    => $attendanceMap[$event->event_id][$dateStr][$index][Attendance::AFTERNOON_TIME_IN] ?? false,
-                            'afternoon_time_out'   => $attendanceMap[$event->event_id][$dateStr][$index][Attendance::AFTERNOON_TIME_OUT] ?? false,
-                            // Legacy backward compatibility flags
-                            'checked_in'           => ($attendanceMap[$event->event_id][$dateStr][$index][Attendance::MORNING_TIME_IN] ?? false) || ($attendanceMap[$event->event_id][$dateStr][$index][Attendance::AFTERNOON_TIME_IN] ?? false),
-                            'checked_out'          => ($attendanceMap[$event->event_id][$dateStr][$index][Attendance::MORNING_TIME_OUT] ?? false) || ($attendanceMap[$event->event_id][$dateStr][$index][Attendance::AFTERNOON_TIME_OUT] ?? false),
-                        ]);
-                    });
+                    $dateStr = $day->event_date instanceof Carbon
+                        ? $day->event_date->format('Y-m-d')
+                        : Carbon::parse($day->event_date)->format('Y-m-d');
+
+                    $formatted = $this->formatDaySlots($day->slots ?? [], $event->event_id, $dateStr, $attendanceMap);
 
                     return [
-                        'date'  => $dateStr,
-                        'slots' => $slotsWithStatus->toArray(),
+                        'date'              => $dateStr,
+                        'slots'             => $formatted['slots'],
+                        'total_checkpoints' => $formatted['total_checkpoints'],
+                        'attended_count'    => $formatted['attended_count'],
                     ];
                 });
+
                 return $event;
             });
 
@@ -97,7 +84,7 @@ class StudentDashboardController extends Controller
             ->where($studentEventScope)
             ->get()
             ->map(function ($event) use ($today) {
-                $futureDays = $event->days->filter(fn($day) => Carbon::parse($day->event_date)->toDateString() > $today);
+                $futureDays = $event->days->filter(fn ($day) => Carbon::parse($day->event_date)->toDateString() > $today);
                 if ($futureDays->isEmpty()) {
                     return null;
                 }
@@ -119,58 +106,7 @@ class StudentDashboardController extends Controller
             })->filter()->values();
 
         // 3. Format calendar events for the dashboard preview widget
-        $calendarEvents = Event::with('days')
-            ->where($studentEventScope)
-            ->get()
-            ->map(function ($event) use ($attendanceMap, $today) {
-                $schedules = $event->days->isNotEmpty() 
-                    ? $event->days->map(function ($day) use ($event, $attendanceMap, $today) {
-                        $dateStr = $day->event_date instanceof Carbon ? $day->event_date->format('Y-m-d') : Carbon::parse($day->event_date)->format('Y-m-d');
-                        
-                        $slotsWithStatus = collect($day->slots ?? [])->map(function ($slot, $index) use ($event, $dateStr, $attendanceMap) {
-                            return array_merge($slot, [
-                                'slot_index'         => $index,
-                                'morning_time_in'    => $attendanceMap[$event->event_id][$dateStr][$index][Attendance::MORNING_TIME_IN] ?? false,
-                                'morning_time_out'   => $attendanceMap[$event->event_id][$dateStr][$index][Attendance::MORNING_TIME_OUT] ?? false,
-                                'afternoon_time_in'  => $attendanceMap[$event->event_id][$dateStr][$index][Attendance::AFTERNOON_TIME_IN] ?? false,
-                                'afternoon_time_out' => $attendanceMap[$event->event_id][$dateStr][$index][Attendance::AFTERNOON_TIME_OUT] ?? false,
-                                'checked_in'         => ($attendanceMap[$event->event_id][$dateStr][$index][Attendance::MORNING_TIME_IN] ?? false) || ($attendanceMap[$event->event_id][$dateStr][$index][Attendance::AFTERNOON_TIME_IN] ?? false),
-                                'checked_out'        => ($attendanceMap[$event->event_id][$dateStr][$index][Attendance::MORNING_TIME_OUT] ?? false) || ($attendanceMap[$event->event_id][$dateStr][$index][Attendance::AFTERNOON_TIME_OUT] ?? false),
-                            ]);
-                        });
-
-                        $totalCheckpoints = count($day->slots ?? []) * 4;
-                        $attendedCount = 0;
-                        foreach ($day->slots ?? [] as $index => $_) {
-                            foreach (Attendance::CHECKPOINTS as $cp) {
-                                if ($attendanceMap[$event->event_id][$dateStr][$index][$cp] ?? false) {
-                                    $attendedCount++;
-                                }
-                            }
-                        }
-
-                        $status = 'upcoming';
-                        if ($dateStr < $today) {
-                            $status = $attendedCount >= $totalCheckpoints && $totalCheckpoints > 0 ? 'attended' : ($attendedCount > 0 ? 'partial' : 'absent');
-                        } elseif ($dateStr === $today) {
-                            $status = $attendedCount > 0 ? 'partial' : 'active';
-                        }
-
-                        return [
-                            'date'       => $dateStr,
-                            'slots'      => $slotsWithStatus->toArray(),
-                            'day_status' => $status,
-                        ];
-                    })->toArray()
-                    : [];
-
-                return [
-                    'event_id'  => $event->event_id,
-                    'title'     => $event->title,
-                    'location'  => $event->location,
-                    'schedules' => $schedules,
-                ];
-            });
+        $calendarEvents = $this->buildCalendarEvents($studentEventScope, $attendanceMap, $today);
 
         $totalExpectedEvents = Event::where($studentEventScope)->count();
 
@@ -209,8 +145,21 @@ class StudentDashboardController extends Controller
         };
 
         $today = now()->toDateString();
+        $attendanceMap = $this->buildAttendanceMap($student);
+        $calendarEvents = $this->buildCalendarEvents($studentEventScope, $attendanceMap, $today);
 
-        // Map student attendances by event_id, date, slot_index, and checkpoint_key
+        return Inertia::render('Calendar', [
+            'student'        => $student,
+            'calendarEvents' => $calendarEvents,
+            'today'          => $today,
+        ]);
+    }
+
+    /**
+     * Index student attendances by event_id, date, slot_index, and checkpoint_key.
+     */
+    private function buildAttendanceMap($student): array
+    {
         $attendanceMap = [];
         if ($student && $student->attendances) {
             foreach ($student->attendances as $attendance) {
@@ -220,47 +169,43 @@ class StudentDashboardController extends Controller
             }
         }
 
-        $calendarEvents = Event::with('days')
+        return $attendanceMap;
+    }
+
+    /**
+     * Build formatted calendar event payloads respecting enabled morning/afternoon sessions.
+     */
+    private function buildCalendarEvents(callable $studentEventScope, array $attendanceMap, string $today)
+    {
+        return Event::with('days')
             ->where($studentEventScope)
             ->get()
             ->map(function ($event) use ($attendanceMap, $today) {
-                $schedules = $event->days->isNotEmpty() 
+                $schedules = $event->days->isNotEmpty()
                     ? $event->days->map(function ($day) use ($event, $attendanceMap, $today) {
-                        $dateStr = $day->event_date instanceof Carbon ? $day->event_date->format('Y-m-d') : Carbon::parse($day->event_date)->format('Y-m-d');
-                        
-                        $slotsWithStatus = collect($day->slots ?? [])->map(function ($slot, $index) use ($event, $dateStr, $attendanceMap) {
-                            return array_merge($slot, [
-                                'slot_index'         => $index,
-                                'morning_time_in'    => $attendanceMap[$event->event_id][$dateStr][$index][Attendance::MORNING_TIME_IN] ?? false,
-                                'morning_time_out'   => $attendanceMap[$event->event_id][$dateStr][$index][Attendance::MORNING_TIME_OUT] ?? false,
-                                'afternoon_time_in'  => $attendanceMap[$event->event_id][$dateStr][$index][Attendance::AFTERNOON_TIME_IN] ?? false,
-                                'afternoon_time_out' => $attendanceMap[$event->event_id][$dateStr][$index][Attendance::AFTERNOON_TIME_OUT] ?? false,
-                                'checked_in'         => ($attendanceMap[$event->event_id][$dateStr][$index][Attendance::MORNING_TIME_IN] ?? false) || ($attendanceMap[$event->event_id][$dateStr][$index][Attendance::AFTERNOON_TIME_IN] ?? false),
-                                'checked_out'        => ($attendanceMap[$event->event_id][$dateStr][$index][Attendance::MORNING_TIME_OUT] ?? false) || ($attendanceMap[$event->event_id][$dateStr][$index][Attendance::AFTERNOON_TIME_OUT] ?? false),
-                            ]);
-                        });
+                        $dateStr = $day->event_date instanceof Carbon
+                            ? $day->event_date->format('Y-m-d')
+                            : Carbon::parse($day->event_date)->format('Y-m-d');
 
-                        $totalCheckpoints = count($day->slots ?? []) * 4;
-                        $attendedCount = 0;
-                        foreach ($day->slots ?? [] as $index => $_) {
-                            foreach (Attendance::CHECKPOINTS as $cp) {
-                                if ($attendanceMap[$event->event_id][$dateStr][$index][$cp] ?? false) {
-                                    $attendedCount++;
-                                }
-                            }
-                        }
+                        $formatted = $this->formatDaySlots($day->slots ?? [], $event->event_id, $dateStr, $attendanceMap);
+                        $totalCheckpoints = $formatted['total_checkpoints'];
+                        $attendedCount = $formatted['attended_count'];
 
                         $status = 'upcoming';
                         if ($dateStr < $today) {
-                            $status = $attendedCount >= $totalCheckpoints && $totalCheckpoints > 0 ? 'attended' : ($attendedCount > 0 ? 'partial' : 'absent');
+                            $status = $attendedCount >= $totalCheckpoints && $totalCheckpoints > 0
+                                ? 'attended'
+                                : ($attendedCount > 0 ? 'partial' : 'absent');
                         } elseif ($dateStr === $today) {
                             $status = $attendedCount > 0 ? 'partial' : 'active';
                         }
 
                         return [
-                            'date'       => $dateStr,
-                            'slots'      => $slotsWithStatus->toArray(),
-                            'day_status' => $status,
+                            'date'              => $dateStr,
+                            'slots'             => $formatted['slots'],
+                            'day_status'        => $status,
+                            'total_checkpoints' => $totalCheckpoints,
+                            'attended_count'    => $attendedCount,
                         ];
                     })->toArray()
                     : [];
@@ -272,11 +217,57 @@ class StudentDashboardController extends Controller
                     'schedules' => $schedules,
                 ];
             });
+    }
 
-        return Inertia::render('Calendar', [
-            'student'        => $student,
-            'calendarEvents' => $calendarEvents,
-            'today'          => $today,
-        ]);
+    /**
+     * Determine enabled sessions per slot and calculate accurate checkpoint totals.
+     */
+    private function formatDaySlots(array $rawSlots, int $eventId, string $dateStr, array $attendanceMap): array
+    {
+        $totalCheckpoints = 0;
+        $attendedCount = 0;
+
+        $slots = collect($rawSlots)->map(function ($slot, $index) use ($eventId, $dateStr, $attendanceMap, &$totalCheckpoints, &$attendedCount) {
+            $hasMorning = ($slot['morning_enabled'] ?? true)
+                && (!empty($slot['morning_time_in_start']) || !empty($slot['morning_in']) || !empty($slot['start_time']) || !isset($slot['morning_enabled']));
+
+            // Check explicit flag first; fallback to checking if afternoon time fields are non-empty
+            $hasAfternoon = array_key_exists('afternoon_enabled', $slot)
+                ? (bool) $slot['afternoon_enabled']
+                : (!empty($slot['afternoon_time_in_start']) || !empty($slot['afternoon_in']) || !empty($slot['afternoon_start']));
+
+            $morningIn = $hasMorning && ($attendanceMap[$eventId][$dateStr][$index][Attendance::MORNING_TIME_IN] ?? false);
+            $morningOut = $hasMorning && ($attendanceMap[$eventId][$dateStr][$index][Attendance::MORNING_TIME_OUT] ?? false);
+            $afternoonIn = $hasAfternoon && ($attendanceMap[$eventId][$dateStr][$index][Attendance::AFTERNOON_TIME_IN] ?? false);
+            $afternoonOut = $hasAfternoon && ($attendanceMap[$eventId][$dateStr][$index][Attendance::AFTERNOON_TIME_OUT] ?? false);
+
+            if ($hasMorning) {
+                $totalCheckpoints += 2;
+                $attendedCount += ($morningIn ? 1 : 0) + ($morningOut ? 1 : 0);
+            }
+
+            if ($hasAfternoon) {
+                $totalCheckpoints += 2;
+                $attendedCount += ($afternoonIn ? 1 : 0) + ($afternoonOut ? 1 : 0);
+            }
+
+            return array_merge($slot, [
+                'slot_index'         => $index,
+                'has_morning'        => $hasMorning,
+                'has_afternoon'      => $hasAfternoon,
+                'morning_time_in'    => $morningIn,
+                'morning_time_out'   => $morningOut,
+                'afternoon_time_in'  => $hasAfternoon ? $afternoonIn : null,
+                'afternoon_time_out' => $hasAfternoon ? $afternoonOut : null,
+                'checked_in'         => $morningIn || $afternoonIn,
+                'checked_out'        => $morningOut || $afternoonOut,
+            ]);
+        })->toArray();
+
+        return [
+            'slots'             => $slots,
+            'total_checkpoints' => $totalCheckpoints,
+            'attended_count'    => $attendedCount,
+        ];
     }
 }

@@ -4,12 +4,15 @@ namespace App\Providers;
 
 use App\Actions\Fortify\CreateNewUser;
 use App\Actions\Fortify\ResetUserPassword;
+use App\Models\User;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\Password;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Laravel\Fortify\Contracts\LoginResponse;
 use Laravel\Fortify\Contracts\RegisterResponse;
@@ -61,6 +64,27 @@ class FortifyServiceProvider extends ServiceProvider
     {
         Fortify::resetUserPasswordsUsing(ResetUserPassword::class);
         Fortify::createUsersUsing(CreateNewUser::class);
+
+        Fortify::authenticateUsing(function (Request $request) {
+            $user = User::where(Fortify::username(), $request->input(Fortify::username()))->first();
+
+            if ($user && Hash::check($request->password, $user->password)) {
+                if ($user->role === 'organizer' && $user->status === 'suspended') {
+                    throw ValidationException::withMessages([
+                        Fortify::username() => ['Your organizer access has been suspended. Please contact an administrator.'],
+                    ]);
+                }
+
+                // Allow active or pending (first-time key code login) accounts
+                if ($user->role === 'organizer' && in_array($user->status, ['active', 'pending'], true)) {
+                    return $user;
+                }
+
+                return $user;
+            }
+
+            return null;
+        });
     }
 
     /**

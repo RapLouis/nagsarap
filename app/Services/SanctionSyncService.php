@@ -77,8 +77,14 @@ class SanctionSyncService
         ];
 
         foreach ($events as $event) {
-            // Skip unapproved/rejected draft events if approval status is tracked
-            if (isset($event->status) && in_array($event->status, ['pending', 'rejected'], true)) {
+            // Skip inactive, unapproved, or rejected/declined events
+            if (isset($event->is_active) && $event->is_active === false) {
+                continue;
+            }
+            if (isset($event->approval_status) && in_array($event->approval_status, ['pending', 'declined', 'rejected'], true)) {
+                continue;
+            }
+            if (isset($event->status) && in_array($event->status, ['pending', 'declined', 'rejected'], true)) {
                 continue;
             }
 
@@ -94,12 +100,20 @@ class SanctionSyncService
                 foreach ($slots as $index => $slot) {
                     $slotLabel = is_array($slot) ? ($slot['label'] ?? ('Slot ' . ($index + 1))) : ('Slot ' . ($index + 1));
 
-                    // Respect explicit afternoon toggle if stored in JSON
-                    $afternoonExplicitlyDisabled = is_array($slot)
-                        && array_key_exists('has_afternoon', $slot)
-                        && $slot['has_afternoon'] === false;
+                    $morningExplicitlyDisabled = is_array($slot) && (
+                        (array_key_exists('has_morning', $slot) && $slot['has_morning'] === false) ||
+                        (array_key_exists('morning_enabled', $slot) && $slot['morning_enabled'] === false)
+                    );
+
+                    $afternoonExplicitlyDisabled = is_array($slot) && (
+                        (array_key_exists('has_afternoon', $slot) && $slot['has_afternoon'] === false) ||
+                        (array_key_exists('afternoon_enabled', $slot) && $slot['afternoon_enabled'] === false)
+                    );
 
                     foreach ($checkpointsConfig as $checkpointKey => $config) {
+                        if ($config['session'] === 'morning' && $morningExplicitlyDisabled) {
+                            continue;
+                        }
                         if ($config['session'] === 'afternoon' && $afternoonExplicitlyDisabled) {
                             continue;
                         }

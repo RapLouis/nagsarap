@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
@@ -21,6 +22,9 @@ class User extends Authenticatable
         'role',
         'organization_name',
         'organization_position',
+        'key_code',
+        'department',
+        'status',
     ];
 
     protected $hidden = ['password', 'remember_token'];
@@ -34,6 +38,11 @@ class User extends Authenticatable
     public function student(): BelongsTo
     {
         return $this->belongsTo(Student::class, 'student_id', 'student_id');
+    }
+
+    public function events(): HasMany
+    {
+        return $this->hasMany(Event::class, 'organizer_id', 'id');
     }
 
     public function isStudent(): bool { return $this->role === 'student'; }

@@ -10,6 +10,13 @@ return new class extends Migration
     {
         Schema::create('events', function (Blueprint $table) {
             $table->id('event_id');
+            
+            // Link Event to Organizer User
+            $table->foreignId('organizer_id')
+                ->nullable()
+                ->constrained('users', 'id')
+                ->nullOnDelete();
+
             $table->string('title', 150);
             $table->text('description')->nullable();
             

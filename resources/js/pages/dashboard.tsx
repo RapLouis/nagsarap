@@ -27,8 +27,22 @@ export type CheckpointKey =
     | 'afternoon_time_in'
     | 'afternoon_time_out';
 
+type CheckpointItem = {
+    key: CheckpointKey;
+    label: string;
+    session: 'morning' | 'afternoon';
+    type: 'in' | 'out';
+    start?: string;
+    end?: string;
+    done: boolean;
+};
+
 type CheckpointSlot = {
     slot_index?: number;
+    morning_enabled?: boolean;
+    afternoon_enabled?: boolean;
+    has_morning?: boolean;
+    has_afternoon?: boolean;
     morning_time_in_start?: string;
     morning_time_in_end?: string;
     morning_time_out_start?: string;
@@ -416,6 +430,11 @@ export default function Dashboard({
                                                 {evt.schedules.map((sched, sIdx) => (
                                                     <div key={sIdx} className="space-y-3">
                                                         {sched.slots?.map((slot, slotIdx) => {
+                                                            const isMorningEnabled =
+                                                                slot.has_morning ?? (slot.morning_enabled !== false);
+                                                            const isAfternoonEnabled =
+                                                                slot.has_afternoon ?? (slot.afternoon_enabled === true);
+
                                                             const mInStart = slot.morning_time_in_start || slot.time_in_start;
                                                             const mInEnd = slot.morning_time_in_end || slot.time_in_end;
                                                             const mOutStart = slot.morning_time_out_start || slot.time_out_start;
@@ -425,61 +444,54 @@ export default function Dashboard({
                                                             const aOutStart = slot.afternoon_time_out_start;
                                                             const aOutEnd = slot.afternoon_time_out_end;
 
-                                                            const checkpoints: {
-                                                                key: CheckpointKey;
-                                                                label: string;
-                                                                session: 'morning' | 'afternoon';
-                                                                type: 'in' | 'out';
-                                                                start?: string;
-                                                                end?: string;
-                                                                done: boolean;
-                                                            }[] = [
-                                                                {
-                                                                    key: 'morning_time_in' as CheckpointKey,
-                                                                    label: 'Morning Time-In',
-                                                                    session: 'morning',
-                                                                    type: 'in',
-                                                                    start: mInStart,
-                                                                    end: mInEnd,
-                                                                    done: hasLoggedCheckpoint(evt.event_id, slotIdx, sched.date, 'morning_time_in', slot.morning_time_in),
-                                                                },
-                                                                {
-                                                                    key: 'morning_time_out' as CheckpointKey,
-                                                                    label: 'Morning Time-Out',
-                                                                    session: 'morning',
-                                                                    type: 'out',
-                                                                    start: mOutStart,
-                                                                    end: mOutEnd,
-                                                                    done: hasLoggedCheckpoint(evt.event_id, slotIdx, sched.date, 'morning_time_out', slot.morning_time_out),
-                                                                },
-                                                                {
-                                                                    key: 'afternoon_time_in' as CheckpointKey,
-                                                                    label: 'Afternoon Time-In',
-                                                                    session: 'afternoon',
-                                                                    type: 'in',
-                                                                    start: aInStart,
-                                                                    end: aInEnd,
-                                                                    done: hasLoggedCheckpoint(evt.event_id, slotIdx, sched.date, 'afternoon_time_in', slot.afternoon_time_in),
-                                                                },
-                                                                {
-                                                                    key: 'afternoon_time_out' as CheckpointKey,
-                                                                    label: 'Afternoon Time-Out',
-                                                                    session: 'afternoon',
-                                                                    type: 'out',
-                                                                    start: aOutStart,
-                                                                    end: aOutEnd,
-                                                                    done: hasLoggedCheckpoint(evt.event_id, slotIdx, sched.date, 'afternoon_time_out', slot.afternoon_time_out),
-                                                                },
-                                                            ].filter((cp) => Boolean(cp.start)) as {
-                                                                key: CheckpointKey;
-                                                                label: string;
-                                                                session: 'morning' | 'afternoon';
-                                                                type: 'in' | 'out';
-                                                                start: string;
-                                                                end?: string;
-                                                                done: boolean;
-                                                            }[];
+                                                            const rawCheckpoints: CheckpointItem[] = [
+                                                                ...(isMorningEnabled
+                                                                    ? [
+                                                                          {
+                                                                              key: 'morning_time_in' as CheckpointKey,
+                                                                              label: 'Morning Time-In',
+                                                                              session: 'morning' as const,
+                                                                              type: 'in' as const,
+                                                                              start: mInStart,
+                                                                              end: mInEnd,
+                                                                              done: hasLoggedCheckpoint(evt.event_id, slotIdx, sched.date, 'morning_time_in', slot.morning_time_in),
+                                                                          },
+                                                                          {
+                                                                              key: 'morning_time_out' as CheckpointKey,
+                                                                              label: 'Morning Time-Out',
+                                                                              session: 'morning' as const,
+                                                                              type: 'out' as const,
+                                                                              start: mOutStart,
+                                                                              end: mOutEnd,
+                                                                              done: hasLoggedCheckpoint(evt.event_id, slotIdx, sched.date, 'morning_time_out', slot.morning_time_out),
+                                                                          },
+                                                                      ]
+                                                                    : []),
+                                                                ...(isAfternoonEnabled
+                                                                    ? [
+                                                                          {
+                                                                              key: 'afternoon_time_in' as CheckpointKey,
+                                                                              label: 'Afternoon Time-In',
+                                                                              session: 'afternoon' as const,
+                                                                              type: 'in' as const,
+                                                                              start: aInStart,
+                                                                              end: aInEnd,
+                                                                              done: hasLoggedCheckpoint(evt.event_id, slotIdx, sched.date, 'afternoon_time_in', slot.afternoon_time_in),
+                                                                          },
+                                                                          {
+                                                                              key: 'afternoon_time_out' as CheckpointKey,
+                                                                              label: 'Afternoon Time-Out',
+                                                                              session: 'afternoon' as const,
+                                                                              type: 'out' as const,
+                                                                              start: aOutStart,
+                                                                              end: aOutEnd,
+                                                                              done: hasLoggedCheckpoint(evt.event_id, slotIdx, sched.date, 'afternoon_time_out', slot.afternoon_time_out),
+                                                                          },
+                                                                      ]
+                                                                    : []),
+                                                            ];
 
+                                                            const checkpoints = rawCheckpoints.filter((cp) => Boolean(cp.start));
                                                             const completedCount = checkpoints.filter((c) => c.done).length;
 
                                                             return (

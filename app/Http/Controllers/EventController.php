@@ -42,9 +42,49 @@ class EventController extends Controller
         }
     }
 
+    /**
+     * Normalize slot payloads so disabled morning/afternoon sessions have null time windows.
+     */
+    private function sanitizeSlots(array $slots): array
+    {
+        return array_map(function ($slot) {
+            $morningEnabled = array_key_exists('morning_enabled', $slot)
+                ? (bool) $slot['morning_enabled']
+                : (array_key_exists('has_morning', $slot)
+                    ? (bool) $slot['has_morning']
+                    : (!empty($slot['morning_time_in_start']) || !empty($slot['time_in_start'])));
+
+            $afternoonEnabled = array_key_exists('afternoon_enabled', $slot)
+                ? (bool) $slot['afternoon_enabled']
+                : (array_key_exists('has_afternoon', $slot)
+                    ? (bool) $slot['has_afternoon']
+                    : (!empty($slot['afternoon_time_in_start']) || !empty($slot['afternoon_time_out_start'])));
+
+            return [
+                'morning_enabled'          => $morningEnabled,
+                'afternoon_enabled'        => $afternoonEnabled,
+                'has_morning'              => $morningEnabled,
+                'has_afternoon'            => $afternoonEnabled,
+                'morning_time_in_start'    => $morningEnabled ? ($slot['morning_time_in_start'] ?? $slot['time_in_start'] ?? null) : null,
+                'morning_time_in_end'      => $morningEnabled ? ($slot['morning_time_in_end'] ?? $slot['time_in_end'] ?? null) : null,
+                'morning_time_out_start'   => $morningEnabled ? ($slot['morning_time_out_start'] ?? $slot['time_out_start'] ?? null) : null,
+                'morning_time_out_end'     => $morningEnabled ? ($slot['morning_time_out_end'] ?? $slot['time_out_end'] ?? null) : null,
+                'afternoon_time_in_start'  => $afternoonEnabled ? ($slot['afternoon_time_in_start'] ?? null) : null,
+                'afternoon_time_in_end'    => $afternoonEnabled ? ($slot['afternoon_time_in_end'] ?? null) : null,
+                'afternoon_time_out_start' => $afternoonEnabled ? ($slot['afternoon_time_out_start'] ?? null) : null,
+                'afternoon_time_out_end'   => $afternoonEnabled ? ($slot['afternoon_time_out_end'] ?? null) : null,
+                // Keep legacy keys aligned with morning window
+                'time_in_start'            => $morningEnabled ? ($slot['time_in_start'] ?? $slot['morning_time_in_start'] ?? null) : null,
+                'time_in_end'              => $morningEnabled ? ($slot['time_in_end'] ?? $slot['morning_time_in_end'] ?? null) : null,
+                'time_out_start'           => $morningEnabled ? ($slot['time_out_start'] ?? $slot['morning_time_out_start'] ?? null) : null,
+                'time_out_end'             => $morningEnabled ? ($slot['time_out_end'] ?? $slot['morning_time_out_end'] ?? null) : null,
+            ];
+        }, $slots);
+    }
+
     public function index(Request $request): Response
     {
-        $search   = $request->input('search');
+        $search    = $request->input('search');
         $activeTab = $request->input('tab', 'ongoing');
 
         $query = Event::with('days')
@@ -61,7 +101,7 @@ class EventController extends Controller
         switch ($activeTab) {
             case 'ongoing':
                 $eventsQuery->ongoing()
-                            ->whereDate('event_date', Carbon::today());    
+                            ->whereDate('event_date', Carbon::today());
                 break;
             case 'upcoming':
                 $eventsQuery->upcoming();
@@ -104,14 +144,12 @@ class EventController extends Controller
             'declined'  => Event::declined()->count(),
         ];
 
-        // Fetch distinct saved venues for dynamic presets
         $venues = Event::whereNotNull('location')
             ->where('location', '!=', '')
             ->select('location', 'latitude', 'longitude', 'radius_meters')
             ->distinct()
             ->get();
 
-        // Extract unique course/degree and section combinations from registered students
         $availableSections = Student::select('degree', 'year_section')
             ->distinct()
             ->whereNotNull('degree')
@@ -138,15 +176,20 @@ class EventController extends Controller
     public function store(Request $request)
     {
         $validated = $request->validate([
-            'title'                               => ['required', 'string', 'max:150'],
-            'description'                         => ['nullable', 'string'],
-            'target_scope'                        => ['required', Rule::in(['all', 'section'])],
-            'target_sections'                     => ['nullable', 'array'],
-            'event_date'                          => ['required', 'string'],
-            'event_end_date'                      => ['nullable', 'string'],
-            'schedules'                           => ['required', 'array', 'min:1'],
-            'schedules.*.date'                    => ['required', 'string'],
-            'schedules.*.slots'                   => ['required', 'array', 'min:1'],
+            'title'                                       => ['required', 'string', 'max:150'],
+            'description'                                 => ['nullable', 'string'],
+            'target_scope'                                => ['required', Rule::in(['all', 'section'])],
+            'target_sections'                             => ['nullable', 'array'],
+            'event_date'                                  => ['required', 'string'],
+            'event_end_date'                              => ['nullable', 'string'],
+            'schedules'                                   => ['required', 'array', 'min:1'],
+            'schedules.*.date'                            => ['required', 'string'],
+            'schedules.*.slots'                           => ['required', 'array', 'min:1'],
+            // Session toggle flags
+            'schedules.*.slots.*.morning_enabled'         => ['nullable', 'boolean'],
+            'schedules.*.slots.*.afternoon_enabled'       => ['nullable', 'boolean'],
+            'schedules.*.slots.*.has_morning'             => ['nullable', 'boolean'],
+            'schedules.*.slots.*.has_afternoon'           => ['nullable', 'boolean'],
             // 4 Checkpoint time inputs per slot
             'schedules.*.slots.*.morning_time_in_start'   => ['nullable'],
             'schedules.*.slots.*.morning_time_in_end'     => ['nullable'],
@@ -161,15 +204,15 @@ class EventController extends Controller
             'schedules.*.slots.*.time_in_end'             => ['nullable'],
             'schedules.*.slots.*.time_out_start'          => ['nullable'],
             'schedules.*.slots.*.time_out_end'            => ['nullable'],
-            'location'                            => ['nullable', 'string', 'max:100'],
-            'is_geofenced'                        => ['boolean'],
-            'geofence_type'                       => ['nullable', Rule::in(['radius', 'polygon'])],
-            'latitude'                            => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-90,90'],
-            'longitude'                           => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-180,180'],
-            'radius_meters'                       => ['nullable', 'integer', 'min:10', 'max:5000'],
-            'geofence_polygon'                    => ['nullable', 'required_if:geofence_type,polygon', 'array', 'min:3'],
-            'approval_status'                     => ['nullable', Rule::in(['approved', 'pending', 'declined'])],
-            'is_active'                           => ['boolean'],
+            'location'                                    => ['nullable', 'string', 'max:100'],
+            'is_geofenced'                                => ['boolean'],
+            'geofence_type'                               => ['nullable', Rule::in(['radius', 'polygon'])],
+            'latitude'                                    => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-90,90'],
+            'longitude'                                   => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-180,180'],
+            'radius_meters'                               => ['nullable', 'integer', 'min:10', 'max:5000'],
+            'geofence_polygon'                            => ['nullable', 'required_if:geofence_type,polygon', 'array', 'min:3'],
+            'approval_status'                             => ['nullable', Rule::in(['approved', 'pending', 'declined'])],
+            'is_active'                                   => ['boolean'],
         ]);
 
         if ($validated['target_scope'] === 'section' && !empty($validated['target_sections'])) {
@@ -193,16 +236,16 @@ class EventController extends Controller
 
         $isGeofenced  = $request->boolean('is_geofenced', false);
         $geofenceType = $validated['geofence_type'] ?? 'radius';
-        $user = $request->user();
-        $isAdmin = $user && (($user->is_admin ?? false) || in_array($user->role ?? '', ['admin', 'super_admin']));
+        $user         = $request->user();
+        $isAdmin      = $user && (($user->is_admin ?? false) || in_array($user->role ?? '', ['admin', 'super_admin']));
 
         foreach ($validated['schedules'] as $index => $schedule) {
-            $dayNumber = $index + 1;
-            $totalDays = count($validated['schedules']);
+            $dayNumber    = $index + 1;
+            $totalDays    = count($validated['schedules']);
             $scheduleDate = $this->parseDateInput($schedule['date']);
 
-            $eventTitle = $totalDays > 1 
-                ? "{$validated['title']} (Day {$dayNumber} - {$scheduleDate})" 
+            $eventTitle = $totalDays > 1
+                ? "{$validated['title']} (Day {$dayNumber} - {$scheduleDate})"
                 : $validated['title'];
 
             $event = Event::create([
@@ -225,7 +268,7 @@ class EventController extends Controller
 
             $event->days()->create([
                 'event_date' => $scheduleDate,
-                'slots'      => $schedule['slots'],
+                'slots'      => $this->sanitizeSlots($schedule['slots']),
             ]);
         }
 
@@ -235,15 +278,21 @@ class EventController extends Controller
     public function update(Request $request, Event $event)
     {
         $validated = $request->validate([
-            'title'                               => ['required', 'string', 'max:150'],
-            'description'                         => ['nullable', 'string'],
-            'target_scope'                        => ['required', Rule::in(['all', 'section'])],
-            'target_sections'                     => ['nullable', 'array'],
-            'event_date'                          => ['required', 'string'],
-            'event_end_date'                      => ['nullable', 'string'],
-            'schedules'                           => ['required', 'array', 'min:1'],
-            'schedules.*.date'                    => ['required', 'string'],
-            'schedules.*.slots'                   => ['required', 'array', 'min:1'],
+            'title'                                       => ['required', 'string', 'max:150'],
+            'description'                                 => ['nullable', 'string'],
+            'target_scope'                                => ['required', Rule::in(['all', 'section'])],
+            'target_sections'                             => ['nullable', 'array'],
+            'event_date'                                  => ['required', 'string'],
+            'event_end_date'                              => ['nullable', 'string'],
+            'schedules'                                   => ['required', 'array', 'min:1'],
+            'schedules.*.date'                            => ['required', 'string'],
+            'schedules.*.slots'                           => ['required', 'array', 'min:1'],
+            // Session toggle flags
+            'schedules.*.slots.*.morning_enabled'         => ['nullable', 'boolean'],
+            'schedules.*.slots.*.afternoon_enabled'       => ['nullable', 'boolean'],
+            'schedules.*.slots.*.has_morning'             => ['nullable', 'boolean'],
+            'schedules.*.slots.*.has_afternoon'           => ['nullable', 'boolean'],
+            // 4 Checkpoint time inputs per slot
             'schedules.*.slots.*.morning_time_in_start'   => ['nullable'],
             'schedules.*.slots.*.morning_time_in_end'     => ['nullable'],
             'schedules.*.slots.*.morning_time_out_start'  => ['nullable'],
@@ -256,15 +305,15 @@ class EventController extends Controller
             'schedules.*.slots.*.time_in_end'             => ['nullable'],
             'schedules.*.slots.*.time_out_start'          => ['nullable'],
             'schedules.*.slots.*.time_out_end'            => ['nullable'],
-            'location'                            => ['nullable', 'string', 'max:100'],
-            'is_geofenced'                        => ['boolean'],
-            'geofence_type'                       => ['nullable', Rule::in(['radius', 'polygon'])],
-            'latitude'                            => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-90,90'],
-            'longitude'                           => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-180,180'],
-            'radius_meters'                       => ['nullable', 'integer', 'min:10', 'max:5000'],
-            'geofence_polygon'                    => ['nullable', 'required_if:geofence_type,polygon', 'array', 'min:3'],
-            'approval_status'                     => ['required', Rule::in(['approved', 'pending', 'declined'])],
-            'is_active'                           => ['boolean'],
+            'location'                                    => ['nullable', 'string', 'max:100'],
+            'is_geofenced'                                => ['boolean'],
+            'geofence_type'                               => ['nullable', Rule::in(['radius', 'polygon'])],
+            'latitude'                                    => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-90,90'],
+            'longitude'                                   => ['nullable', 'required_if:is_geofenced,true', 'numeric', 'between:-180,180'],
+            'radius_meters'                               => ['nullable', 'integer', 'min:10', 'max:5000'],
+            'geofence_polygon'                            => ['nullable', 'required_if:geofence_type,polygon', 'array', 'min:3'],
+            'approval_status'                             => ['required', Rule::in(['approved', 'pending', 'declined'])],
+            'is_active'                                   => ['boolean'],
         ]);
 
         if ($validated['target_scope'] === 'section' && !empty($validated['target_sections'])) {
@@ -315,7 +364,7 @@ class EventController extends Controller
 
             $event->days()->create([
                 'event_date' => $scheduleDate,
-                'slots'      => $schedule['slots'],
+                'slots'      => $this->sanitizeSlots($schedule['slots']),
             ]);
         }
 

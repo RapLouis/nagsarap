@@ -11,22 +11,22 @@ use App\Http\Controllers\AttendanceController;
 use App\Http\Controllers\EventController;
 use App\Http\Controllers\FaceVerificationController;
 use App\Http\Controllers\FirstTimePasswordController;
-use App\Http\Controllers\StudentDashboardController;
-use App\Http\Controllers\StudentNotificationController;
-use App\Http\Controllers\StudentSanctionController;
-use App\Http\Controllers\StudentRegistrationController;
 use App\Http\Controllers\Organizer\KioskController;
 use App\Http\Controllers\Organizer\OrganizerDashboardController;
 use App\Http\Controllers\Organizer\OrganizerEventController;
+use App\Http\Controllers\StudentDashboardController;
+use App\Http\Controllers\StudentNotificationController;
+use App\Http\Controllers\StudentRegistrationController;
+use App\Http\Controllers\StudentSanctionController;
 use App\Http\Middleware\EnsurePasswordIsChanged;
 use App\Http\Middleware\EnsureUserIsOrganizer;
 use App\Models\Student;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
-use Carbon\Carbon;
 
 /*
 |--------------------------------------------------------------------------
@@ -45,7 +45,6 @@ Route::middleware('guest')->group(function () {
     Route::post('/register', [StudentRegistrationController::class, 'register']);
 });
 
-
 // =========================================================================
 // MANDATORY FIRST-TIME PASSWORD CHANGE ROUTES
 // =========================================================================
@@ -58,7 +57,6 @@ Route::middleware(['auth'])->group(function () {
         ->name('password.first-change.update');
 });
 
-
 // =========================================================================
 // AUTHENTICATED, VERIFIED & PASSWORD-CHECKED USER ROUTES
 // =========================================================================
@@ -69,7 +67,6 @@ Route::middleware(['auth', 'verified', EnsurePasswordIsChanged::class])->group(f
     // MAIN STUDENT DASHBOARD & CALENDAR
     // -------------------------------------------------------------------------
     Route::get('/dashboard', [StudentDashboardController::class, 'index'])->name('dashboard');
-
 
     // -------------------------------------------------------------------------
     // STUDENT SANCTIONS & ATTENDANCE HISTORY
@@ -82,7 +79,6 @@ Route::middleware(['auth', 'verified', EnsurePasswordIsChanged::class])->group(f
         ->name('sanctions.excuse');
     Route::get('/sanctions/{sanction}/proof', [StudentSanctionController::class, 'viewProof'])
         ->name('sanctions.proof');
-
 
     // -------------------------------------------------------------------------
     // STUDENT CHECK-IN HUB
@@ -136,7 +132,6 @@ Route::middleware(['auth', 'verified', EnsurePasswordIsChanged::class])->group(f
         ]);
     })->name('check-in');
 
-
     // -------------------------------------------------------------------------
     // ADMIN PANEL ROUTES
     // -------------------------------------------------------------------------
@@ -154,6 +149,7 @@ Route::middleware(['auth', 'verified', EnsurePasswordIsChanged::class])->group(f
             // Direct Organizer Account Provisioning Routes
             Route::get('/organizers', [OrganizerManagementController::class, 'index'])->name('organizers.index');
             Route::post('/organizers', [OrganizerManagementController::class, 'store'])->name('organizers.store');
+            Route::patch('/organizers/{user}/status', [OrganizerManagementController::class, 'toggleStatus'])->name('organizers.toggle-status');
             Route::put('/organizers/{user}/reset-password', [OrganizerManagementController::class, 'resetPassword'])->name('organizers.reset-password');
             Route::delete('/organizers/{user}', [OrganizerManagementController::class, 'destroy'])->name('organizers.destroy');
 
@@ -177,11 +173,10 @@ Route::middleware(['auth', 'verified', EnsurePasswordIsChanged::class])->group(f
             // Admin Event Approvals
             Route::post('/events/{event}/approve', [AdminEventApprovalController::class, 'approve'])->name('events.approve');
             Route::post('/events/{event}/reject', [AdminEventApprovalController::class, 'reject'])->name('events.reject');
-            
+
             Route::get('/analytics', [AnalyticsController::class, 'index'])->name('analytics.index');
             Route::get('/analytics/events/{event}', [AnalyticsController::class, 'showEvent'])->name('analytics.event-show');
         });
-
 
     // -------------------------------------------------------------------------
     // ORGANIZER WORKSPACE ROUTES
@@ -203,7 +198,6 @@ Route::middleware(['auth', 'verified', EnsurePasswordIsChanged::class])->group(f
             Route::post('/kiosk/manual-override', [KioskController::class, 'manualOverride'])->name('kiosk.manual-override');
         });
 
-
     // -------------------------------------------------------------------------
     // BIOMETRIC FACE VERIFICATION & ATTENDANCE
     // -------------------------------------------------------------------------
@@ -218,9 +212,13 @@ Route::middleware(['auth', 'verified', EnsurePasswordIsChanged::class])->group(f
     Route::post('/attendance/check-in', [AttendanceController::class, 'markAttendance'])->name('attendance.check-in');
 
     Route::get('/student/{student:student_id}/face-photo', function (Student $student) {
-        if (!$student->face_photo_path) abort(404);
+        if (!$student->face_photo_path) {
+            abort(404);
+        }
         $relativePath = ltrim(str_replace(['/storage/', 'storage/'], '', $student->face_photo_path), '/');
-        if (!Storage::disk('private')->exists($relativePath)) abort(404);
+        if (!Storage::disk('private')->exists($relativePath)) {
+            abort(404);
+        }
         return Storage::disk('private')->response($relativePath);
     })->name('student.face-photo');
 
@@ -228,10 +226,8 @@ Route::middleware(['auth', 'verified', EnsurePasswordIsChanged::class])->group(f
     Route::patch('/notifications/{notification}/read', [StudentNotificationController::class, 'markAsRead'])->name('notifications.read');
     Route::patch('/notifications/read-all', [StudentNotificationController::class, 'markAllAsRead'])->name('notifications.read-all');
 
-    Route::get('/calendar', [App\Http\Controllers\StudentDashboardController::class, 'calendar'])
-    ->name('calendar');
-
-    
+    Route::get('/calendar', [StudentDashboardController::class, 'calendar'])
+        ->name('calendar');
 });
 
 require __DIR__.'/settings.php';

@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers;
 
-use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
@@ -25,13 +24,19 @@ class FirstTimePasswordController extends Controller
         /** @var \App\Models\User $user */
         $user = Auth::user();
 
-        $user->update([
+        $updates = [
             'password' => Hash::make($request->password),
             'must_change_password' => false,
-        ]);
+        ];
+
+        if ($user->role === 'organizer' && $user->status === 'pending') {
+            $updates['status'] = 'active';
+        }
+
+        $user->update($updates);
 
         if ($user->role === 'organizer') {
-            return redirect()->route('organizer.dashboard')->with('success', 'Password updated successfully! Welcome to your dashboard.');
+            return redirect()->route('organizer.dashboard')->with('success', 'Password updated and organizer account activated! Welcome to your dashboard.');
         }
 
         return redirect()->route('dashboard');

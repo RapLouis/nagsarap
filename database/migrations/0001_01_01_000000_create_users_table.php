@@ -16,7 +16,7 @@ return new class extends Migration
 
             /*
             |--------------------------------------------------------------------------
-            | Student Relationship
+            | Student Relationship (Column Only)
             |--------------------------------------------------------------------------
             */
             $table->unsignedInteger('student_id')
@@ -62,19 +62,24 @@ return new class extends Migration
             $table->string('organization_name')->nullable();
             $table->string('organization_position')->nullable();
 
+            /*
+            |--------------------------------------------------------------------------
+            | Organizer Access Keys, Department, & Status Fields
+            |--------------------------------------------------------------------------
+            */
+            $table->string('key_code')->nullable()->unique();
+            $table->string('department')->nullable();
+            $table->string('status')->default('active');
+
             $table->timestamps();
 
             /*
             |--------------------------------------------------------------------------
-            | Foreign Key Constraints & Indexes
+            | Indexes
             |--------------------------------------------------------------------------
             */
-            $table->foreign('student_id')
-                ->references('student_id')
-                ->on('students')
-                ->nullOnDelete();
-
             $table->index('role');
+            $table->index('key_code');
         });
 
         /*
