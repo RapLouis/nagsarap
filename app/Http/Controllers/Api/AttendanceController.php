@@ -10,9 +10,12 @@ use App\Models\StudentNotification;
 use App\Services\AttendanceService;
 use App\Services\BiometricService;
 use App\Services\FaceChallengeService;
+use App\Services\SlotResolver;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
+use ReflectionMethod;
 
 class AttendanceController extends Controller
 {
@@ -44,7 +47,8 @@ class AttendanceController extends Controller
         Request $request,
         AttendanceService $service,
         BiometricService $bio,
-        FaceChallengeService $challenges
+        FaceChallengeService $challenges,
+        SlotResolver $slots
     ): JsonResponse {
         $validated = $request->validate([
             'event_id' => ['required', 'integer', 'exists:events,event_id'],
@@ -55,7 +59,12 @@ class AttendanceController extends Controller
             'location_accuracy' => ['nullable', 'numeric', 'min:0', 'max:10000'],
             'center_frame' => ['required', 'image', 'mimes:jpeg,jpg,png', 'max:5048'],
             'turned_frame' => ['required', 'image', 'mimes:jpeg,jpg,png', 'max:5048'],
-            'type' => ['nullable', 'string', 'in:time_in,time_out'],
+            'flash_frames' => ['nullable', 'array'],
+            'flash_frames.*' => ['image', 'mimes:jpeg,jpg,png', 'max:5048'],
+            'flash_colors' => ['nullable', 'array'],
+            'slot_index' => ['nullable', 'integer', 'min:0', 'max:99'],
+            'checkpoint_key' => ['nullable', 'string', 'in:morning_time_in,morning_time_out,afternoon_time_in,afternoon_time_out'],
+            'type' => ['nullable', 'string', 'in:in,out,time_in,time_out'],
         ]);
 
         $user = $request->user();
@@ -69,7 +78,7 @@ class AttendanceController extends Controller
             ], 403);
         }
 
-        $event = Event::findOrFail($validated['event_id']);
+        $event = Event::with('days')->findOrFail($validated['event_id']);
 
         if (!$event->is_active) {
             return response()->json([
@@ -79,89 +88,34 @@ class AttendanceController extends Controller
             ], 422);
         }
 
-        // 1. Strict Server-Side Time Window Alignment
         $appTimezone = config('app.timezone', 'Asia/Manila');
         $now = Carbon::now($appTimezone);
-        $today = $now->toDateString();
 
-        $eventDay = $event->days()->whereDate('event_date', $today)->first();
+        $slotIndex = isset($validated['slot_index']) ? (int) $validated['slot_index'] : null;
+        $checkpointKey = $validated['checkpoint_key'] ?? null;
+        $type = $this->normalizeType($validated['type'] ?? null);
 
-        if (!$eventDay) {
-            return response()->json([
-                'success' => false,
-                'code' => 'NO_SCHEDULE_TODAY',
-                'message' => 'No active schedule configured for today.',
-            ], 422);
-        }
-
-        $slots = is_string($eventDay->slots) ? json_decode($eventDay->slots, true) : $eventDay->slots;
-
-        if (empty($slots)) {
-            return response()->json([
-                'success' => false,
-                'code' => 'NO_SLOTS_TODAY',
-                'message' => 'No active schedule slots configured for today.',
-            ], 422);
-        }
-
-        $checkType = $validated['type'] ?? 'time_in';
-        $allowedTimeWindow = false;
-
-        foreach ($slots as $slot) {
-            if ($checkType === 'time_out') {
-                $startStr = $slot['time_out_start'] ?? $slot['time_in_start'] ?? null;
-                $endStr = $slot['time_out_end'] ?? $slot['time_in_end'] ?? null;
-            } else {
-                $startStr = $slot['time_in_start'] ?? null;
-                $endStr = $slot['time_in_end'] ?? null;
-            }
-
-            if (!empty($startStr)) {
-                $start = Carbon::parse($today . ' ' . $startStr, $appTimezone);
-                $cutoff = !empty($endStr) ? Carbon::parse($today . ' ' . $endStr, $appTimezone) : null;
-
-                if ($cutoff) {
-                    if ($now->between($start, $cutoff)) {
-                        $allowedTimeWindow = true;
-                        break;
-                    }
-                } else {
-                    if ($now->greaterThanOrEqualTo($start)) {
-                        $allowedTimeWindow = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (!$allowedTimeWindow) {
-            return response()->json([
-                'success' => false,
-                'code' => 'TIME_WINDOW_CLOSED',
-                'message' => 'Attendance is currently closed for ' . str_replace('_', ' ', $checkType) . '.',
-            ], 422);
-        }
-
-        // 2. Geofence Check
-        if ($event->is_geofenced && $event->latitude && $event->longitude) {
-            $distance = $this->calculateDistance(
-                (float) $validated['latitude'],
-                (float) $validated['longitude'],
-                (float) $event->latitude,
-                (float) $event->longitude
+        // 1. Pre-validate slot/checkpoint window & duplicate guard before consuming challenge nonce
+        try {
+            $resolved = $this->resolveSlotSafely(
+                slots: $slots,
+                event: $event,
+                at: $now,
+                slotIndex: $slotIndex,
+                checkpointKey: $checkpointKey,
+                type: $type
             );
-
-            if ($distance > $event->radius_meters) {
-                $remaining = round($distance - $event->radius_meters);
-                return response()->json([
-                    'success' => false,
-                    'code' => 'OUTSIDE_GEOFENCE',
-                    'message' => "You are outside the event area. Move about {$remaining}m closer to check in.",
-                ], 422);
-            }
+            $slots->guard($student->student_id, $event->event_id, $resolved);
+        } catch (AttendanceException $e) {
+            return response()->json([
+                'success' => false,
+                'code' => $e->errorCode,
+                'message' => $e->getMessage(),
+                'data' => $e->data,
+            ], $e->httpStatus);
         }
 
-        // 3. Challenge Consumption
+        // 2. Consume Liveness Challenge Nonce
         $challenge = $challenges->consume(
             $student->student_id,
             $validated['challenge_nonce'],
@@ -181,14 +135,33 @@ class AttendanceController extends Controller
         }
 
         $direction = $challenge['direction'];
+        $flashFrames = $request->file('flash_frames', []);
+        if (!is_array($flashFrames)) {
+            $flashFrames = [];
+        }
 
-        // 4. Biometric Liveness Verification
+        $flashColors = !empty($challenge['flash_colors']) && is_array($challenge['flash_colors'])
+            ? $challenge['flash_colors']
+            : ($validated['flash_colors'] ?? []);
+        if (!is_array($flashColors)) {
+            $flashColors = [];
+        }
+
+        // 3. Biometric Liveness Verification
         try {
-            $liveness = $bio->verifyLiveness(
-                $direction,
-                $request->file('center_frame'),
-                $request->file('turned_frame')
-            );
+            $liveness = !empty($flashFrames)
+                ? $bio->verifyLiveness(
+                    $direction,
+                    $request->file('center_frame'),
+                    $request->file('turned_frame'),
+                    $flashFrames,
+                    $flashColors
+                )
+                : $bio->verifyLiveness(
+                    $direction,
+                    $request->file('center_frame'),
+                    $request->file('turned_frame')
+                );
         } catch (\Throwable $e) {
             $this->notify($request, $event, false, $e->getMessage());
 
@@ -211,9 +184,10 @@ class AttendanceController extends Controller
             ], 422);
         }
 
-        // 5. Save Attendance Record (Server Clock is Enforced)
+        // 4. Record Attendance via Teammate's AttendanceService (parameter-order safe)
         try {
-            $attendance = $service->record(
+            $attendance = $this->invokeRecordSafely(
+                service: $service,
                 user: $user,
                 event: $event,
                 liveCameraFrame: $request->file('center_frame'),
@@ -223,8 +197,13 @@ class AttendanceController extends Controller
                     ? (float) $validated['location_accuracy']
                     : null,
                 livenessPassed: true,
+                attendanceUuid: null,
+                attendanceTime: $now,
                 source: 'mobile_online',
-                isOfflineSync: false
+                isOfflineSync: false,
+                slotIndex: $resolved['index'],
+                type: $resolved['type'],
+                checkpointKey: $resolved['checkpoint_key']
             );
         } catch (AttendanceException $e) {
             $this->notify($request, $event, false, $e->getMessage());
@@ -243,12 +222,14 @@ class AttendanceController extends Controller
             ], 500);
         }
 
-        $this->notify($request, $event, true, 'Attendance recorded successfully.', $attendance->status);
+        $effectiveCheckpoint = $attendance->checkpoint_key ?: $resolved['checkpoint_key'];
+        $checkpointLabel = $this->checkpointLabel($effectiveCheckpoint);
+        $this->notify($request, $event, true, "{$checkpointLabel} recorded successfully.", $attendance->status);
 
         return response()->json([
             'success' => true,
             'code' => 'ATTENDANCE_RECORDED',
-            'message' => 'Attendance recorded successfully.',
+            'message' => "{$checkpointLabel} recorded successfully.",
             'data' => [
                 'attendance' => $attendance->load('event'),
                 'liveness' => $liveness,
@@ -265,7 +246,8 @@ class AttendanceController extends Controller
     public function sync(
         Request $request,
         AttendanceService $service,
-        BiometricService $bio
+        BiometricService $bio,
+        SlotResolver $slots
     ): JsonResponse {
         $validated = $request->validate([
             'event_id' => ['required', 'integer', 'exists:events,event_id'],
@@ -277,27 +259,49 @@ class AttendanceController extends Controller
             'location_accuracy' => ['nullable', 'numeric', 'min:0', 'max:10000'],
             'center_frame' => ['required', 'image', 'mimes:jpeg,jpg,png', 'max:5048'],
             'turned_frame' => ['required', 'image', 'mimes:jpeg,jpg,png', 'max:5048'],
+            'flash_frames' => ['nullable', 'array'],
+            'flash_frames.*' => ['image', 'mimes:jpeg,jpg,png', 'max:5048'],
+            'flash_colors' => ['nullable', 'array'],
+            'slot_index' => ['nullable', 'integer', 'min:0', 'max:99'],
+            'checkpoint_key' => ['nullable', 'string', 'in:morning_time_in,morning_time_out,afternoon_time_in,afternoon_time_out'],
+            'type' => ['nullable', 'string', 'in:in,out,time_in,time_out'],
+            'session_type' => ['nullable', 'string', 'in:in,out,time_in,time_out'],
         ]);
 
         $appTimezone = config('app.timezone', 'Asia/Manila');
         $serverNow = Carbon::now($appTimezone);
         $submittedTime = Carbon::parse($validated['attendance_time'], $appTimezone);
 
-        // Anti-Spoofing: Cap future timestamps back to server time if phone clock was set ahead
+        // Anti-spoofing: cap future timestamps back to server time
         if ($submittedTime->greaterThan($serverNow->copy()->addMinutes(5))) {
+            $submittedTime = $serverNow->copy();
             $validated['attendance_time'] = $serverNow->toDateTimeString();
         }
 
         $user = $request->user();
-        $event = Event::findOrFail($validated['event_id']);
+        $event = Event::with('days')->findOrFail($validated['event_id']);
         $direction = $validated['liveness_direction'];
 
+        $flashFrames = $request->file('flash_frames', []);
+        if (!is_array($flashFrames)) {
+            $flashFrames = [];
+        }
+        $flashColors = is_array($validated['flash_colors'] ?? null) ? $validated['flash_colors'] : [];
+
         try {
-            $liveness = $bio->verifyLiveness(
-                $direction,
-                $request->file('center_frame'),
-                $request->file('turned_frame')
-            );
+            $liveness = !empty($flashFrames)
+                ? $bio->verifyLiveness(
+                    $direction,
+                    $request->file('center_frame'),
+                    $request->file('turned_frame'),
+                    $flashFrames,
+                    $flashColors
+                )
+                : $bio->verifyLiveness(
+                    $direction,
+                    $request->file('center_frame'),
+                    $request->file('turned_frame')
+                );
         } catch (\Throwable $e) {
             return response()->json([
                 'success' => false,
@@ -314,8 +318,22 @@ class AttendanceController extends Controller
             ], 422);
         }
 
+        $slotIndex = isset($validated['slot_index']) ? (int) $validated['slot_index'] : null;
+        $checkpointKey = $validated['checkpoint_key'] ?? null;
+        $type = $this->normalizeType($validated['type'] ?? $validated['session_type'] ?? null);
+
         try {
-            $attendance = $service->record(
+            $resolved = $this->resolveSlotSafely(
+                slots: $slots,
+                event: $event,
+                at: $submittedTime,
+                slotIndex: $slotIndex,
+                checkpointKey: $checkpointKey,
+                type: $type
+            );
+
+            $attendance = $this->invokeRecordSafely(
+                service: $service,
                 user: $user,
                 event: $event,
                 liveCameraFrame: $request->file('center_frame'),
@@ -328,7 +346,10 @@ class AttendanceController extends Controller
                 attendanceUuid: $validated['attendance_uuid'],
                 attendanceTime: $validated['attendance_time'],
                 source: 'mobile_offline',
-                isOfflineSync: true
+                isOfflineSync: true,
+                slotIndex: $resolved['index'],
+                type: $resolved['type'],
+                checkpointKey: $resolved['checkpoint_key']
             );
         } catch (AttendanceException $e) {
             return response()->json([
@@ -339,12 +360,14 @@ class AttendanceController extends Controller
             ], $e->httpStatus);
         }
 
-        $this->notify($request, $event, true, 'Offline attendance synchronized successfully.', $attendance->status);
+        $effectiveCheckpoint = $attendance->checkpoint_key ?: $resolved['checkpoint_key'];
+        $checkpointLabel = $this->checkpointLabel($effectiveCheckpoint);
+        $this->notify($request, $event, true, "Offline {$checkpointLabel} synchronized successfully.", $attendance->status);
 
         return response()->json([
             'success' => true,
             'code' => 'OFFLINE_ATTENDANCE_SYNCED',
-            'message' => 'Offline attendance synchronized successfully.',
+            'message' => "Offline {$checkpointLabel} synchronized successfully.",
             'data' => [
                 'attendance' => $attendance->load('event'),
                 'liveness' => $liveness,
@@ -353,6 +376,7 @@ class AttendanceController extends Controller
                     'distance_meters' => $attendance->distance_from_event,
                     'allowed_radius_meters' => $event->radius_meters,
                 ],
+                'server_time' => $serverNow->toIso8601String(),
             ],
         ]);
     }
@@ -406,24 +430,182 @@ class AttendanceController extends Controller
             $request,
             $service,
             app(BiometricService::class),
-            app(FaceChallengeService::class)
+            app(FaceChallengeService::class),
+            app(SlotResolver::class)
         );
     }
 
-    private function calculateDistance(float $lat1, float $lon1, float $lat2, float $lon2): float
+    /**
+     * Resolves the 4-checkpoint slot safely against the teammate's SlotResolver.
+     */
+    private function resolveSlotSafely(
+        SlotResolver $slots,
+        Event $event,
+        Carbon $at,
+        ?int $slotIndex,
+        ?string $checkpointKey,
+        ?string $type
+    ): array {
+        if (method_exists($slots, 'resolveOrInfer')) {
+            return $slots->resolveOrInfer(
+                event: $event,
+                at: $at,
+                slotIndex: $slotIndex,
+                checkpointKey: $checkpointKey,
+                type: $type
+            );
+        }
+
+        $effectiveKey = $checkpointKey;
+        if (!$effectiveKey) {
+            $hour = (int) $at->format('G');
+            if ($type === 'out') {
+                $effectiveKey = $hour < 12 ? 'morning_time_out' : 'afternoon_time_out';
+            } else {
+                $effectiveKey = $hour < 12 ? 'morning_time_in' : 'afternoon_time_in';
+            }
+        }
+
+        if ($slotIndex !== null && method_exists($slots, 'resolve')) {
+            return $slots->resolve($event, $at, $slotIndex, $effectiveKey);
+        }
+
+        // Fallback scan across all 4 checkpoints on matching event days
+        $event->loadMissing('days');
+        $candidates = $checkpointKey
+            ? [$checkpointKey]
+            : ($type === 'out'
+                ? ['morning_time_out', 'afternoon_time_out']
+                : ($type === 'in'
+                    ? ['morning_time_in', 'afternoon_time_in']
+                    : ['morning_time_in', 'morning_time_out', 'afternoon_time_in', 'afternoon_time_out']));
+
+        foreach ([$at->toDateString(), $at->copy()->subDay()->toDateString()] as $dateStr) {
+            $day = $event->days->first(
+                fn ($d) => Carbon::parse($d->event_date)->toDateString() === $dateStr
+            );
+            if (!$day) {
+                continue;
+            }
+
+            foreach (array_values($day->slots ?? []) as $idx => $slot) {
+                if (!is_array($slot)) {
+                    continue;
+                }
+                if ($slotIndex !== null && $idx !== $slotIndex) {
+                    continue;
+                }
+
+                foreach ($candidates as $candidateKey) {
+                    if (method_exists($slots, 'resolve')) {
+                        try {
+                            return $slots->resolve($event, $at, $idx, $candidateKey);
+                        } catch (AttendanceException) {
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+
+        throw new AttendanceException(
+            'EVENT_OUTSIDE_WINDOW',
+            'Attendance is not open for this event at the supplied time.',
+            422,
+            ['attendance_time' => $at->toIso8601String()]
+        );
+    }
+
+    /**
+     * Invokes teammate's AttendanceService::record() using parameter reflection so
+     * positional/named argument order differences never cause a mismatch, and ensures
+     * checkpoint_key and slot_index are persisted on the created record.
+     */
+    private function invokeRecordSafely(
+        AttendanceService $service,
+        $user,
+        Event $event,
+        UploadedFile $liveCameraFrame,
+        float $latitude,
+        float $longitude,
+        ?float $locationAccuracy,
+        bool $livenessPassed,
+        ?string $attendanceUuid,
+        mixed $attendanceTime,
+        string $source,
+        bool $isOfflineSync,
+        ?int $slotIndex,
+        ?string $type,
+        ?string $checkpointKey
+    ): Attendance {
+        $availableArgs = [
+            'user' => $user,
+            'event' => $event,
+            'liveCameraFrame' => $liveCameraFrame,
+            'latitude' => $latitude,
+            'longitude' => $longitude,
+            'locationAccuracy' => $locationAccuracy,
+            'livenessPassed' => $livenessPassed,
+            'attendanceUuid' => $attendanceUuid,
+            'attendanceTime' => $attendanceTime,
+            'source' => $source,
+            'isOfflineSync' => $isOfflineSync,
+            'slotIndex' => $slotIndex,
+            'type' => $type,
+            'checkpointKey' => $checkpointKey,
+        ];
+
+        $ref = new ReflectionMethod($service, 'record');
+        $callArgs = [];
+
+        foreach ($ref->getParameters() as $param) {
+            $name = $param->getName();
+            if (array_key_exists($name, $availableArgs)) {
+                $callArgs[$name] = $availableArgs[$name];
+            }
+        }
+
+        /** @var Attendance $attendance */
+        $attendance = $service->record(...$callArgs);
+
+        $dirty = false;
+        if ($checkpointKey && empty($attendance->checkpoint_key)) {
+            $attendance->checkpoint_key = $checkpointKey;
+            $dirty = true;
+        }
+        if ($slotIndex !== null && $attendance->slot_index === null) {
+            $attendance->slot_index = $slotIndex;
+            $dirty = true;
+        }
+        if ($dirty) {
+            $attendance->save();
+        }
+
+        return $attendance;
+    }
+
+    private function normalizeType(?string $type): ?string
     {
-        $earthRadius = 6371000;
+        if ($type === null || trim($type) === '') {
+            return null;
+        }
 
-        $dLat = deg2rad($lat2 - $lat1);
-        $dLon = deg2rad($lon2 - $lon1);
+        return match (strtolower(trim($type))) {
+            'in', 'time_in', 'checkin', 'check_in' => 'in',
+            'out', 'time_out', 'checkout', 'check_out' => 'out',
+            default => null,
+        };
+    }
 
-        $a = sin($dLat / 2) * sin($dLat / 2) +
-            cos(deg2rad($lat1)) * cos(deg2rad($lat2)) *
-            sin($dLon / 2) * sin($dLon / 2);
-
-        $c = 2 * atan2(sqrt($a), sqrt(1 - $a));
-
-        return $earthRadius * $c;
+    private function checkpointLabel(?string $checkpointKey): string
+    {
+        return match ($checkpointKey) {
+            'morning_time_in' => 'Morning Time-In',
+            'morning_time_out' => 'Morning Time-Out',
+            'afternoon_time_in' => 'Afternoon Time-In',
+            'afternoon_time_out' => 'Afternoon Time-Out',
+            default => 'Attendance',
+        };
     }
 
     private function notify(
