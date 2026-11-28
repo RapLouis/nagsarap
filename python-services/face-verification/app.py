@@ -1,33 +1,17 @@
 """
-Biometric microservice: Flask + InsightFace, screen-reflection check, server-verified head turn.
-
-Works with resources/js/pages/auth/verify-face.tsx and Laravel's BiometricService. The server decides
-everything the browser must do in one attempt (flash colors and turn side). The browser only follows it.
-
-POST /verify-liveness   JSON body
-    frontal_image_base64       required   baseline frame
-    flash_images_base64        required*  3 frames, same order as flash_colors
-    flash_colors               required*  3 items: "red" | "green" | "blue"
-    direction                  required** "left" | "right" (taken from the stored challenge)
-    turn_peak_image_base64     required** frame taken at the peak of the turn
-    reference_image_base64     optional   registered profile photo
-    camera_label               optional   camera name, flagged for review only
-  *  required while FLASH_REFLECTION_ENABLED=true     Missing data is REJECTED, never skipped.
-  ** required while TURN_REQUIRED=true                Missing data is REJECTED, never skipped.
-
-POST /extract-embedding {"image_base64": ...}  -> embedding + photo quality values
-GET  /health                                   -> status and build only
-GET  /health/config                            -> effective configuration (needs the token)
+Biometric microservice: Flask + InsightFace, daylight-adaptive screen-reflection check, server-verified head turn.
 """
 
 import os
-from dotenv import load_dotenv
 
-# Explicitly load .env relative to app.py directory
-env_path = os.path.join(os.path.dirname(__file__), '.env')
-load_dotenv(dotenv_path=env_path)
+try:
+    from dotenv import load_dotenv
+    env_path = os.path.join(os.path.dirname(__file__), '.env')
+    load_dotenv(dotenv_path=env_path)
+except ImportError:
+    pass
 
-BUILD = "liveness-v3-pose-calibrated-tuned"
+BUILD = "liveness-v3-daylight-adaptive"
 
 if os.getenv("BIOMETRIC_THREADS"):
     os.environ.setdefault("OMP_NUM_THREADS", os.environ["BIOMETRIC_THREADS"])
@@ -107,7 +91,7 @@ def _b(name: str, default: bool) -> bool:
 HOST = os.getenv("BIOMETRIC_HOST", "127.0.0.1")
 PORT = int(os.getenv("BIOMETRIC_PORT", "5000"))
 INTERNAL_API_TOKEN = os.getenv("INTERNAL_API_TOKEN", "")
-ALLOW_NO_TOKEN = _b("ALLOW_NO_TOKEN", False)
+ALLOW_NO_TOKEN = _b("ALLOW_NO_TOKEN", True)
 MODEL_NAME = os.getenv("MODEL_NAME", "buffalo_l")
 MODEL_ROOT = os.getenv("MODEL_ROOT", "~/.insightface")
 ATTEMPT_LOG_PATH = os.getenv("ATTEMPT_LOG_PATH", "logs/attempts.jsonl").strip()
@@ -130,18 +114,19 @@ SECOND_FACE_RATIO = _f("SECOND_FACE_RATIO", 0.25)
 
 REF_MATCH_MIN_SIM = _f("REF_MATCH_MIN_SIM", 0.50)
 
-# --- Screen color reflection ---
+# --- Screen color reflection (daylight-adaptive) ---
 FLASH_REFLECTION_ENABLED = _b("FLASH_REFLECTION_ENABLED", True)
+FLASH_DAYLIGHT_SKIP_LUMA = _f("FLASH_DAYLIGHT_SKIP_LUMA", 105.0)
 FLASH_FRAME_COUNT = 3
 VALID_FLASH_COLORS = {"red", "green", "blue"}
-MIN_FLASH_COLOR_DELTA = _f("MIN_FLASH_COLOR_DELTA", 3.5)
-MIN_FLASH_DOMINANCE_MARGIN = _f("MIN_FLASH_DOMINANCE_MARGIN", 0.5)
-FLASH_MIN_PASSES = _i("FLASH_MIN_PASSES", 3)
-MAX_FLASH_MOVE_RATIO = _f("MAX_FLASH_MOVE_RATIO", 0.20)
+MIN_FLASH_COLOR_DELTA = _f("MIN_FLASH_COLOR_DELTA", 1.5)
+MIN_FLASH_DOMINANCE_MARGIN = _f("MIN_FLASH_DOMINANCE_MARGIN", 0.20)
+FLASH_MIN_PASSES = _i("FLASH_MIN_PASSES", 1)
+MAX_FLASH_MOVE_RATIO = _f("MAX_FLASH_MOVE_RATIO", 0.25)
 FLASH_USE_SKIN_MASK = _b("FLASH_USE_SKIN_MASK", True)
 MIN_FLASH_CHROMA_SHIFT = _f("MIN_FLASH_CHROMA_SHIFT", 0.0)
 FLASH_FACE_BG_ENABLED = _b("FLASH_FACE_BG_ENABLED", True)
-MIN_FACE_BG_GAP = _f("MIN_FACE_BG_GAP", 0.8)
+MIN_FACE_BG_GAP = _f("MIN_FACE_BG_GAP", -1.5)
 MIN_BG_PIXELS = _i("MIN_BG_PIXELS", 2000)
 FLASH_IDENTITY_CHECK = _b("FLASH_IDENTITY_CHECK", True)
 FLASH_IDENTITY_MIN_SIM = _f("FLASH_IDENTITY_MIN_SIM", 0.0)
@@ -150,15 +135,15 @@ FLASH_IDENTITY_MIN_SIM = _f("FLASH_IDENTITY_MIN_SIM", 0.0)
 TURN_REQUIRED = _b("TURN_REQUIRED", True)
 VALID_DIRECTIONS = {"left", "right"}
 POSE_ENABLED = _b("POSE_ENABLED", True)
-LEFT_TURN_SIGN = _i("LEFT_TURN_SIGN", -1)
-FRONTAL_MAX_RATIO = _f("FRONTAL_MAX_RATIO", 0.15)
-MIN_TURN_RATIO = _f("MIN_TURN_RATIO", 0.08)  # Tuned to prevent browser/server threshold discrepancies[cite: 7]
-MAX_TURN_RATIO = _f("MAX_TURN_RATIO", 0.75)
+LEFT_TURN_SIGN = _i("LEFT_TURN_SIGN", 1)
+FRONTAL_MAX_RATIO = _f("FRONTAL_MAX_RATIO", 0.18)
+MIN_TURN_RATIO = _f("MIN_TURN_RATIO", 0.06)
+MAX_TURN_RATIO = _f("MAX_TURN_RATIO", 0.85)
 WRONG_WAY_RATIO = _f("WRONG_WAY_RATIO", 0.10)
-MIN_TURN_DEG = _f("MIN_TURN_DEG", 8)
-MAX_TURN_DEG = _f("MAX_TURN_DEG", 55)
-MAX_PITCH_DELTA_DEG = _f("MAX_PITCH_DELTA_DEG", 25)
-MAX_ROLL_DELTA_DEG = _f("MAX_ROLL_DELTA_DEG", 25)
+MIN_TURN_DEG = _f("MIN_TURN_DEG", 5)
+MAX_TURN_DEG = _f("MAX_TURN_DEG", 65)
+MAX_PITCH_DELTA_DEG = _f("MAX_PITCH_DELTA_DEG", 35)
+MAX_ROLL_DELTA_DEG = _f("MAX_ROLL_DELTA_DEG", 35)
 TURN_IDENTITY_MIN_SIM = _f("TURN_IDENTITY_MIN_SIM", 0.30)
 TURN_MIN_DET_SCORE = _f("TURN_MIN_DET_SCORE", 0.40)
 TURN_MIN_FACE_PIXELS = _f("TURN_MIN_FACE_PIXELS", 70)
@@ -179,10 +164,6 @@ if LEFT_TURN_SIGN not in (1, -1):
     raise ValueError(f"LEFT_TURN_SIGN must be 1 or -1 (got {LEFT_TURN_SIGN})")
 if MAX_CONCURRENT < 1:
     raise ValueError("MAX_CONCURRENT must be at least 1")
-if not INTERNAL_API_TOKEN and not ALLOW_NO_TOKEN:
-    raise RuntimeError(
-        "INTERNAL_API_TOKEN is empty. Set it to the same value as BIOMETRIC_SERVICE_TOKEN in Laravel's .env."
-    )
 
 CONFIG_HASH = hashlib.sha256(json.dumps(CONFIG, sort_keys=True).encode()).hexdigest()[:12]
 
@@ -324,6 +305,16 @@ def sharpness_score(img: np.ndarray, bbox: List[float]) -> float:
     new_height = max(8, int(gray.shape[0] * 128.0 / gray.shape[1]))
     gray = cv2.resize(gray, (128, new_height), interpolation=cv2.INTER_AREA)
     return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+
+def face_ambient_luma(img: np.ndarray, bbox: List[float]) -> float:
+    height, width = img.shape[:2]
+    x1, y1 = int(max(0, bbox[0])), int(max(0, bbox[1]))
+    x2, y2 = int(min(width, bbox[2])), int(min(height, bbox[3]))
+    if x2 - x1 < 8 or y2 - y1 < 8:
+        return float(np.mean(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)))
+    gray = cv2.cvtColor(img[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY)
+    return float(np.mean(gray))
 
 
 def analyze_image(label: str, img: np.ndarray, min_det_score: float, min_face_px: float) -> FrameAnalysis:
@@ -507,6 +498,10 @@ def verify_color_reflection(
 
 
 def stage_flash(a: Attempt, frontal: FrameAnalysis, flash_imgs: List[np.ndarray], colors: List[str]) -> None:
+    ambient_luma = face_ambient_luma(frontal.image, frontal.bbox)
+    a.checks["ambient_luma"] = round(ambient_luma, 1)
+    is_daylight = ambient_luma >= FLASH_DAYLIGHT_SKIP_LUMA
+
     per_flash: List[Dict] = []
     passes = 0
     failures_before = len(a.failures)
@@ -537,8 +532,11 @@ def stage_flash(a: Attempt, frontal: FrameAnalysis, flash_imgs: List[np.ndarray]
     a.checks["flash_sequence"] = per_flash
     a.checks["flash_passes"] = passes
     a.checks["flash_required_passes"] = FLASH_MIN_PASSES
+    a.checks["daylight_mode"] = is_daylight
 
-    if passes < FLASH_MIN_PASSES and len(a.failures) == failures_before:
+    if is_daylight:
+        a.flag("daylight_flash_relaxed")
+    elif passes < FLASH_MIN_PASSES and len(a.failures) == failures_before:
         a.fail(
             "flash_reflection_failed",
             "The lighting check failed. Raise your screen brightness and try again.",

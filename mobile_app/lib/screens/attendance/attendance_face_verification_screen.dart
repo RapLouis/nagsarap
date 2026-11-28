@@ -3,22 +3,143 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:image/image.dart' as img;
+import 'package:intl/intl.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../main.dart';
 import '../../models/event_item.dart';
 import '../../services/attendance_service.dart';
-import '../../services/image_compress_service.dart';
 import '../../services/secure_time_service.dart';
 
 enum _LivenessStep { lookCenter, turn, verifying, passed, failed }
 
 enum AttendanceSessionType { timeIn, timeOut }
+
+class _RawStreamFrame {
+  final Uint8List plane0;
+  final Uint8List? plane1;
+  final Uint8List? plane2;
+  final int width;
+  final int height;
+  final int bytesPerRow0;
+  final int bytesPerRow1;
+  final int bytesPerRow2;
+  final int uvPixelStride;
+  final int sensorOrientation;
+  final bool isBgra;
+  final bool isFlash;
+
+  const _RawStreamFrame({
+    required this.plane0,
+    this.plane1,
+    this.plane2,
+    required this.width,
+    required this.height,
+    required this.bytesPerRow0,
+    required this.bytesPerRow1,
+    required this.bytesPerRow2,
+    required this.uvPixelStride,
+    required this.sensorOrientation,
+    required this.isBgra,
+    this.isFlash = false,
+  });
+}
+
+Uint8List _encodeRawStreamToJpeg(_RawStreamFrame raw) {
+  final int targetMax = raw.isFlash ? 160 : 360;
+  final int longestSide = max(raw.width, raw.height);
+  final int step = max(1, longestSide ~/ targetMax);
+
+  final int outW = raw.width ~/ step;
+  final int outH = raw.height ~/ step;
+  img.Image image = img.Image(width: outW, height: outH);
+
+  if (raw.isBgra) {
+    final bytes = raw.plane0;
+    for (int dy = 0; dy < outH; dy++) {
+      final sy = dy * step;
+      final rowOffset = sy * raw.bytesPerRow0;
+      for (int dx = 0; dx < outW; dx++) {
+        final sx = dx * step;
+        final idx = rowOffset + sx * 4;
+        if (idx + 2 < bytes.length) {
+          image.setPixelRgb(dx, dy, bytes[idx + 2], bytes[idx + 1], bytes[idx]);
+        }
+      }
+    }
+  } else {
+    final yPlane = raw.plane0;
+    final uPlane = raw.plane1;
+    final vPlane = raw.plane2;
+
+    for (int dy = 0; dy < outH; dy++) {
+      final sy = dy * step;
+      final yRow = sy * raw.bytesPerRow0;
+      final uvRowIndex = sy >> 1;
+      for (int dx = 0; dx < outW; dx++) {
+        final sx = dx * step;
+        final yIdx = yRow + sx;
+        if (yIdx >= yPlane.length) continue;
+        final yp = yPlane[yIdx];
+
+        int up = 128;
+        int vp = 128;
+
+        if (uPlane != null && vPlane != null) {
+          final uIdx =
+              uvRowIndex * raw.bytesPerRow1 + (sx >> 1) * raw.uvPixelStride;
+          final vIdx =
+              uvRowIndex * raw.bytesPerRow2 + (sx >> 1) * raw.uvPixelStride;
+          if (uIdx < uPlane.length && vIdx < vPlane.length) {
+            up = uPlane[uIdx];
+            vp = vPlane[vIdx];
+          }
+        } else if (uPlane != null) {
+          final uvIdx =
+              uvRowIndex * raw.bytesPerRow1 + (sx >> 1) * raw.uvPixelStride;
+          if (uvIdx + 1 < uPlane.length) {
+            vp = uPlane[uvIdx];
+            up = uPlane[uvIdx + 1];
+          }
+        } else {
+          final uvBase = raw.bytesPerRow0 * raw.height;
+          final uvIdx =
+              uvBase + uvRowIndex * raw.bytesPerRow0 + ((sx >> 1) * 2);
+          if (uvIdx + 1 < yPlane.length) {
+            vp = yPlane[uvIdx];
+            up = yPlane[uvIdx + 1];
+          }
+        }
+
+        final r = (yp + 1.402 * (vp - 128)).round().clamp(0, 255);
+        final g = (yp - 0.344136 * (up - 128) - 0.714136 * (vp - 128))
+            .round()
+            .clamp(0, 255);
+        final b = (yp + 1.772 * (up - 128)).round().clamp(0, 255);
+        image.setPixelRgb(dx, dy, r, g, b);
+      }
+    }
+  }
+
+  if (raw.sensorOrientation == 90) {
+    image = img.copyRotate(image, angle: 90);
+  } else if (raw.sensorOrientation == 180) {
+    image = img.copyRotate(image, angle: 180);
+  } else if (raw.sensorOrientation == 270) {
+    image = img.copyRotate(image, angle: 270);
+  }
+
+  return Uint8List.fromList(
+    img.encodeJpg(image, quality: raw.isFlash ? 55 : 75),
+  );
+}
 
 class AttendanceFaceVerificationScreen extends StatefulWidget {
   const AttendanceFaceVerificationScreen({
@@ -29,6 +150,9 @@ class AttendanceFaceVerificationScreen extends StatefulWidget {
     this.hasTimeOut = false,
     this.timeInWindow,
     this.timeOutWindow,
+    this.slotIndex,
+    this.checkpointKey,
+    this.checkpointLabel,
   });
 
   final EventItem event;
@@ -37,6 +161,9 @@ class AttendanceFaceVerificationScreen extends StatefulWidget {
   final bool hasTimeOut;
   final String? timeInWindow;
   final String? timeOutWindow;
+  final int? slotIndex;
+  final String? checkpointKey;
+  final String? checkpointLabel;
 
   @override
   State<AttendanceFaceVerificationScreen> createState() =>
@@ -52,13 +179,16 @@ class _AttendanceFaceVerificationScreenState
 
   // Minimum head yaw angle (in degrees) required to confirm a left/right turn
   static const double _requiredTurnAngle = 14.0;
+  static const Duration _flashCycleInterval = Duration(milliseconds: 280);
 
   // Maximum time to wait for online verification before queuing offline
-  static const Duration _serverVerifyTimeout = Duration(seconds: 5);
+  static const Duration _serverVerifyTimeout = Duration(seconds: 8);
 
   final Random _random = Random();
   CameraController? _camera;
+  CameraDescription? _frontCamera;
   Position? _position;
+  DateTime? _positionFetchedAt;
 
   // On-device ML Kit face detector (100% offline capable)
   final FaceDetector _faceDetector = FaceDetector(
@@ -68,17 +198,22 @@ class _AttendanceFaceVerificationScreenState
       enableContours: false,
       enableTracking: false,
       performanceMode: FaceDetectorMode.fast,
+      minFaceSize: 0.20,
     ),
   );
 
   bool _cameraReady = false;
   bool _disposed = false;
-  bool _isProcessing = false;
+  bool _isProcessingFrame = false;
+  bool _isSubmitting = false;
   bool _checkingSession = true;
 
   late bool _hasTimeIn;
   late bool _hasTimeOut;
   AttendanceSessionType? _currentSession;
+  int? _activeSlotIndex;
+  String? _activeCheckpointKey;
+  String? _activeCheckpointLabel;
 
   String _direction = 'left';
   String? _challengeNonce;
@@ -87,27 +222,25 @@ class _AttendanceFaceVerificationScreenState
   String? _hint;
 
   Color _overlayFlashColor = Colors.transparent;
-  final List<XFile> _flashFrames = [];
-  final List<Future<XFile>> _flashCompressFutures = [];
   final List<String> _flashColors = [];
-
   final List<Color> _flashColorSequence = [
-    Colors.red,
-    Colors.green,
-    Colors.blue,
+    const Color(0xFFFF0000),
+    const Color(0xFF00FF00),
+    const Color(0xFF0000FF),
   ];
   final List<String> _flashColorNames = ['red', 'green', 'blue'];
 
   _LivenessStep _step = _LivenessStep.lookCenter;
 
-  XFile? _centerFrame;
-  Future<XFile>? _centerCompressFuture;
-  XFile? _turnedFrame;
-  Future<XFile>? _turnedCompressFuture;
-
-  // Allow up to 4 parallel hardware compressions so all 5 frames finish immediately
-  int _activeCompressJobs = 0;
-  final List<Completer<void>> _compressWaiters = [];
+  // Stream & looping flash state
+  Timer? _flashLoopTimer;
+  double _centerYaw = 0.0;
+  int _steadyCenterFrames = 0;
+  int _activeFlashIndex = -1;
+  int _flashTicks = 0;
+  final Map<int, _RawStreamFrame> _rawFlashFrames = {};
+  _RawStreamFrame? _rawCenterFrame;
+  _RawStreamFrame? _rawTurnedFrame;
 
   late final AnimationController _pulseController;
 
@@ -116,6 +249,9 @@ class _AttendanceFaceVerificationScreenState
     super.initState();
     _hasTimeIn = widget.hasTimeIn;
     _hasTimeOut = widget.hasTimeOut;
+    _activeSlotIndex = widget.slotIndex;
+    _activeCheckpointKey = widget.checkpointKey;
+    _activeCheckpointLabel = widget.checkpointLabel;
 
     _pulseController = AnimationController(
       vsync: this,
@@ -145,44 +281,78 @@ class _AttendanceFaceVerificationScreenState
     return _random.nextBool() ? 'left' : 'right';
   }
 
-  /// Tiered hardware compression:
-  /// - Flash frames: 240x240 @ q45 (~8-12 KB) since only RGB reflection is checked
-  /// - Pose frames: 480x480 @ q68 (~25-35 KB) optimal for ArcFace 112x112 tensors
-  Future<XFile> _compressPaced(XFile frame, {bool isFlash = false}) async {
-    while (_activeCompressJobs >= 4) {
-      final waiter = Completer<void>();
-      _compressWaiters.add(waiter);
-      await waiter.future;
-    }
-    _activeCompressJobs++;
-    try {
-      final targetPath =
-          '${frame.path}_${isFlash ? 'f' : 'p'}_${DateTime.now().microsecondsSinceEpoch}.jpg';
-      final dynamic compressed = await FlutterImageCompress.compressAndGetFile(
-        frame.path,
-        targetPath,
-        minWidth: isFlash ? 240 : 480,
-        minHeight: isFlash ? 240 : 480,
-        quality: isFlash ? 45 : 68,
-        format: CompressFormat.jpeg,
-      );
-
-      if (compressed is XFile) return compressed;
-      if (compressed is File) return XFile(compressed.path);
-
-      return await ImageCompressService.compressFrame(frame);
-    } catch (_) {
-      return await ImageCompressService.compressFrame(frame);
-    } finally {
-      _activeCompressJobs--;
-      if (_compressWaiters.isNotEmpty) {
-        _compressWaiters.removeAt(0).complete();
-      }
+  String _formatCheckpointLabel(String key) {
+    switch (key) {
+      case 'morning_time_in':
+        return 'Morning Time-In';
+      case 'morning_time_out':
+        return 'Morning Time-Out';
+      case 'afternoon_time_in':
+        return 'Afternoon Time-In';
+      case 'afternoon_time_out':
+        return 'Afternoon Time-Out';
+      case 'time_out':
+        return 'Time-Out Attendance';
+      case 'time_in':
+        return 'Time-In Attendance';
+      default:
+        return key
+            .split('_')
+            .where((p) => p.isNotEmpty)
+            .map((p) => '${p[0].toUpperCase()}${p.substring(1)}')
+            .join(' ');
     }
   }
 
   // --------------------------------------------------------------------------
-  // AUTOMATIC SESSION DETECTION (TIME-IN VS TIME-OUT — NO HARDCODED MARGIN)
+  // CONTINUOUS LOOPING RGB FLASH CONTROLLER
+  // --------------------------------------------------------------------------
+
+  void _startFlashLoop() {
+    _stopFlashLoop(clearColor: false);
+    _activeFlashIndex = 0;
+    _flashTicks = 1;
+
+    if (mounted && !_disposed) {
+      setState(() {
+        _overlayFlashColor = _flashColorSequence[0];
+      });
+    }
+
+    _flashLoopTimer = Timer.periodic(_flashCycleInterval, (timer) {
+      if (_disposed || !mounted || _isSubmitting) {
+        timer.cancel();
+        return;
+      }
+
+      if (_step != _LivenessStep.lookCenter && _step != _LivenessStep.turn) {
+        _stopFlashLoop();
+        return;
+      }
+
+      _activeFlashIndex = (_activeFlashIndex + 1) % _flashColorSequence.length;
+      _flashTicks++;
+
+      setState(() {
+        _overlayFlashColor = _flashColorSequence[_activeFlashIndex];
+      });
+    });
+  }
+
+  void _stopFlashLoop({bool clearColor = true}) {
+    _flashLoopTimer?.cancel();
+    _flashLoopTimer = null;
+    _activeFlashIndex = -1;
+
+    if (clearColor && mounted && !_disposed) {
+      setState(() {
+        _overlayFlashColor = Colors.transparent;
+      });
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // AUTOMATIC SESSION DETECTION (4-CHECKPOINT + LEGACY 2-CHECKPOINT)
   // --------------------------------------------------------------------------
 
   Future<DateTime> _getNormalizedLocalNow() async {
@@ -201,9 +371,107 @@ class _AttendanceFaceVerificationScreenState
   }
 
   Future<AttendanceSessionType?> _determineCurrentSession() async {
-    if (_hasTimeIn && _hasTimeOut) return null;
-
     final now = await _getNormalizedLocalNow();
+
+    if (_activeCheckpointKey != null && _activeCheckpointKey!.isNotEmpty) {
+      final isOut = _activeCheckpointKey!.endsWith('time_out') ||
+          _activeCheckpointKey == 'out';
+      _activeCheckpointLabel ??= _formatCheckpointLabel(_activeCheckpointKey!);
+
+      final windowStr = isOut ? widget.timeOutWindow : widget.timeInWindow;
+      if (windowStr != null && windowStr.trim().isNotEmpty) {
+        final win = _parseWindowString(windowStr, now);
+        if (win.start != null && win.end != null) {
+          var adjustedEnd = win.end!;
+          if (adjustedEnd.isBefore(win.start!)) {
+            adjustedEnd = adjustedEnd.add(const Duration(days: 1));
+          }
+          final inside =
+              (now.isAfter(win.start!) || now.isAtSameMomentAs(win.start!)) &&
+                  (now.isBefore(adjustedEnd) ||
+                      now.isAtSameMomentAs(adjustedEnd));
+          if (!inside) return null;
+        }
+      }
+
+      return isOut
+          ? AttendanceSessionType.timeOut
+          : AttendanceSessionType.timeIn;
+    }
+
+    final rawDays = widget.event.raw['days'];
+    if (rawDays is List && rawDays.isNotEmpty) {
+      final todayStr = DateFormat('yyyy-MM-dd').format(now);
+      Map<String, dynamic>? dayMap;
+      for (final entry in rawDays) {
+        if (entry is Map) {
+          final d = (entry['date'] ?? entry['event_date'])?.toString().trim();
+          if (d != null && d.startsWith(todayStr)) {
+            dayMap = Map<String, dynamic>.from(entry);
+            break;
+          }
+        }
+      }
+      dayMap ??= rawDays.first is Map
+          ? Map<String, dynamic>.from(rawDays.first as Map)
+          : null;
+
+      final rawSlots = dayMap?['slots'];
+      if (rawSlots is List && rawSlots.isNotEmpty) {
+        for (int i = 0; i < rawSlots.length; i++) {
+          final s = rawSlots[i];
+          if (s is! Map) continue;
+          final slotMap = Map<String, dynamic>.from(s);
+          final slotIndex =
+              int.tryParse(slotMap['slot_index']?.toString() ?? '') ?? i;
+          final periodRaw =
+              (slotMap['period'] ?? slotMap['session'] ?? '')
+                  .toString()
+                  .trim()
+                  .toLowerCase();
+
+          final prefix = (periodRaw == 'morning' || slotIndex == 0)
+              ? 'morning'
+              : ((periodRaw == 'afternoon' || slotIndex == 1)
+                  ? 'afternoon'
+                  : 'slot_$slotIndex');
+
+          final inRecorded = slotMap['has_time_in'] == true ||
+              slotMap['time_in_recorded'] == true;
+          final outRecorded = slotMap['has_time_out'] == true ||
+              slotMap['time_out_recorded'] == true;
+
+          final inWin = _slotCheckpointWindow(slotMap, now, isTimeIn: true);
+          final outWin = _slotCheckpointWindow(slotMap, now, isTimeIn: false);
+
+          bool inside(_TimeWindow w) {
+            if (w.start == null || w.end == null) return false;
+            var end = w.end!;
+            if (end.isBefore(w.start!)) end = end.add(const Duration(days: 1));
+            return (now.isAfter(w.start!) || now.isAtSameMomentAs(w.start!)) &&
+                (now.isBefore(end) || now.isAtSameMomentAs(end));
+          }
+
+          if (!outRecorded && inside(outWin)) {
+            _activeSlotIndex = slotIndex;
+            _activeCheckpointKey = '${prefix}_time_out';
+            _activeCheckpointLabel =
+                _formatCheckpointLabel(_activeCheckpointKey!);
+            return AttendanceSessionType.timeOut;
+          }
+          if (!inRecorded && inside(inWin)) {
+            _activeSlotIndex = slotIndex;
+            _activeCheckpointKey = '${prefix}_time_in';
+            _activeCheckpointLabel =
+                _formatCheckpointLabel(_activeCheckpointKey!);
+            return AttendanceSessionType.timeIn;
+          }
+        }
+        return null;
+      }
+    }
+
+    if (_hasTimeIn && _hasTimeOut) return null;
 
     final _TimeWindow timeInWin = (widget.timeInWindow != null &&
             widget.timeInWindow!.trim().isNotEmpty)
@@ -241,6 +509,38 @@ class _AttendanceFaceVerificationScreenState
     }
 
     return null;
+  }
+
+  _TimeWindow _slotCheckpointWindow(
+    Map<String, dynamic> slotMap,
+    DateTime now, {
+    required bool isTimeIn,
+  }) {
+    final combinedKey = isTimeIn ? 'time_in_window' : 'time_out_window';
+    final shortCombinedKey = isTimeIn ? 'time_in' : 'time_out';
+    final combined =
+        (slotMap[combinedKey] ?? slotMap[shortCombinedKey])?.toString();
+    if (combined != null && combined.contains(RegExp(r'[-–]'))) {
+      return _parseWindowString(combined, now);
+    }
+
+    final startStr = (isTimeIn
+            ? (slotMap['time_in_start'] ??
+                slotMap['time_in_start_time'] ??
+                slotMap['start_time'])
+            : (slotMap['time_out_start'] ?? slotMap['time_out_start_time']))
+        ?.toString();
+    final endStr = (isTimeIn
+            ? (slotMap['time_in_end'] ?? slotMap['time_in_end_time'])
+            : (slotMap['time_out_end'] ??
+                slotMap['time_out_end_time'] ??
+                slotMap['end_time']))
+        ?.toString();
+
+    return _TimeWindow(
+      startStr != null ? _parseSingleTime(startStr, now) : null,
+      endStr != null ? _parseSingleTime(endStr, now) : null,
+    );
   }
 
   DateTime? _parseSingleTime(String input, DateTime now) {
@@ -412,138 +712,6 @@ class _AttendanceFaceVerificationScreenState
   }
 
   // --------------------------------------------------------------------------
-  // ON-DEVICE ML KIT HEAD-TURN VALIDATION (INSTANT FEEDBACK)
-  // --------------------------------------------------------------------------
-
-  Future<_PoseValidationResult> _validateCenterPoseMLKit(XFile frame) async {
-    try {
-      final inputImage = InputImage.fromFilePath(frame.path);
-      final faces = await _faceDetector.processImage(inputImage);
-
-      if (faces.isEmpty) {
-        return const _PoseValidationResult(
-          isValid: false,
-          title: 'Face Not Detected',
-          message:
-              'Please position your face clearly inside the circle and keep steady.',
-        );
-      }
-
-      if (faces.length > 1) {
-        return const _PoseValidationResult(
-          isValid: false,
-          title: 'Multiple Faces Detected',
-          message:
-              'Please ensure only your face is visible inside the camera frame.',
-        );
-      }
-
-      final yaw = faces.first.headEulerAngleY ?? 0.0;
-
-      if (yaw.abs() > 18.0) {
-        return _PoseValidationResult(
-          isValid: false,
-          title: 'Look Straight First',
-          message:
-              'Please look straight at the camera during the first step before turning (angle: ${yaw.toStringAsFixed(0)}°).',
-        );
-      }
-
-      return _PoseValidationResult(
-        isValid: true,
-        title: 'Center Verified',
-        message: 'Center pose OK',
-        yaw: yaw,
-      );
-    } catch (e) {
-      debugPrint('[MLKIT CENTER ERROR] $e');
-      return const _PoseValidationResult(
-        isValid: true,
-        title: 'Verified',
-        message: 'Fallback pass',
-      );
-    }
-  }
-
-  Future<_PoseValidationResult> _validateTurnPoseMLKit({
-    required double centerYaw,
-    required XFile turnedFrame,
-    required String requiredDirection,
-  }) async {
-    try {
-      final inputImage = InputImage.fromFilePath(turnedFrame.path);
-      final faces = await _faceDetector.processImage(inputImage);
-
-      if (faces.isEmpty) {
-        return _PoseValidationResult(
-          isValid: false,
-          title: 'Face Lost During Turn',
-          message:
-              'Your face moved out of view. Turn your head slightly to the ${requiredDirection.toUpperCase()} while staying inside the circle.',
-        );
-      }
-
-      final turnedYaw = faces.first.headEulerAngleY ?? 0.0;
-      final deltaYaw = turnedYaw - centerYaw;
-
-      final bool turnedLeft = deltaYaw > _requiredTurnAngle;
-      final bool turnedRight = deltaYaw < -_requiredTurnAngle;
-
-      if (requiredDirection == 'left' && !turnedLeft) {
-        if (turnedRight) {
-          return _PoseValidationResult(
-            isValid: false,
-            title: 'Wrong Direction',
-            message:
-                'You turned RIGHT, but you need to turn LEFT. Please try again.',
-            yaw: deltaYaw,
-          );
-        }
-        return _PoseValidationResult(
-          isValid: false,
-          title: 'Head Turn Not Detected',
-          message:
-              'Please turn your head clearly to the LEFT (detected: ${deltaYaw.toStringAsFixed(0)}°) and try again.',
-          yaw: deltaYaw,
-        );
-      }
-
-      if (requiredDirection == 'right' && !turnedRight) {
-        if (turnedLeft) {
-          return _PoseValidationResult(
-            isValid: false,
-            title: 'Wrong Direction',
-            message:
-                'You turned LEFT, but you need to turn RIGHT. Please try again.',
-            yaw: deltaYaw,
-          );
-        }
-        return _PoseValidationResult(
-          isValid: false,
-          title: 'Head Turn Not Detected',
-          message:
-              'Please turn your head clearly to the RIGHT (detected: ${deltaYaw.toStringAsFixed(0)}°) and try again.',
-          yaw: deltaYaw,
-        );
-      }
-
-      return _PoseValidationResult(
-        isValid: true,
-        title: 'Turn Verified',
-        message: 'Head turn confirmed (${deltaYaw.toStringAsFixed(0)}°).',
-        yaw: deltaYaw,
-      );
-    } catch (e) {
-      debugPrint('[MLKIT TURN ERROR] $e');
-      return const _PoseValidationResult(
-        isValid: true,
-        title: 'Verified',
-        message: 'Fallback pass',
-      );
-    }
-  }
-
-  // --------------------------------------------------------------------------
   // DIALOGS
   // --------------------------------------------------------------------------
 
@@ -661,18 +829,15 @@ class _AttendanceFaceVerificationScreenState
               onPressed: () async {
                 Navigator.of(dialogCtx).pop();
                 if (mounted && !_disposed) {
-                  try {
-                    await _camera?.resumePreview();
-                  } catch (_) {}
                   setState(() {
                     if (_challengeNonce == 'offline-nonce') {
                       _direction = _pickRandomDirection();
                     }
                     _step = _LivenessStep.lookCenter;
                     _error = null;
-                    _isProcessing = false;
+                    _isSubmitting = false;
                   });
-                  _runAutomatedCapture();
+                  await _startLiveStreamVerification();
                 }
               },
               style: ElevatedButton.styleFrom(
@@ -695,7 +860,7 @@ class _AttendanceFaceVerificationScreenState
   }
 
   // --------------------------------------------------------------------------
-  // CAMERA & CAPTURE SEQUENCE
+  // CAMERA & REAL-TIME HEAD-TURN STREAM SEQUENCE
   // --------------------------------------------------------------------------
 
   Future<void> _initializeAndRunSequence() async {
@@ -712,7 +877,11 @@ class _AttendanceFaceVerificationScreenState
           _initCameraFast(),
           _getAccuratePosition(),
           AttendanceService.instance
-              .requestLivenessChallenge(eventId: widget.event.id!)
+              .requestLivenessChallenge(
+                eventId: widget.event.id!,
+                slotIndex: _activeSlotIndex,
+                checkpointKey: _activeCheckpointKey,
+              )
               .timeout(
                 const Duration(seconds: 3),
                 onTimeout: () => const LivenessChallengeResult(
@@ -732,6 +901,9 @@ class _AttendanceFaceVerificationScreenState
       if (_disposed || !mounted) return;
 
       _position = results[1] as Position?;
+      if (_position != null) {
+        _positionFetchedAt = DateTime.now();
+      }
 
       final challengeResult = results[2] as LivenessChallengeResult;
       if (challengeResult.success && challengeResult.challenge != null) {
@@ -752,7 +924,7 @@ class _AttendanceFaceVerificationScreenState
         );
       }
 
-      await _runAutomatedCapture();
+      await _startLiveStreamVerification();
     } catch (e) {
       if (!mounted || _disposed) return;
       HapticFeedback.heavyImpact();
@@ -764,10 +936,10 @@ class _AttendanceFaceVerificationScreenState
   }
 
   Future<void> _verifyLocationAndCapture() async {
-    if (!mounted || _disposed) return;
-    try {
-      await _camera?.resumePreview();
-    } catch (_) {}
+    if (!mounted || _disposed || _isSubmitting) return;
+    _stopFlashLoop();
+    await _stopStream();
+
     setState(() {
       _step = _LivenessStep.lookCenter;
       _error = null;
@@ -778,6 +950,9 @@ class _AttendanceFaceVerificationScreenState
       final pos = await _getAccuratePosition();
       if (!mounted || _disposed) return;
       _position = pos;
+      if (pos != null) {
+        _positionFetchedAt = DateTime.now();
+      }
 
       if (pos != null) {
         _checkGeofence(pos);
@@ -787,7 +962,7 @@ class _AttendanceFaceVerificationScreenState
         );
       }
 
-      await _runAutomatedCapture();
+      await _startLiveStreamVerification();
     } catch (e) {
       if (!mounted || _disposed) return;
       HapticFeedback.heavyImpact();
@@ -840,7 +1015,7 @@ class _AttendanceFaceVerificationScreenState
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  'To block photo or pre-recorded video spoofing, your screen will flash RED, GREEN, and BLUE light continuously while capturing your face during center and turned poses.',
+                  'Look straight at the camera while your screen loops RED, GREEN, and BLUE light, then turn your head to the requested direction when prompted.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 13,
@@ -868,7 +1043,7 @@ class _AttendanceFaceVerificationScreenState
                       SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          'Warning: Screen light will flash rapidly. Keep phone steady at eye level.',
+                          'Keep phone steady at eye level. The screen will flash continuously until you complete the head turn.',
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
@@ -917,22 +1092,18 @@ class _AttendanceFaceVerificationScreenState
       (c) => c.lensDirection == CameraLensDirection.front,
       orElse: () => cameras.first,
     );
+    _frontCamera = selected;
 
     final controller = CameraController(
       selected,
       ResolutionPreset.low,
       enableAudio: false,
-      imageFormatGroup: ImageFormatGroup.jpeg,
+      imageFormatGroup: Platform.isAndroid
+          ? ImageFormatGroup.nv21
+          : ImageFormatGroup.bgra8888,
     );
 
     await controller.initialize();
-
-    try {
-      await controller.setFocusMode(FocusMode.locked);
-    } catch (_) {}
-    try {
-      await controller.setExposureMode(ExposureMode.locked);
-    } catch (_) {}
 
     if (!mounted || _disposed) {
       await controller.dispose();
@@ -943,7 +1114,9 @@ class _AttendanceFaceVerificationScreenState
     if (mounted) setState(() => _cameraReady = true);
   }
 
-  Future<Position?> _getAccuratePosition() async {
+  Future<Position?> _getAccuratePosition({
+    Duration timeout = const Duration(seconds: 3),
+  }) async {
     try {
       bool enabled = await Geolocator.isLocationServiceEnabled();
       if (!enabled) return null;
@@ -958,9 +1131,9 @@ class _AttendanceFaceVerificationScreenState
       }
 
       return await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
+        locationSettings: LocationSettings(
           accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 3),
+          timeLimit: timeout,
         ),
       );
     } catch (_) {
@@ -993,143 +1166,334 @@ class _AttendanceFaceVerificationScreenState
     }
   }
 
-  Future<void> _runAutomatedCapture() async {
-    if (_isProcessing ||
-        _camera == null ||
-        !_camera!.value.isInitialized ||
-        _disposed) {
+  Future<void> _startLiveStreamVerification() async {
+    final controller = _camera;
+    if (controller == null || !controller.value.isInitialized || _disposed) {
       return;
     }
 
-    _isProcessing = true;
-    _flashFrames.clear();
-    _flashCompressFutures.clear();
+    _stopFlashLoop();
+    _rawFlashFrames.clear();
     _flashColors.clear();
-    _centerCompressFuture = null;
-    _turnedCompressFuture = null;
+    _rawCenterFrame = null;
+    _rawTurnedFrame = null;
+    _steadyCenterFrames = 0;
+    _centerYaw = 0.0;
+    _flashTicks = 0;
+    _isSubmitting = false;
+
+    if (!mounted || _disposed) return;
+
+    setState(() {
+      _overlayFlashColor = Colors.transparent;
+      _step = _LivenessStep.lookCenter;
+      _hint = 'Look straight at the camera...';
+      _error = null;
+    });
+
+    if (!controller.value.isStreamingImages) {
+      await controller.startImageStream(_onCameraFrame);
+    }
+  }
+
+  Future<void> _stopStream() async {
+    final controller = _camera;
+    if (controller == null || !controller.value.isInitialized) return;
+    if (controller.value.isStreamingImages) {
+      try {
+        await controller.stopImageStream();
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _onCameraFrame(CameraImage image) async {
+    if (_disposed ||
+        !mounted ||
+        _isProcessingFrame ||
+        _isSubmitting ||
+        _step == _LivenessStep.verifying ||
+        _step == _LivenessStep.passed ||
+        _step == _LivenessStep.failed) {
+      return;
+    }
+
+    _isProcessingFrame = true;
 
     try {
-      // 1. Center Pose Capture (Red + Green flash frames + clean Center frame)
-      setState(() {
-        _step = _LivenessStep.lookCenter;
-        _hint = 'Look straight. Verifying light reflections...';
-      });
+      final inputImage = _toInputImage(image);
+      if (inputImage == null) return;
 
-      for (int i = 0; i < 2; i++) {
-        if (!mounted || _disposed) return;
+      final faces = await _faceDetector.processImage(inputImage);
+      if (_disposed || !mounted) return;
 
-        setState(() => _overlayFlashColor = _flashColorSequence[i]);
-        await Future.delayed(const Duration(milliseconds: 140));
-        if (!mounted || _disposed) return;
-
-        final frame = await _camera!.takePicture();
-        _flashFrames.add(frame);
-        _flashColors.add(_flashColorNames[i]);
-        _flashCompressFutures.add(_compressPaced(frame, isFlash: true));
-      }
-
-      // Clear overlay before taking the primary recognition frame for clean lighting
-      if (mounted && !_disposed) {
-        setState(() => _overlayFlashColor = Colors.transparent);
-      }
-
-      _centerFrame = await _camera!.takePicture();
-      _centerCompressFuture = _compressPaced(_centerFrame!, isFlash: false);
-
-      // Instant ML Kit Check on Center Pose
-      final centerCheck = await _validateCenterPoseMLKit(_centerFrame!);
-      if (!centerCheck.isValid) {
-        if (mounted && !_disposed) {
-          setState(() {
-            _step = _LivenessStep.failed;
-            _overlayFlashColor = Colors.transparent;
-          });
-          await _showInstantPosePopup(
-            title: centerCheck.title,
-            message: centerCheck.message,
-          );
+      if (faces.isEmpty) {
+        const msg = 'Position your face clearly inside the circle...';
+        if (_hint != msg) {
+          setState(() => _hint = msg);
         }
         return;
       }
 
-      // 2. Head Turn Pose Capture (Blue flash frame + clean Turned frame)
-      setState(() {
-        _step = _LivenessStep.turn;
-        _hint = 'Turn your head to your ${_direction.toUpperCase()} now...';
-      });
-
-      if (!mounted || _disposed) return;
-      setState(() => _overlayFlashColor = _flashColorSequence[2]);
-      await Future.delayed(const Duration(milliseconds: 220));
-      if (!mounted || _disposed) return;
-
-      final blueFrame = await _camera!.takePicture();
-      _flashFrames.add(blueFrame);
-      _flashColors.add(_flashColorNames[2]);
-      _flashCompressFutures.add(_compressPaced(blueFrame, isFlash: true));
-
-      if (mounted && !_disposed) {
-        setState(() => _overlayFlashColor = Colors.transparent);
+      if (faces.length > 1) {
+        const msg = 'Multiple faces detected. Keep only your face in frame.';
+        if (_hint != msg) {
+          setState(() => _hint = msg);
+        }
+        return;
       }
 
-      _turnedFrame = await _camera!.takePicture();
-      _turnedCompressFuture = _compressPaced(_turnedFrame!, isFlash: false);
+      final face = faces.first;
+      final double yaw = face.headEulerAngleY ?? 0.0;
 
-      if (mounted && !_disposed) {
+      // Capture latest flash frame for whichever color is currently active in the loop
+      if (_activeFlashIndex >= 0 &&
+          _activeFlashIndex < _flashColorSequence.length) {
+        _rawFlashFrames[_activeFlashIndex] = _copyRawFrame(image, isFlash: true);
+      }
+
+      // STEP 1: Center pose + start continuous RGB flash loop
+      if (_step == _LivenessStep.lookCenter) {
+        if (yaw.abs() > 16.0) {
+          const msg = 'Look straight at the camera first...';
+          if (_hint != msg) {
+            setState(() => _hint = msg);
+          }
+          return;
+        }
+
+        if (_flashLoopTimer == null) {
+          _steadyCenterFrames++;
+          if (_steadyCenterFrames < 2) return;
+
+          _rawCenterFrame = _copyRawFrame(image, isFlash: false);
+          _centerYaw = yaw;
+          _startFlashLoop();
+
+          setState(() {
+            _hint = 'Hold still while light flashes...';
+          });
+          return;
+        }
+
+        // Wait until at least 1 full R-G-B cycle (3 ticks) has flashed, then prompt to turn
+        // while keeping the RGB flash loop running continuously!
+        if (_flashTicks >= _flashColorSequence.length &&
+            _rawFlashFrames.length >= _flashColorSequence.length) {
+          setState(() {
+            _step = _LivenessStep.turn;
+            _hint =
+                'Now turn your head clearly to your ${_direction.toUpperCase()}...';
+          });
+        }
+        return;
+      }
+
+      // STEP 2: Keep RGB flash looping until user completes the turn (or fails wrong way)
+      if (_step == _LivenessStep.turn) {
+        final double deltaYaw = yaw - _centerYaw;
+        final bool turnedLeft = deltaYaw > _requiredTurnAngle;
+        final bool turnedRight = deltaYaw < -_requiredTurnAngle;
+
+        if (_direction == 'left') {
+          if (turnedRight) {
+            _stopFlashLoop();
+            await _stopStream();
+            if (!mounted || _disposed) return;
+            setState(() {
+              _step = _LivenessStep.failed;
+            });
+            await _showInstantPosePopup(
+              title: 'Wrong Direction',
+              message:
+                  'You turned RIGHT, but you need to turn LEFT. Please try again.',
+            );
+            return;
+          }
+          if (!turnedLeft) {
+            return;
+          }
+        } else {
+          if (turnedLeft) {
+            _stopFlashLoop();
+            await _stopStream();
+            if (!mounted || _disposed) return;
+            setState(() {
+              _step = _LivenessStep.failed;
+            });
+            await _showInstantPosePopup(
+              title: 'Wrong Direction',
+              message:
+                  'You turned LEFT, but you need to turn RIGHT. Please try again.',
+            );
+            return;
+          }
+          if (!turnedRight) {
+            return;
+          }
+        }
+
+        // Turn completed! Stop looping flash and camera stream, then submit immediately
+        _rawTurnedFrame = _copyRawFrame(image, isFlash: false);
+        _stopFlashLoop();
+        await _stopStream();
+
+        if (!mounted || _disposed) return;
         setState(() {
-          _overlayFlashColor = Colors.transparent;
           _step = _LivenessStep.verifying;
-          _hint = 'Verifying pose & preparing frames...';
+          _hint = 'Turn confirmed! Submitting attendance...';
         });
-      }
-      try {
-        await _camera?.pausePreview();
-      } catch (_) {}
 
-      final preSubmitResults = await Future.wait([
-        _validateTurnPoseMLKit(
-          centerYaw: centerCheck.yaw,
-          turnedFrame: _turnedFrame!,
-          requiredDirection: _direction,
-        ),
-        _centerCompressFuture!,
-        _turnedCompressFuture!,
-        Future.wait(_flashCompressFutures),
+        await _encodeAndSubmitFromStream();
+      }
+    } catch (e) {
+      debugPrint('Attendance liveness stream error: $e');
+    } finally {
+      _isProcessingFrame = false;
+    }
+  }
+
+  _RawStreamFrame _copyRawFrame(CameraImage image, {required bool isFlash}) {
+    final bool isBgra = image.format.group == ImageFormatGroup.bgra8888;
+    return _RawStreamFrame(
+      plane0: Uint8List.fromList(image.planes[0].bytes),
+      plane1: image.planes.length > 1
+          ? Uint8List.fromList(image.planes[1].bytes)
+          : null,
+      plane2: image.planes.length > 2
+          ? Uint8List.fromList(image.planes[2].bytes)
+          : null,
+      width: image.width,
+      height: image.height,
+      bytesPerRow0: image.planes[0].bytesPerRow,
+      bytesPerRow1: image.planes.length > 1 ? image.planes[1].bytesPerRow : 0,
+      bytesPerRow2: image.planes.length > 2 ? image.planes[2].bytesPerRow : 0,
+      uvPixelStride:
+          image.planes.length > 1 ? (image.planes[1].bytesPerPixel ?? 1) : 1,
+      sensorOrientation: _frontCamera?.sensorOrientation ?? 270,
+      isBgra: isBgra,
+      isFlash: isFlash,
+    );
+  }
+
+  InputImage? _toInputImage(CameraImage image) {
+    final camera = _frontCamera;
+    if (camera == null) return null;
+
+    final rotation =
+        InputImageRotationValue.fromRawValue(camera.sensorOrientation);
+    if (rotation == null) return null;
+
+    final format = InputImageFormatValue.fromRawValue(image.format.raw);
+    if (format == null) return null;
+
+    if (image.planes.isEmpty) return null;
+
+    final WriteBuffer allBytes = WriteBuffer();
+    for (final Plane plane in image.planes) {
+      allBytes.putUint8List(plane.bytes);
+    }
+
+    return InputImage.fromBytes(
+      bytes: allBytes.done().buffer.asUint8List(),
+      metadata: InputImageMetadata(
+        size: Size(image.width.toDouble(), image.height.toDouble()),
+        rotation: rotation,
+        format: format,
+        bytesPerRow: image.planes.first.bytesPerRow,
+      ),
+    );
+  }
+
+  Future<void> _encodeAndSubmitFromStream() async {
+    if (_isSubmitting || _rawCenterFrame == null || _rawTurnedFrame == null) {
+      return;
+    }
+
+    _isSubmitting = true;
+
+    try {
+      // Reuse already-verified position if recent (< 30s), otherwise do a quick 1.5s lookup
+      Position? freshPos = _position;
+      final bool isStale = freshPos == null ||
+          _positionFetchedAt == null ||
+          DateTime.now().difference(_positionFetchedAt!) >
+              const Duration(seconds: 30);
+
+      if (widget.event.geofenceEnabled && isStale) {
+        freshPos = await _getAccuratePosition(
+              timeout: const Duration(milliseconds: 1500),
+            ) ??
+            _position;
+        if (!mounted || _disposed) return;
+        _position = freshPos;
+        if (freshPos != null) {
+          _positionFetchedAt = DateTime.now();
+        }
+      }
+
+      if (freshPos != null) {
+        _checkGeofence(freshPos);
+      } else if (widget.event.geofenceEnabled) {
+        throw Exception(
+          'Unable to verify your GPS location inside the venue geofence.',
+        );
+      }
+
+      final tempDir = await getTemporaryDirectory();
+      final ts = DateTime.now().millisecondsSinceEpoch;
+
+      final orderedFlashRaw = <_RawStreamFrame>[];
+      final orderedFlashColors = <String>[];
+      for (int i = 0; i < _flashColorNames.length; i++) {
+        final raw = _rawFlashFrames[i];
+        if (raw != null) {
+          orderedFlashRaw.add(raw);
+          orderedFlashColors.add(_flashColorNames[i]);
+        }
+      }
+
+      // Single fast isolate encode pass (already downsampled & JPEG-compressed)
+      final encoded = await Future.wait<Uint8List>([
+        compute(_encodeRawStreamToJpeg, _rawCenterFrame!),
+        compute(_encodeRawStreamToJpeg, _rawTurnedFrame!),
+        ...orderedFlashRaw.map((r) => compute(_encodeRawStreamToJpeg, r)),
+      ]);
+
+      Future<XFile> writeTemp(String tag, Uint8List bytes) async {
+        final f = File('${tempDir.path}/att_${ts}_$tag.jpg');
+        await f.writeAsBytes(bytes, flush: false);
+        return XFile(f.path);
+      }
+
+      final files = await Future.wait<XFile>([
+        writeTemp('center', encoded[0]),
+        writeTemp('turned', encoded[1]),
+        for (int i = 2; i < encoded.length; i++)
+          writeTemp('flash_${i - 2}', encoded[i]),
       ]);
 
       if (!mounted || _disposed) return;
 
-      final turnCheck = preSubmitResults[0] as _PoseValidationResult;
-      if (!turnCheck.isValid) {
-        setState(() => _step = _LivenessStep.failed);
-        await _showInstantPosePopup(
-          title: turnCheck.title,
-          message: turnCheck.message,
-        );
-        return;
-      }
+      _flashColors
+        ..clear()
+        ..addAll(orderedFlashColors);
 
-      // 3. Submit pre-compressed lightweight frames immediately
       await _submitAttendance(
-        compressedCenter: preSubmitResults[1] as XFile,
-        compressedTurned: preSubmitResults[2] as XFile,
-        compressedFlashFrames: preSubmitResults[3] as List<XFile>,
+        compressedCenter: files[0],
+        compressedTurned: files[1],
+        compressedFlashFrames: files.sublist(2),
       );
     } catch (e) {
-      debugPrint('Capture sequence error: $e');
-      if (mounted && !_disposed) {
-        setState(() {
-          _step = _LivenessStep.failed;
-          _overlayFlashColor = Colors.transparent;
-        });
-        await _showInstantPosePopup(
-          title: 'Capture Failed',
-          message:
-              'Camera capture failed. Please ensure clear lighting and try again.',
-        );
-      }
+      if (!mounted || _disposed) return;
+      HapticFeedback.heavyImpact();
+      final msg = e.toString().replaceFirst('Exception: ', '');
+      _fail(msg);
+      await _showInstantPosePopup(
+        title: 'Verification Failed',
+        message: msg,
+      );
     } finally {
-      _isProcessing = false;
+      _isSubmitting = false;
     }
   }
 
@@ -1180,9 +1544,13 @@ class _AttendanceFaceVerificationScreenState
             challengeNonce: _challengeNonce ?? '',
             sessionId: _challengeSessionId ?? '',
             type: typeStr,
+            slotIndex: _activeSlotIndex,
+            checkpointKey: _activeCheckpointKey,
           )
           .timeout(_serverVerifyTimeout);
     } on TimeoutException {
+      result = null;
+    } catch (_) {
       result = null;
     }
 
@@ -1215,24 +1583,32 @@ class _AttendanceFaceVerificationScreenState
         setState(() => _hint = 'Saving locally for background sync...');
         final trustedTime = await _getNormalizedLocalNow();
 
-        final offlineQueueResult =
-            await AttendanceService.instance.queueOfflineAttendance(
-          eventId: eventId,
-          latitude: pos.latitude,
-          longitude: pos.longitude,
-          locationAccuracy: pos.accuracy,
-          attendanceTime: trustedTime,
-          centerFrame: compressedCenter,
-          turnedFrame: compressedTurned,
-          flashFrames: compressedFlashFrames,
-          livenessDirection: _direction,
-          type: typeStr,
-        );
+        try {
+          final offlineQueueResult = await AttendanceService.instance
+              .queueOfflineAttendance(
+                eventId: eventId,
+                latitude: pos.latitude,
+                longitude: pos.longitude,
+                locationAccuracy: pos.accuracy,
+                attendanceTime: trustedTime,
+                centerFrame: compressedCenter,
+                turnedFrame: compressedTurned,
+                flashFrames: compressedFlashFrames,
+                livenessDirection: _direction,
+                type: typeStr,
+                slotIndex: _activeSlotIndex,
+                checkpointKey: _activeCheckpointKey,
+              )
+              .timeout(const Duration(seconds: 5));
 
-        if (!mounted || _disposed) return;
+          if (!mounted || _disposed) return;
 
-        if (!offlineQueueResult.success) {
-          _fail(offlineQueueResult.message);
+          if (!offlineQueueResult.success) {
+            _fail(offlineQueueResult.message);
+            return;
+          }
+        } catch (e) {
+          _fail('Failed to save offline attendance: $e');
           return;
         }
       } else {
@@ -1268,9 +1644,10 @@ class _AttendanceFaceVerificationScreenState
                 ? widget.studentName!
                 : 'Student';
 
-        final sessionText = _currentSession == AttendanceSessionType.timeIn
-            ? 'Time-In'
-            : 'Time-Out';
+        final sessionText = _activeCheckpointLabel ??
+            (_currentSession == AttendanceSessionType.timeIn
+                ? 'Time-In'
+                : 'Time-Out');
 
         return Dialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
@@ -1344,6 +1721,7 @@ class _AttendanceFaceVerificationScreenState
 
   void _fail(String message) {
     if (!mounted || _disposed) return;
+    _stopFlashLoop();
     setState(() {
       _step = _LivenessStep.failed;
       _error = message;
@@ -1352,8 +1730,10 @@ class _AttendanceFaceVerificationScreenState
 
   @override
   void dispose() {
+    _flashLoopTimer?.cancel();
     _pulseController.dispose();
     _disposed = true;
+    _stopStream();
     _faceDetector.close();
     _camera?.dispose();
     super.dispose();
@@ -1362,13 +1742,16 @@ class _AttendanceFaceVerificationScreenState
   @override
   Widget build(BuildContext context) {
     final isDark = themeController.isDarkMode;
+    final bool isFlashing = _overlayFlashColor != Colors.transparent;
 
     return Scaffold(
-      backgroundColor: _overlayFlashColor != Colors.transparent
+      backgroundColor: isFlashing
           ? _overlayFlashColor
           : Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
-        backgroundColor: isDark ? const Color(0xFF1E293B) : brandNavy,
+        backgroundColor: isFlashing
+            ? _overlayFlashColor
+            : (isDark ? const Color(0xFF1E293B) : brandNavy),
         foregroundColor: Colors.white,
         elevation: 0,
         title: Text(
@@ -1391,10 +1774,10 @@ class _AttendanceFaceVerificationScreenState
                   const SizedBox(height: 6),
                   Text(
                     widget.event.venue,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 12.5,
                       fontWeight: FontWeight.w500,
-                      color: muted,
+                      color: isFlashing ? Colors.white : muted,
                     ),
                   ),
                   const SizedBox(height: 10),
@@ -1486,10 +1869,11 @@ class _AttendanceFaceVerificationScreenState
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           border: Border.all(
-                            color: brandGold.withValues(
+                            color: (isFlashing ? Colors.white : brandGold)
+                                .withValues(
                               alpha: 0.3 + (_pulseController.value * 0.4),
                             ),
-                            width: 3.5,
+                            width: isFlashing ? 6.0 : 3.5,
                           ),
                         ),
                       );
@@ -1501,7 +1885,10 @@ class _AttendanceFaceVerificationScreenState
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: Colors.black,
-                      border: Border.all(color: brandGold, width: 4),
+                      border: Border.all(
+                        color: isFlashing ? _overlayFlashColor : brandGold,
+                        width: isFlashing ? 8 : 4,
+                      ),
                     ),
                     child: ClipOval(
                       child: _cameraReady &&
@@ -1559,37 +1946,37 @@ class _AttendanceFaceVerificationScreenState
                 ],
               ),
             ),
-            Positioned(
-              bottom: 30,
-              child: ElevatedButton(
-                onPressed: (_isProcessing || _currentSession == null)
-                    ? null
-                    : () {
-                        setState(() {
-                          if (_challengeNonce == 'offline-nonce') {
-                            _direction = _pickRandomDirection();
-                          }
-                          _isProcessing = false;
-                        });
-                        _verifyLocationAndCapture();
-                      },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: brandGold,
-                  foregroundColor: brandNavy,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 36,
-                    vertical: 14,
+            if (!isFlashing)
+              Positioned(
+                bottom: 30,
+                child: ElevatedButton(
+                  onPressed: (_isSubmitting || _currentSession == null)
+                      ? null
+                      : () {
+                          setState(() {
+                            if (_challengeNonce == 'offline-nonce') {
+                              _direction = _pickRandomDirection();
+                            }
+                          });
+                          _verifyLocationAndCapture();
+                        },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: brandGold,
+                    foregroundColor: brandNavy,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 36,
+                      vertical: 14,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(24),
+                    ),
                   ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(24),
+                  child: const Text(
+                    'Retry / Capture Now',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                   ),
-                ),
-                child: const Text(
-                  'Retry / Capture Now',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                 ),
               ),
-            ),
           ],
         ),
       ),
@@ -1602,11 +1989,12 @@ class _AttendanceFaceVerificationScreenState
 
     final String label = _checkingSession
         ? 'Checking schedule...'
-        : isTimeIn
-            ? 'Time-In Attendance'
-            : isTimeOut
-                ? 'Time-Out Attendance'
-                : 'Attendance Verification';
+        : (_activeCheckpointLabel ??
+            (isTimeIn
+                ? 'Time-In Attendance'
+                : isTimeOut
+                    ? 'Time-Out Attendance'
+                    : 'Attendance Verification'));
 
     final IconData icon = _checkingSession
         ? Icons.schedule_rounded
@@ -1714,20 +2102,6 @@ class _AttendanceFaceVerificationScreenState
       ),
     );
   }
-}
-
-class _PoseValidationResult {
-  final bool isValid;
-  final String title;
-  final String message;
-  final double yaw;
-
-  const _PoseValidationResult({
-    required this.isValid,
-    required this.title,
-    required this.message,
-    this.yaw = 0.0,
-  });
 }
 
 class _TimeWindow {

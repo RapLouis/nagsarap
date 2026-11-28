@@ -19,6 +19,30 @@ import '../attendance/attendance_history_screen.dart';
 import '../calendar/calendar_screen.dart';
 import '../profile/profile_screen.dart';
 
+class _EventCheckpointInfo {
+  final int slotIndex;
+  final String checkpointKey;
+  final String label;
+  final String shortLabel;
+  final String windowText;
+  final DateTime? start;
+  final DateTime? end;
+  final bool isRecorded;
+  final AttendanceSessionType sessionType;
+
+  const _EventCheckpointInfo({
+    required this.slotIndex,
+    required this.checkpointKey,
+    required this.label,
+    required this.shortLabel,
+    required this.windowText,
+    required this.start,
+    required this.end,
+    required this.isRecorded,
+    required this.sessionType,
+  });
+}
+
 class HomeScreen extends StatefulWidget {
   final Map<String, dynamic>? user;
   final Map<String, dynamic>? student;
@@ -337,6 +361,361 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<EventItem> get _upcomingEvents =>
       _events.where((event) => event.isUpcoming).toList();
 
+  // --------------------------------------------------------------------------
+  // 4-CHECKPOINT + LEGACY 2-CHECKPOINT SCHEDULE & STATUS EVALUATION
+  // --------------------------------------------------------------------------
+
+  Map<String, dynamic>? _resolveActiveDayMap(EventItem event) {
+    final rawDays = event.raw['days'];
+    if (rawDays is! List || rawDays.isEmpty) return null;
+
+    final todayStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    for (final entry in rawDays) {
+      if (entry is Map) {
+        final dateVal = entry['date']?.toString().trim() ??
+            entry['event_date']?.toString().trim();
+        if (dateVal != null && dateVal.startsWith(todayStr)) {
+          return Map<String, dynamic>.from(entry);
+        }
+      }
+    }
+
+    final first = rawDays.first;
+    return first is Map ? Map<String, dynamic>.from(first) : null;
+  }
+
+  bool _isCheckpointRecordedInHistory(
+    EventItem event, {
+    required int slotIndex,
+    required String checkpointKey,
+    required AttendanceSessionType sessionType,
+  }) {
+    final recordedHistory = _historyRecords.where((r) {
+      if (!r.isRecorded) return false;
+      if (event.id != null && r.eventId != null) {
+        return r.eventId == event.id;
+      }
+      return r.eventName.trim().toLowerCase() ==
+          event.name.trim().toLowerCase();
+    });
+
+    final expectedBase =
+        sessionType == AttendanceSessionType.timeOut ? 'time_out' : 'time_in';
+
+    for (final record in recordedHistory) {
+      final raw = record.raw;
+      final recCheckpoint =
+          raw['checkpoint_key']?.toString().trim().toLowerCase();
+      if (recCheckpoint != null && recCheckpoint.isNotEmpty) {
+        if (recCheckpoint == checkpointKey) return true;
+        continue;
+      }
+
+      final rawSlot = raw['slot_index'] ?? raw['slotIndex'];
+      final recSlot = rawSlot != null ? int.tryParse(rawSlot.toString()) : null;
+      final rawType = (raw['session_type'] ??
+              raw['attendance_type'] ??
+              raw['type'] ??
+              raw['session'] ??
+              '')
+          .toString()
+          .trim()
+          .toLowerCase();
+
+      final isOut = rawType.contains('out');
+      final recBase = isOut ? 'time_out' : 'time_in';
+
+      if (recSlot != null) {
+        if (recSlot == slotIndex && recBase == expectedBase) return true;
+      } else if (slotIndex == 0 && recBase == expectedBase) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  List<_EventCheckpointInfo> _getEventCheckpoints(EventItem event) {
+    final raw = event.raw;
+    final dayMap = _resolveActiveDayMap(event);
+    final rawSlots = dayMap?['slots'];
+
+    // 1. Multi-slot structure (`days[].slots[]`)
+    if (rawSlots is List && rawSlots.isNotEmpty) {
+      final list = <_EventCheckpointInfo>[];
+      for (int i = 0; i < rawSlots.length; i++) {
+        final slotObj = rawSlots[i];
+        if (slotObj is! Map) continue;
+        final slotMap = Map<String, dynamic>.from(slotObj);
+
+        final slotIndex =
+            int.tryParse(slotMap['slot_index']?.toString() ?? '') ?? i;
+        final periodRaw =
+            (slotMap['period'] ?? slotMap['session'] ?? slotMap['name'] ?? '')
+                .toString()
+                .trim()
+                .toLowerCase();
+
+        final bool isMorning = periodRaw == 'morning' || slotIndex == 0;
+        final bool isAfternoon = periodRaw == 'afternoon' || slotIndex == 1;
+
+        final String prefixKey = isMorning
+            ? 'morning'
+            : (isAfternoon ? 'afternoon' : 'slot_$slotIndex');
+        final String prefixLabel = isMorning
+            ? 'Morning'
+            : (isAfternoon ? 'Afternoon' : 'Session ${slotIndex + 1}');
+        final String shortPrefix = isMorning
+            ? 'AM'
+            : (isAfternoon ? 'PM' : 'S${slotIndex + 1}');
+
+        final inStartRaw = _firstNonEmpty(slotMap, [
+              'time_in_start',
+              'time_in_start_time',
+              'time_in_from',
+              'start_time',
+            ]) ??
+            _parseRangePart(
+              _firstNonEmpty(slotMap, ['time_in', 'time_in_window']),
+              first: true,
+            );
+        final inEndRaw = _firstNonEmpty(slotMap, [
+              'time_in_end',
+              'time_in_end_time',
+              'time_in_to',
+              'time_in_until',
+            ]) ??
+            _parseRangePart(
+              _firstNonEmpty(slotMap, ['time_in', 'time_in_window']),
+              first: false,
+            );
+
+        final outStartRaw = _firstNonEmpty(slotMap, [
+              'time_out_start',
+              'time_out_start_time',
+              'time_out_from',
+            ]) ??
+            _parseRangePart(
+              _firstNonEmpty(slotMap, ['time_out', 'time_out_window']),
+              first: true,
+            );
+        final outEndRaw = _firstNonEmpty(slotMap, [
+              'time_out_end',
+              'time_out_end_time',
+              'time_out_to',
+              'time_out_until',
+              'end_time',
+            ]) ??
+            _parseRangePart(
+              _firstNonEmpty(slotMap, ['time_out', 'time_out_window']),
+              first: false,
+            );
+
+        final inKey = '${prefixKey}_time_in';
+        final outKey = '${prefixKey}_time_out';
+
+        final inRecorded = _readBool(
+              slotMap['has_time_in'] ??
+                  slotMap['time_in_recorded'] ??
+                  raw['has_$inKey'],
+            ) ||
+            _isCheckpointRecordedInHistory(
+              event,
+              slotIndex: slotIndex,
+              checkpointKey: inKey,
+              sessionType: AttendanceSessionType.timeIn,
+            );
+
+        final outRecorded = _readBool(
+              slotMap['has_time_out'] ??
+                  slotMap['time_out_recorded'] ??
+                  raw['has_$outKey'],
+            ) ||
+            _isCheckpointRecordedInHistory(
+              event,
+              slotIndex: slotIndex,
+              checkpointKey: outKey,
+              sessionType: AttendanceSessionType.timeOut,
+            );
+
+        final inStartDt =
+            inStartRaw != null ? _parseTimeToDateTime(inStartRaw) : null;
+        final inEndDt =
+            inEndRaw != null ? _parseTimeToDateTime(inEndRaw) : null;
+        final outStartDt =
+            outStartRaw != null ? _parseTimeToDateTime(outStartRaw) : null;
+        final outEndDt =
+            outEndRaw != null ? _parseTimeToDateTime(outEndRaw) : null;
+
+        list.add(
+          _EventCheckpointInfo(
+            slotIndex: slotIndex,
+            checkpointKey: inKey,
+            label: '$prefixLabel Time-In',
+            shortLabel: '$shortPrefix In',
+            windowText: _formatWindowPair(inStartRaw, inEndRaw),
+            start: inStartDt,
+            end: inEndDt,
+            isRecorded: inRecorded,
+            sessionType: AttendanceSessionType.timeIn,
+          ),
+        );
+
+        list.add(
+          _EventCheckpointInfo(
+            slotIndex: slotIndex,
+            checkpointKey: outKey,
+            label: '$prefixLabel Time-Out',
+            shortLabel: '$shortPrefix Out',
+            windowText: _formatWindowPair(outStartRaw, outEndRaw),
+            start: outStartDt,
+            end: outEndDt,
+            isRecorded: outRecorded,
+            sessionType: AttendanceSessionType.timeOut,
+          ),
+        );
+      }
+      if (list.isNotEmpty) return list;
+    }
+
+    // 2. Top-level morning_* / afternoon_* keys
+    final hasTopLevelMorning = _firstNonEmpty(raw, [
+          'morning_time_in_start',
+          'morning_time_in_end',
+          'morning_time_in',
+          'morning_time_out_start',
+          'morning_time_out_end',
+          'morning_time_out',
+        ]) !=
+        null;
+    final hasTopLevelAfternoon = _firstNonEmpty(raw, [
+          'afternoon_time_in_start',
+          'afternoon_time_in_end',
+          'afternoon_time_in',
+          'afternoon_time_out_start',
+          'afternoon_time_out_end',
+          'afternoon_time_out',
+        ]) !=
+        null;
+
+    if (hasTopLevelMorning || hasTopLevelAfternoon) {
+      final list = <_EventCheckpointInfo>[];
+      void addPrefixed(
+        int slotIndex,
+        String prefix,
+        String labelPrefix,
+        String shortPrefix,
+        bool isTimeIn,
+      ) {
+        final suffix = isTimeIn ? 'time_in' : 'time_out';
+        final key = '${prefix}_$suffix';
+        final startRaw = _firstNonEmpty(raw, [
+              '${key}_start',
+              '${key}_start_time',
+              '${key}_from',
+            ]) ??
+            _parseRangePart(
+              _firstNonEmpty(raw, [key, '${key}_window']),
+              first: true,
+            );
+        final endRaw = _firstNonEmpty(raw, [
+              '${key}_end',
+              '${key}_end_time',
+              '${key}_to',
+            ]) ??
+            _parseRangePart(
+              _firstNonEmpty(raw, [key, '${key}_window']),
+              first: false,
+            );
+        final sessionType = isTimeIn
+            ? AttendanceSessionType.timeIn
+            : AttendanceSessionType.timeOut;
+        final recorded = _readBool(raw['has_$key']) ||
+            _isCheckpointRecordedInHistory(
+              event,
+              slotIndex: slotIndex,
+              checkpointKey: key,
+              sessionType: sessionType,
+            );
+
+        list.add(
+          _EventCheckpointInfo(
+            slotIndex: slotIndex,
+            checkpointKey: key,
+            label: '$labelPrefix ${isTimeIn ? 'Time-In' : 'Time-Out'}',
+            shortLabel: '$shortPrefix ${isTimeIn ? 'In' : 'Out'}',
+            windowText: _formatWindowPair(startRaw, endRaw),
+            start: startRaw != null ? _parseTimeToDateTime(startRaw) : null,
+            end: endRaw != null ? _parseTimeToDateTime(endRaw) : null,
+            isRecorded: recorded,
+            sessionType: sessionType,
+          ),
+        );
+      }
+
+      if (hasTopLevelMorning) {
+        addPrefixed(0, 'morning', 'Morning', 'AM', true);
+        addPrefixed(0, 'morning', 'Morning', 'AM', false);
+      }
+      if (hasTopLevelAfternoon) {
+        addPrefixed(1, 'afternoon', 'Afternoon', 'PM', true);
+        addPrefixed(1, 'afternoon', 'Afternoon', 'PM', false);
+      }
+      return list;
+    }
+
+    return const [];
+  }
+
+  String? _firstNonEmpty(Map<String, dynamic> map, List<String> keys) {
+    for (final key in keys) {
+      final val = map[key];
+      if (val == null) continue;
+      final str = val.toString().trim();
+      if (str.isNotEmpty && str.toLowerCase() != 'null') return str;
+    }
+    return null;
+  }
+
+  String? _parseRangePart(String? rangeStr, {required bool first}) {
+    if (rangeStr == null || !rangeStr.contains(RegExp(r'[-–]'))) return null;
+    final parts = rangeStr.split(RegExp(r'[-–]')).map((s) => s.trim()).toList();
+    if (parts.length < 2) return null;
+    return first ? parts.first : parts.last;
+  }
+
+  String _formatWindowPair(String? startRaw, String? endRaw) {
+    final s = startRaw != null ? _formatTime12Hour(startRaw) : 'TBA';
+    final e = endRaw != null ? _formatTime12Hour(endRaw) : 'TBA';
+    return '$s – $e';
+  }
+
+  _EventCheckpointInfo? _getActiveCheckpointForEvent(EventItem event) {
+    if (!event.isToday) return null;
+    final checkpoints = _getEventCheckpoints(event);
+    if (checkpoints.isEmpty) return null;
+
+    final now = DateTime.now();
+    for (final cp in checkpoints) {
+      if (cp.isRecorded) continue;
+      final start = cp.start;
+      final end = cp.end;
+      if (start == null || end == null) continue;
+
+      var adjustedEnd = end;
+      if (adjustedEnd.isBefore(start)) {
+        adjustedEnd = adjustedEnd.add(const Duration(days: 1));
+      }
+
+      if ((now.isAfter(start) || now.isAtSameMomentAs(start)) &&
+          (now.isBefore(adjustedEnd) || now.isAtSameMomentAs(adjustedEnd))) {
+        return cp;
+      }
+    }
+
+    return null;
+  }
+
   bool _hasRawTimeIn(EventItem event) {
     final raw = event.raw;
     return _readBool(
@@ -356,6 +735,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   int _getAttendanceCountForEvent(EventItem event) {
+    final checkpoints = _getEventCheckpoints(event);
+    if (checkpoints.isNotEmpty) {
+      return checkpoints.where((c) => c.isRecorded).length;
+    }
+
     final recordedHistory = _historyRecords.where((r) => r.isRecorded);
     int historyCount = 0;
     if (event.id != null) {
@@ -374,6 +758,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return historyCount > rawCount ? historyCount : rawCount;
   }
 
+  int _getTotalCheckpointsForEvent(EventItem event) {
+    final checkpoints = _getEventCheckpoints(event);
+    return checkpoints.isNotEmpty ? checkpoints.length : 2;
+  }
+
   bool _hasTimeInForEvent(EventItem event) =>
       _hasRawTimeIn(event) || _getAttendanceCountForEvent(event) >= 1;
 
@@ -382,6 +771,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   AttendanceSessionType? _getActiveSessionForEvent(EventItem event) {
     if (!event.isToday) return null;
+
+    final checkpoints = _getEventCheckpoints(event);
+    if (checkpoints.isNotEmpty) {
+      return _getActiveCheckpointForEvent(event)?.sessionType;
+    }
 
     final hasTimeIn = _hasTimeInForEvent(event);
     final hasTimeOut = _hasTimeOutForEvent(event);
@@ -446,8 +840,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _openAttendanceScannerForEvent(EventItem event) async {
-    final hasTimeIn = _hasTimeInForEvent(event);
-    final hasTimeOut = _hasTimeOutForEvent(event);
+    final activeCheckpoint = _getActiveCheckpointForEvent(event);
+    final hasTimeIn = activeCheckpoint != null
+        ? (activeCheckpoint.sessionType == AttendanceSessionType.timeOut)
+        : _hasTimeInForEvent(event);
+    final hasTimeOut = activeCheckpoint != null
+        ? activeCheckpoint.isRecorded
+        : _hasTimeOutForEvent(event);
 
     final recorded = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
@@ -456,8 +855,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           studentName: _firstName,
           hasTimeIn: hasTimeIn,
           hasTimeOut: hasTimeOut,
-          timeInWindow: _getTimeInWindow(event),
-          timeOutWindow: _getTimeOutWindow(event),
+          timeInWindow: activeCheckpoint != null &&
+                  activeCheckpoint.sessionType == AttendanceSessionType.timeIn
+              ? activeCheckpoint.windowText
+              : _getTimeInWindow(event),
+          timeOutWindow: activeCheckpoint != null &&
+                  activeCheckpoint.sessionType == AttendanceSessionType.timeOut
+              ? activeCheckpoint.windowText
+              : _getTimeOutWindow(event),
+          slotIndex: activeCheckpoint?.slotIndex,
+          checkpointKey: activeCheckpoint?.checkpointKey,
+          checkpointLabel: activeCheckpoint?.label,
         ),
       ),
     );
@@ -531,19 +939,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   for (final event in today) ...[
                     Builder(
                       builder: (ctx) {
+                        final activeCheckpoint =
+                            _getActiveCheckpointForEvent(event);
                         final activeSession = _getActiveSessionForEvent(event);
                         final isActive = activeSession != null;
                         final count = _getAttendanceCountForEvent(event);
-                        final isCompleted = count >= 2;
+                        final total = _getTotalCheckpointsForEvent(event);
+                        final isCompleted = count >= total;
 
                         final subtitleText = isCompleted
-                            ? 'Completed (2/2)'
-                            : (activeSession == AttendanceSessionType.timeOut
-                                ? 'Time-Out open now'
+                            ? 'Completed ($count/$total)'
+                            : (activeCheckpoint != null
+                                ? '${activeCheckpoint.label} open now'
                                 : (activeSession ==
-                                        AttendanceSessionType.timeIn
-                                    ? 'Time-In open now'
-                                    : 'Outside attendance window'));
+                                        AttendanceSessionType.timeOut
+                                    ? 'Time-Out open now'
+                                    : (activeSession ==
+                                            AttendanceSessionType.timeIn
+                                        ? 'Time-In open now'
+                                        : 'Outside attendance window')));
 
                         return Opacity(
                           opacity: isActive ? 1.0 : 0.6,
@@ -725,6 +1139,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       separatorBuilder: (_, _) => const SizedBox(height: 8),
                       itemBuilder: (_, index) {
                         final evt = items[index];
+                        final checkpoints = _getEventCheckpoints(evt);
+                        final scheduleSnippet = checkpoints.isNotEmpty
+                            ? checkpoints.first.windowText
+                            : _getTimeInWindow(evt);
                         return ListTile(
                           tileColor: isDark
                               ? const Color(0xFF0F172A)
@@ -741,7 +1159,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             ),
                           ),
                           subtitle: Text(
-                            '${_formatDate(evt)} • ${_getTimeInWindow(evt)}',
+                            '${_formatDate(evt)} • $scheduleSnippet',
                             style: const TextStyle(fontSize: 12, color: muted),
                           ),
                           trailing: const Icon(
@@ -765,9 +1183,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _showEventDetailModal(EventItem event) {
+    final checkpoints = _getEventCheckpoints(event);
+    final isFourCheckpoint = checkpoints.length > 2;
     final count = _getAttendanceCountForEvent(event);
-    final isCompleted = count >= 2;
-    final isTimeInDone = count == 1;
+    final total = _getTotalCheckpointsForEvent(event);
+    final isCompleted = count >= total;
+    final hasPartial = count > 0 && !isCompleted;
+
+    final activeCheckpoint = _getActiveCheckpointForEvent(event);
     final activeSession = _getActiveSessionForEvent(event);
     final isWindowActive = activeSession != null;
     final isDark = themeController.isDarkMode;
@@ -789,214 +1212,241 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
           ),
           child: SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: Container(
-                    width: 36,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: isDark
-                          ? const Color(0xFF475569)
-                          : const Color(0xFFCBD5E1),
-                      borderRadius: BorderRadius.circular(2),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? const Color(0xFF475569)
+                            : const Color(0xFFCBD5E1),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            event.name,
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                              color: isDark ? Colors.white : navy,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 9,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: isCompleted
-                                  ? const Color(0xFFDCFCE7)
-                                  : (isTimeInDone
-                                      ? const Color(0xFFFEF3C7)
-                                      : (isDark
-                                          ? const Color(0xFF334155)
-                                          : const Color(0xFFEEF2FF))),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              isCompleted
-                                  ? 'Completed ($count/2)'
-                                  : (isTimeInDone
-                                      ? 'Time-In Recorded ($count/2)'
-                                      : 'Attendance Status ($count/2)'),
+                  const SizedBox(height: 16),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              event.name,
                               style: TextStyle(
-                                fontSize: 11.5,
+                                fontSize: 18,
                                 fontWeight: FontWeight.w700,
-                                color: isCompleted
-                                    ? const Color(0xFF15803D)
-                                    : (isTimeInDone
-                                        ? const Color(0xFF92400E)
-                                        : (isDark ? gold : navy)),
+                                color: isDark ? Colors.white : navy,
                               ),
+                            ),
+                            const SizedBox(height: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 9,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: isCompleted
+                                    ? const Color(0xFFDCFCE7)
+                                    : (hasPartial
+                                        ? const Color(0xFFFEF3C7)
+                                        : (isDark
+                                            ? const Color(0xFF334155)
+                                            : const Color(0xFFEEF2FF))),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                isCompleted
+                                    ? 'Completed ($count/$total)'
+                                    : (hasPartial
+                                        ? 'Recorded ($count/$total)'
+                                        : 'Attendance Status ($count/$total)'),
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: isCompleted
+                                      ? const Color(0xFF15803D)
+                                      : (hasPartial
+                                          ? const Color(0xFF92400E)
+                                          : (isDark ? gold : navy)),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        icon: Icon(
+                          Icons.close_rounded,
+                          color: isDark ? Colors.white70 : muted,
+                          size: 20,
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (event.description.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      event.description,
+                      style: TextStyle(
+                        fontSize: 13,
+                        height: 1.4,
+                        color: isDark
+                            ? const Color(0xFFCBD5E1)
+                            : const Color(0xFF334155),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                  Divider(
+                    height: 1,
+                    color: isDark
+                        ? const Color(0xFF334155)
+                        : const Color(0xFFE2E8F0),
+                  ),
+                  const SizedBox(height: 14),
+                  _modalDetailRow(
+                    Icons.person_outline_rounded,
+                    'Student',
+                    _fullName,
+                    const Color(0xFF3B82F6),
+                  ),
+                  const SizedBox(height: 10),
+                  _modalDetailRow(
+                    Icons.calendar_today_rounded,
+                    'Date',
+                    _formatDate(event),
+                    navy,
+                  ),
+                  if (isFourCheckpoint) ...[
+                    for (final cp in checkpoints) ...[
+                      const SizedBox(height: 10),
+                      _modalDetailRow(
+                        cp.isRecorded
+                            ? Icons.check_circle_rounded
+                            : (cp.sessionType == AttendanceSessionType.timeIn
+                                ? Icons.login_rounded
+                                : Icons.logout_rounded),
+                        cp.label,
+                        cp.isRecorded
+                            ? '${cp.windowText} • Recorded'
+                            : cp.windowText,
+                        cp.isRecorded
+                            ? const Color(0xFF16A34A)
+                            : (cp.sessionType == AttendanceSessionType.timeIn
+                                ? const Color(0xFF16A34A)
+                                : const Color(0xFFDC2626)),
+                      ),
+                    ],
+                  ] else ...[
+                    const SizedBox(height: 10),
+                    _modalDetailRow(
+                      Icons.login_rounded,
+                      'Time-In Window',
+                      timeInWindow,
+                      const Color(0xFF16A34A),
+                    ),
+                    const SizedBox(height: 10),
+                    _modalDetailRow(
+                      Icons.logout_rounded,
+                      'Time-Out Window',
+                      timeOutWindow,
+                      const Color(0xFFDC2626),
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  _modalDetailRow(
+                    Icons.place_outlined,
+                    'Venue',
+                    venueLocation,
+                    const Color(0xFFD97706),
+                  ),
+                  const SizedBox(height: 22),
+                  if (isWindowActive && !isCompleted)
+                    SizedBox(
+                      width: double.infinity,
+                      height: 48,
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          _openAttendanceScannerForEvent(event);
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: isDark ? gold : navy,
+                          foregroundColor: isDark ? navy : Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          elevation: 0,
+                        ),
+                        icon: const Icon(
+                          Icons.face_retouching_natural_rounded,
+                          size: 19,
+                        ),
+                        label: Text(
+                          activeCheckpoint != null
+                              ? 'Verify ${activeCheckpoint.label} Now'
+                              : (activeSession == AttendanceSessionType.timeOut
+                                  ? 'Verify Time-Out Now'
+                                  : 'Verify Time-In Now'),
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 12,
+                        horizontal: 16,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? const Color(0xFF0F172A)
+                            : const Color(0xFFF1F5F9),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            isCompleted
+                                ? Icons.check_circle_rounded
+                                : Icons.lock_outline_rounded,
+                            size: 16,
+                            color:
+                                isCompleted ? const Color(0xFF16A34A) : muted,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            isCompleted
+                                ? 'Attendance completed for this event.'
+                                : 'Attendance window is currently closed.',
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w600,
+                              color: isCompleted
+                                  ? const Color(0xFF16A34A)
+                                  : (isDark
+                                      ? const Color(0xFF94A3B8)
+                                      : const Color(0xFF64748B)),
                             ),
                           ),
                         ],
                       ),
                     ),
-                    IconButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      icon: Icon(
-                        Icons.close_rounded,
-                        color: isDark ? Colors.white70 : muted,
-                        size: 20,
-                      ),
-                    ),
-                  ],
-                ),
-                if (event.description.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  Text(
-                    event.description,
-                    style: TextStyle(
-                      fontSize: 13,
-                      height: 1.4,
-                      color: isDark
-                          ? const Color(0xFFCBD5E1)
-                          : const Color(0xFF334155),
-                    ),
-                  ),
                 ],
-                const SizedBox(height: 16),
-                Divider(
-                  height: 1,
-                  color: isDark
-                      ? const Color(0xFF334155)
-                      : const Color(0xFFE2E8F0),
-                ),
-                const SizedBox(height: 14),
-                _modalDetailRow(
-                  Icons.person_outline_rounded,
-                  'Student',
-                  _fullName,
-                  const Color(0xFF3B82F6),
-                ),
-                const SizedBox(height: 10),
-                _modalDetailRow(
-                  Icons.calendar_today_rounded,
-                  'Date',
-                  _formatDate(event),
-                  navy,
-                ),
-                const SizedBox(height: 10),
-                _modalDetailRow(
-                  Icons.login_rounded,
-                  'Time-In Window',
-                  timeInWindow,
-                  const Color(0xFF16A34A),
-                ),
-                const SizedBox(height: 10),
-                _modalDetailRow(
-                  Icons.logout_rounded,
-                  'Time-Out Window',
-                  timeOutWindow,
-                  const Color(0xFFDC2626),
-                ),
-                const SizedBox(height: 10),
-                _modalDetailRow(
-                  Icons.place_outlined,
-                  'Venue',
-                  venueLocation,
-                  const Color(0xFFD97706),
-                ),
-                const SizedBox(height: 22),
-                if (isWindowActive && !isCompleted)
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: ElevatedButton.icon(
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        _openAttendanceScannerForEvent(event);
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: isDark ? gold : navy,
-                        foregroundColor: isDark ? navy : Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        elevation: 0,
-                      ),
-                      icon: const Icon(
-                        Icons.face_retouching_natural_rounded,
-                        size: 19,
-                      ),
-                      label: Text(
-                        activeSession == AttendanceSessionType.timeOut
-                            ? 'Verify Time-Out Now'
-                            : 'Verify Time-In Now',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  )
-                else
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                      vertical: 12,
-                      horizontal: 16,
-                    ),
-                    decoration: BoxDecoration(
-                      color: isDark
-                          ? const Color(0xFF0F172A)
-                          : const Color(0xFFF1F5F9),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          isCompleted
-                              ? Icons.check_circle_rounded
-                              : Icons.lock_outline_rounded,
-                          size: 16,
-                          color: isCompleted ? const Color(0xFF16A34A) : muted,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          isCompleted
-                              ? 'Attendance completed for this event.'
-                              : 'Attendance window is currently closed.',
-                          style: TextStyle(
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w600,
-                            color: isCompleted
-                                ? const Color(0xFF16A34A)
-                                : (isDark
-                                    ? const Color(0xFF94A3B8)
-                                    : const Color(0xFF64748B)),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-              ],
+              ),
             ),
           ),
         );
@@ -1821,27 +2271,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget _buildEventCard(EventItem event, {bool today = false}) {
     final isDark = themeController.isDarkMode;
 
+    final checkpoints = _getEventCheckpoints(event);
+    final isFourCheckpoint = checkpoints.length > 2;
+
     final timeInWindow = _getTimeInWindow(event);
     final timeOutWindow = _getTimeOutWindow(event);
 
     final count = _getAttendanceCountForEvent(event);
-    final isCompleted = count >= 2;
+    final total = _getTotalCheckpointsForEvent(event);
+    final isCompleted = count >= total;
+    final hasPartial = count > 0 && !isCompleted;
+
+    final activeCheckpoint =
+        today ? _getActiveCheckpointForEvent(event) : null;
     final activeSession = today ? _getActiveSessionForEvent(event) : null;
     final isLiveNow = !isCompleted && activeSession != null;
 
     final String statusLabel = isCompleted
         ? 'Completed'
-        : (activeSession == AttendanceSessionType.timeOut
-            ? 'Time-Out Open'
-            : (activeSession == AttendanceSessionType.timeIn
-                ? 'Time-In Open'
-                : (count == 1 ? '1/2 Recorded' : '0/2')));
+        : (activeCheckpoint != null
+            ? '${activeCheckpoint.shortLabel} Open'
+            : (activeSession == AttendanceSessionType.timeOut
+                ? 'Time-Out Open'
+                : (activeSession == AttendanceSessionType.timeIn
+                    ? 'Time-In Open'
+                    : (hasPartial ? '$count/$total Recorded' : '0/$total'))));
 
     final Color statusBg = isCompleted
         ? (isDark ? const Color(0xFF064E3B) : const Color(0xFFDCFCE7))
         : (isLiveNow
             ? (isDark ? const Color(0xFF422006) : const Color(0xFFFEF3C7))
-            : (count == 1
+            : (hasPartial
                 ? (isDark ? const Color(0xFF451A03) : const Color(0xFFFEF3C7))
                 : (isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9))));
 
@@ -1849,7 +2309,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ? (isDark ? const Color(0xFF6EE7B7) : const Color(0xFF15803D))
         : (isLiveNow
             ? (isDark ? gold : const Color(0xFFB45309))
-            : (count == 1
+            : (hasPartial
                 ? (isDark ? const Color(0xFFFCD34D) : const Color(0xFF92400E))
                 : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF475569))));
 
@@ -1934,19 +2394,42 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         ],
                       ),
                       const SizedBox(height: 10),
-                      _scheduleIconLine(
-                        icon: Icons.login_rounded,
-                        iconColor: const Color(0xFF16A34A),
-                        text: 'Time-In: $timeInWindow',
-                        isDark: isDark,
-                      ),
-                      const SizedBox(height: 5),
-                      _scheduleIconLine(
-                        icon: Icons.logout_rounded,
-                        iconColor: const Color(0xFFDC2626),
-                        text: 'Time-Out: $timeOutWindow',
-                        isDark: isDark,
-                      ),
+                      if (isFourCheckpoint) ...[
+                        for (int i = 0; i < checkpoints.length; i++) ...[
+                          if (i > 0) const SizedBox(height: 5),
+                          _scheduleIconLine(
+                            icon: checkpoints[i].isRecorded
+                                ? Icons.check_circle_rounded
+                                : (checkpoints[i].sessionType ==
+                                        AttendanceSessionType.timeIn
+                                    ? Icons.login_rounded
+                                    : Icons.logout_rounded),
+                            iconColor: checkpoints[i].isRecorded
+                                ? const Color(0xFF16A34A)
+                                : (checkpoints[i].sessionType ==
+                                        AttendanceSessionType.timeIn
+                                    ? const Color(0xFF16A34A)
+                                    : const Color(0xFFDC2626)),
+                            text:
+                                '${checkpoints[i].label}: ${checkpoints[i].windowText}',
+                            isDark: isDark,
+                          ),
+                        ],
+                      ] else ...[
+                        _scheduleIconLine(
+                          icon: Icons.login_rounded,
+                          iconColor: const Color(0xFF16A34A),
+                          text: 'Time-In: $timeInWindow',
+                          isDark: isDark,
+                        ),
+                        const SizedBox(height: 5),
+                        _scheduleIconLine(
+                          icon: Icons.logout_rounded,
+                          iconColor: const Color(0xFFDC2626),
+                          text: 'Time-Out: $timeOutWindow',
+                          isDark: isDark,
+                        ),
+                      ],
                       if (hasVenue) ...[
                         const SizedBox(height: 5),
                         _scheduleIconLine(

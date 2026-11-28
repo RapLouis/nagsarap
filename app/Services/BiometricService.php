@@ -92,6 +92,32 @@ class BiometricService
         return $embedding;
     }
 
+    /**
+     * Extract a facial embedding directly from an UploadedFile or local file path.
+     */
+    public function profileEmbeddingFromFile(UploadedFile|string $file): ?array
+    {
+        $bytes = $file instanceof UploadedFile
+            ? $file->get()
+            : (is_file($file) ? file_get_contents($file) : '');
+
+        if ($bytes === '' || $bytes === false) {
+            return null;
+        }
+
+        try {
+            $data = $this->post('/extract-embedding', [
+                'image_base64' => base64_encode($bytes),
+            ]);
+        } catch (BiometricServiceException) {
+            return null;
+        }
+
+        $embedding = $data['embedding'] ?? null;
+
+        return is_array($embedding) ? $embedding : null;
+    }
+
     public function profileEmbedding(Student $student): ?array
     {
         if (! $student->face_photo_path) {

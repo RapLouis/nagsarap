@@ -23,6 +23,7 @@ class _RawStreamFrame {
   final int height;
   final int bytesPerRow0;
   final int bytesPerRow1;
+  final int bytesPerRow2;
   final int uvPixelStride;
   final int sensorOrientation;
   final bool isBgra;
@@ -35,6 +36,7 @@ class _RawStreamFrame {
     required this.height,
     required this.bytesPerRow0,
     required this.bytesPerRow1,
+    required this.bytesPerRow2,
     required this.uvPixelStride,
     required this.sensorOrientation,
     required this.isBgra,
@@ -62,7 +64,7 @@ Uint8List _encodeRawFrameToJpeg(_RawStreamFrame raw) {
 
     for (int y = 0; y < raw.height; y++) {
       final yRow = y * raw.bytesPerRow0;
-      final uvRow = (y >> 1) * raw.bytesPerRow1;
+      final uvRowIndex = y >> 1;
       for (int x = 0; x < raw.width; x++) {
         final yIdx = yRow + x;
         if (yIdx >= yPlane.length) continue;
@@ -70,17 +72,36 @@ Uint8List _encodeRawFrameToJpeg(_RawStreamFrame raw) {
 
         int up = 128;
         int vp = 128;
+
         if (uPlane != null && vPlane != null) {
-          final uvIdx = uvRow + (x >> 1) * raw.uvPixelStride;
-          if (uvIdx < uPlane.length && uvIdx < vPlane.length) {
-            up = uPlane[uvIdx];
-            vp = vPlane[uvIdx];
+          final uIdx =
+              uvRowIndex * raw.bytesPerRow1 + (x >> 1) * raw.uvPixelStride;
+          final vIdx =
+              uvRowIndex * raw.bytesPerRow2 + (x >> 1) * raw.uvPixelStride;
+          if (uIdx < uPlane.length && vIdx < vPlane.length) {
+            up = uPlane[uIdx];
+            vp = vPlane[vIdx];
+          }
+        } else if (uPlane != null) {
+          final uvIdx =
+              uvRowIndex * raw.bytesPerRow1 + (x >> 1) * raw.uvPixelStride;
+          if (uvIdx + 1 < uPlane.length) {
+            vp = uPlane[uvIdx];
+            up = uPlane[uvIdx + 1];
+          }
+        } else {
+          final uvBase = raw.bytesPerRow0 * raw.height;
+          final uvIdx = uvBase + uvRowIndex * raw.bytesPerRow0 + ((x >> 1) * 2);
+          if (uvIdx + 1 < yPlane.length) {
+            vp = yPlane[uvIdx];
+            up = yPlane[uvIdx + 1];
           }
         }
 
         final r = (yp + 1.402 * (vp - 128)).round().clamp(0, 255);
-        final g =
-            (yp - 0.344136 * (up - 128) - 0.714136 * (vp - 128)).round().clamp(0, 255);
+        final g = (yp - 0.344136 * (up - 128) - 0.714136 * (vp - 128))
+            .round()
+            .clamp(0, 255);
         final b = (yp + 1.772 * (up - 128)).round().clamp(0, 255);
         image.setPixelRgb(x, y, r, g, b);
       }
@@ -95,8 +116,8 @@ Uint8List _encodeRawFrameToJpeg(_RawStreamFrame raw) {
     image = img.copyRotate(image, angle: 270);
   }
 
-  if (image.width > 480) {
-    image = img.copyResize(image, width: 480);
+  if (image.width > 384) {
+    image = img.copyResize(image, width: 384);
   }
 
   return Uint8List.fromList(img.encodeJpg(image, quality: 82));
@@ -118,6 +139,9 @@ class RegistrationFaceVerificationScreen extends StatefulWidget {
 class _RegistrationFaceVerificationScreenState
     extends State<RegistrationFaceVerificationScreen>
     with SingleTickerProviderStateMixin {
+  static const double _requiredTurnAngle = 14.0;
+  static const int _colorHoldMs = 380;
+
   CameraController? _camera;
   CameraDescription? _frontCamera;
   late final FaceDetector _faceDetector;
@@ -131,6 +155,8 @@ class _RegistrationFaceVerificationScreenState
 
   LivenessChallenge? _challenge;
   String _direction = 'left';
+  double _centerYaw = 0.0;
+  int _steadyCenterCount = 0;
 
   double _holdProgress = 0.0;
   double _turnProgress = 0.0;
@@ -141,16 +167,11 @@ class _RegistrationFaceVerificationScreenState
   Color _overlayFlashColor = Colors.transparent;
   Timer? _flashTimer;
   int _flashCycleIndex = 0;
-  DateTime? _lastFlashTick;
+  int _activeFlashStep = -1;
+  DateTime? _flashShownAt;
 
-  final List<Color> _flashColorSequence = const [
-    Colors.red,
-    Colors.green,
-    Colors.blue,
-  ];
-  final List<String> _flashColorNames = const ['red', 'green', 'blue'];
+  List<String> _flashColorNames = const ['red', 'green', 'blue'];
 
-  // Recorded frames: 1 per RGB color during straight gaze + center + turned peak
   final Map<int, _RawStreamFrame> _capturedRgbFrames = {};
   _RawStreamFrame? _rawCenterFrame;
   _RawStreamFrame? _rawTurnedFrame;
@@ -179,6 +200,19 @@ class _RegistrationFaceVerificationScreenState
     _initLivenessChallengeAndCamera();
   }
 
+  Color _colorFromName(String name) {
+    switch (name.trim().toLowerCase()) {
+      case 'red':
+        return const Color(0xFFFF0000);
+      case 'green':
+        return const Color(0xFF00FF00);
+      case 'blue':
+        return const Color(0xFF0000FF);
+      default:
+        return const Color(0xFFFF0000);
+    }
+  }
+
   Future<void> _initLivenessChallengeAndCamera() async {
     try {
       final results = await Future.wait([
@@ -194,6 +228,9 @@ class _RegistrationFaceVerificationScreenState
       if (challengeResult.success && challengeResult.challenge != null) {
         _challenge = challengeResult.challenge;
         _direction = _challenge!.direction;
+        if (_challenge!.flashColors.isNotEmpty) {
+          _flashColorNames = _challenge!.flashColors;
+        }
       }
 
       if (cameras.isEmpty) {
@@ -208,7 +245,7 @@ class _RegistrationFaceVerificationScreenState
 
       final controller = CameraController(
         selected,
-        ResolutionPreset.medium,
+        ResolutionPreset.low,
         enableAudio: false,
         imageFormatGroup: Platform.isAndroid
             ? ImageFormatGroup.nv21
@@ -280,7 +317,7 @@ class _RegistrationFaceVerificationScreenState
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  'To block photo or video spoofing, your screen will flash RED, GREEN, and BLUE light continuously while you look straight and then turn your head to your $_direction.',
+                  'Your screen will flash RED, GREEN, and BLUE light while you look straight and then turn your head to your $_direction.',
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     fontSize: 13,
@@ -299,14 +336,14 @@ class _RegistrationFaceVerificationScreenState
                   child: const Row(
                     children: [
                       Icon(
-                        Icons.warning_amber_rounded,
+                        Icons.light_mode_rounded,
                         color: Color(0xFFD97706),
                         size: 22,
                       ),
                       SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          'Warning: Screen light will flash rapidly. Keep phone steady at eye level.',
+                          'Keep your face centered, hold steady during flashes, and turn your head smoothly.',
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
@@ -354,21 +391,18 @@ class _RegistrationFaceVerificationScreenState
   void _startContinuousFlashing() {
     _flashTimer?.cancel();
     _flashCycleIndex = 0;
-    _lastFlashTick = DateTime.now();
     setState(() {
-      _overlayFlashColor = _flashColorSequence[0];
+      _overlayFlashColor = _colorFromName(_flashColorNames[0]);
     });
 
-    // Continuous RGB flash loop across both center & head-turn poses
-    _flashTimer = Timer.periodic(const Duration(milliseconds: 180), (timer) {
+    _flashTimer = Timer.periodic(const Duration(milliseconds: 240), (timer) {
       if (!mounted || _disposed) {
         timer.cancel();
         return;
       }
-      _flashCycleIndex = (_flashCycleIndex + 1) % _flashColorSequence.length;
-      _lastFlashTick = DateTime.now();
+      _flashCycleIndex = (_flashCycleIndex + 1) % _flashColorNames.length;
       setState(() {
-        _overlayFlashColor = _flashColorSequence[_flashCycleIndex];
+        _overlayFlashColor = _colorFromName(_flashColorNames[_flashCycleIndex]);
       });
     });
   }
@@ -392,16 +426,24 @@ class _RegistrationFaceVerificationScreenState
     _capturedRgbFrames.clear();
     _rawCenterFrame = null;
     _rawTurnedFrame = null;
+    _steadyCenterCount = 0;
+    _centerYaw = 0.0;
+    _activeFlashStep = -1;
+    _flashShownAt = null;
+    _isSubmitting = false;
+    _flashTimer?.cancel();
+    _flashTimer = null;
+
+    if (!mounted || _disposed) return;
 
     setState(() {
+      _overlayFlashColor = Colors.transparent;
       _step = RegistrationLivenessStep.lookCenter;
-      _holdProgress = 0.1;
+      _holdProgress = 0.08;
       _turnProgress = 0.0;
-      _hint = 'Look straight. Screen is verifying light reflections...';
+      _hint = 'Look straight at the camera...';
       _error = null;
     });
-
-    _startContinuousFlashing();
 
     if (!controller.value.isStreamingImages) {
       await controller.startImageStream(_onCameraFrame);
@@ -439,8 +481,8 @@ class _RegistrationFaceVerificationScreenState
       if (_disposed || !mounted) return;
 
       if (faces.isEmpty) {
-        if (_hint != 'Position your face inside the circle') {
-          setState(() => _hint = 'Position your face inside the circle');
+        if (_hint != 'Position your face clearly inside the circle') {
+          setState(() => _hint = 'Position your face clearly inside the circle');
         }
         return;
       }
@@ -448,53 +490,100 @@ class _RegistrationFaceVerificationScreenState
       final face = faces.first;
       final double yaw = face.headEulerAngleY ?? 0.0;
 
-      // PHASE 1: Capture 1 frame for each active RGB flash color (0=red, 1=green, 2=blue)
       if (_step == RegistrationLivenessStep.lookCenter) {
-        if (yaw.abs() <= 12.0) {
-          final int activeColorIdx = _flashCycleIndex;
-          final bool colorSettled = _lastFlashTick != null &&
-              DateTime.now().difference(_lastFlashTick!).inMilliseconds >= 70;
+        if (yaw.abs() > 15.0) {
+          const msg = 'Look straight at the camera while screen flashes...';
+          if (_hint != msg) {
+            setState(() => _hint = msg);
+          }
+          return;
+        }
 
-          if (colorSettled && !_capturedRgbFrames.containsKey(activeColorIdx)) {
-            final copy = _copyRawFrame(image);
-            _capturedRgbFrames[activeColorIdx] = copy;
-            _rawCenterFrame ??= copy;
-
-            final double progress =
-                0.1 + (0.9 * (_capturedRgbFrames.length / _flashColorSequence.length));
-            setState(() {
-              _holdProgress = progress.clamp(0.0, 1.0);
-            });
+        if (_activeFlashStep == -1) {
+          _steadyCenterCount++;
+          if (_steadyCenterCount < 2) {
+            setState(() => _holdProgress = 0.15);
+            return;
           }
 
-          if (_capturedRgbFrames.length >= _flashColorSequence.length) {
-            setState(() {
-              _holdProgress = 1.0;
-              _step = RegistrationLivenessStep.turn;
-              _turnProgress = 0.25;
-              _hint = 'Turn your head to your $_direction while screen flashes...';
-            });
-          }
+          _rawCenterFrame = _copyRawFrame(image);
+          _centerYaw = yaw;
+
+          _activeFlashStep = 0;
+          _flashShownAt = DateTime.now();
+          setState(() {
+            _overlayFlashColor = _colorFromName(_flashColorNames[0]);
+            _holdProgress = 0.25;
+            _hint = 'Hold still. Screen is verifying light reflections...';
+          });
+          return;
+        }
+
+        final shownAt = _flashShownAt;
+        if (shownAt == null ||
+            DateTime.now().difference(shownAt).inMilliseconds < _colorHoldMs) {
+          return;
+        }
+
+        _capturedRgbFrames[_activeFlashStep] = _copyRawFrame(image);
+        final int nextStep = _activeFlashStep + 1;
+
+        if (nextStep < _flashColorNames.length) {
+          _activeFlashStep = nextStep;
+          _flashShownAt = DateTime.now();
+          final double progress =
+              0.25 + (0.75 * (nextStep / _flashColorNames.length));
+          setState(() {
+            _overlayFlashColor = _colorFromName(_flashColorNames[nextStep]);
+            _holdProgress = progress.clamp(0.0, 1.0);
+          });
         } else {
+          _activeFlashStep = nextStep;
+          _startContinuousFlashing();
           setState(() {
-            _hint = 'Look straight at the camera while screen flashes...';
+            _holdProgress = 1.0;
+            _step = RegistrationLivenessStep.turn;
+            _turnProgress = 0.25;
+            _hint =
+                'Turn your head to your ${_direction.toUpperCase()} while screen flashes...';
           });
         }
-      }
-      // PHASE 2: Keep flashing until user turns head clearly
-      else if (_step == RegistrationLivenessStep.turn) {
-        if (yaw.abs() >= 15.0) {
-          _rawTurnedFrame = _copyRawFrame(image);
-          setState(() {
-            _turnProgress = 1.0;
-            _step = RegistrationLivenessStep.verifying;
-            _hint = 'Registering face biometrics...';
-          });
+      } else if (_step == RegistrationLivenessStep.turn) {
+        final double deltaYaw = yaw - _centerYaw;
+        final bool turnedLeft = deltaYaw >= _requiredTurnAngle;
+        final bool turnedRight = deltaYaw <= -_requiredTurnAngle;
 
-          _stopContinuousFlashing();
-          await _stopStream();
-          await _encodeAndSubmit();
+        final bool reachedTargetDirection =
+            (_direction == 'left' && turnedLeft) ||
+                (_direction == 'right' && turnedRight);
+
+        if (!reachedTargetDirection) {
+          if (_direction == 'left' && turnedRight) {
+            const wrongMsg =
+                'Wrong direction — turn your head to your LEFT...';
+            if (_hint != wrongMsg) setState(() => _hint = wrongMsg);
+          } else if (_direction == 'right' && turnedLeft) {
+            const wrongMsg =
+                'Wrong direction — turn your head to your RIGHT...';
+            if (_hint != wrongMsg) setState(() => _hint = wrongMsg);
+          }
+          return;
         }
+
+        _rawTurnedFrame = _copyRawFrame(image);
+        _stopContinuousFlashing();
+        await _stopStream();
+
+        if (!mounted || _disposed) return;
+
+        setState(() {
+          _overlayFlashColor = Colors.transparent;
+          _turnProgress = 1.0;
+          _step = RegistrationLivenessStep.verifying;
+          _hint = 'Registering face biometrics...';
+        });
+
+        await _encodeAndSubmit();
       }
     } catch (e) {
       debugPrint('Liveness stream error: $e');
@@ -517,6 +606,7 @@ class _RegistrationFaceVerificationScreenState
       height: image.height,
       bytesPerRow0: image.planes[0].bytesPerRow,
       bytesPerRow1: image.planes.length > 1 ? image.planes[1].bytesPerRow : 0,
+      bytesPerRow2: image.planes.length > 2 ? image.planes[2].bytesPerRow : 0,
       uvPixelStride:
           image.planes.length > 1 ? (image.planes[1].bytesPerPixel ?? 1) : 1,
       sensorOrientation: _frontCamera?.sensorOrientation ?? 270,
@@ -566,7 +656,7 @@ class _RegistrationFaceVerificationScreenState
 
       final orderedRgbFrames = <_RawStreamFrame>[];
       final orderedRgbColors = <String>[];
-      for (int i = 0; i < _flashColorSequence.length; i++) {
+      for (int i = 0; i < _flashColorNames.length; i++) {
         final frame = _capturedRgbFrames[i];
         if (frame != null) {
           orderedRgbFrames.add(frame);
@@ -574,7 +664,6 @@ class _RegistrationFaceVerificationScreenState
         }
       }
 
-      // Encode center, turned, and RGB flash frames in parallel isolates
       final futures = <Future<Uint8List>>[
         compute(_encodeRawFrameToJpeg, _rawCenterFrame!),
         compute(_encodeRawFrameToJpeg, _rawTurnedFrame!),
@@ -599,24 +688,20 @@ class _RegistrationFaceVerificationScreenState
       final nonce = _challenge?.nonce ?? 'fallback_nonce';
       final sessionId = _challenge?.sessionId ?? 'fallback_session_id';
 
-      final result = await RegistrationService.instance.verifyRegistrationFace(
-        centerFrame: centerFile,
-        turnedFrame: turnedFile,
-        flashFrames: flashFiles,
-        flashColors: orderedRgbColors,
-        challengeNonce: nonce,
-        sessionId: sessionId,
-      );
+      final result = await RegistrationService.instance
+          .verifyRegistrationFace(
+            centerFrame: centerFile,
+            turnedFrame: turnedFile,
+            flashFrames: flashFiles,
+            flashColors: orderedRgbColors,
+            challengeNonce: nonce,
+            sessionId: sessionId,
+          )
+          .timeout(const Duration(seconds: 35));
 
       if (!mounted || _disposed) return;
 
       if (!result.success) {
-        final msg = result.message.toLowerCase();
-        if (msg.contains('turn') || msg.contains('angle')) {
-          _isSubmitting = false;
-          await _startContinuousCapture();
-          return;
-        }
         throw Exception(result.message);
       }
 
@@ -625,6 +710,13 @@ class _RegistrationFaceVerificationScreenState
       });
 
       await _showSuccessModalAndNavigate();
+    } on TimeoutException {
+      if (!mounted || _disposed) return;
+      setState(() {
+        _step = RegistrationLivenessStep.failed;
+        _overlayFlashColor = Colors.transparent;
+        _error = 'Verification timed out. Tap Retry to try again.';
+      });
     } catch (e) {
       if (!mounted || _disposed) return;
       setState(() {
@@ -647,6 +739,9 @@ class _RegistrationFaceVerificationScreenState
     if (res.success && res.challenge != null) {
       _challenge = res.challenge;
       _direction = _challenge!.direction;
+      if (_challenge!.flashColors.isNotEmpty) {
+        _flashColorNames = _challenge!.flashColors;
+      }
     }
     await _startContinuousCapture();
   }
@@ -758,13 +853,14 @@ class _RegistrationFaceVerificationScreenState
 
   @override
   Widget build(BuildContext context) {
+    final bool isFlashing = _overlayFlashColor != Colors.transparent;
+
     return Scaffold(
-      backgroundColor: _overlayFlashColor != Colors.transparent
-          ? _overlayFlashColor
-          : AppColors.background,
+      backgroundColor: isFlashing ? _overlayFlashColor : AppColors.background,
       appBar: AppBar(
-        backgroundColor: AppColors.navy,
+        backgroundColor: isFlashing ? _overlayFlashColor : AppColors.navy,
         foregroundColor: Colors.white,
+        elevation: 0,
         title: const Text(
           'Register Face Biometrics',
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
@@ -774,18 +870,22 @@ class _RegistrationFaceVerificationScreenState
         child: Column(
           children: [
             const SizedBox(height: 24),
-            const Text(
+            Text(
               'Face Registration',
               style: TextStyle(
                 fontSize: 20,
                 fontWeight: FontWeight.bold,
-                color: AppColors.navy,
+                color: isFlashing ? Colors.white : AppColors.navy,
               ),
             ),
             const SizedBox(height: 6),
             Text(
               _hint ?? 'Position your face inside the circle',
-              style: const TextStyle(fontSize: 13, color: Colors.grey),
+              style: TextStyle(
+                fontSize: 13,
+                color: isFlashing ? Colors.white : Colors.grey,
+                fontWeight: isFlashing ? FontWeight.w600 : FontWeight.normal,
+              ),
             ),
             const Spacer(),
             Center(
@@ -796,15 +896,16 @@ class _RegistrationFaceVerificationScreenState
                     animation: _pulseController,
                     builder: (context, child) {
                       return Container(
-                        width: 270,
-                        height: 270,
+                        width: 278,
+                        height: 278,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           border: Border.all(
-                            color: AppColors.gold.withValues(
-                              alpha: 0.3 + (_pulseController.value * 0.4),
+                            color: (isFlashing ? Colors.white : AppColors.gold)
+                                .withValues(
+                              alpha: 0.4 + (_pulseController.value * 0.45),
                             ),
-                            width: 3.5,
+                            width: isFlashing ? 6.0 : 3.5,
                           ),
                         ),
                       );
@@ -816,7 +917,10 @@ class _RegistrationFaceVerificationScreenState
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: Colors.black,
-                      border: Border.all(color: AppColors.gold, width: 4),
+                      border: Border.all(
+                        color: isFlashing ? _overlayFlashColor : AppColors.gold,
+                        width: isFlashing ? 8 : 4,
+                      ),
                     ),
                     child: ClipOval(
                       child: _cameraReady &&
@@ -871,22 +975,23 @@ class _RegistrationFaceVerificationScreenState
               ),
             _buildProgressBar(),
             const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: _isSubmitting ? null : _retryVerification,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.gold,
-                foregroundColor: AppColors.navy,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 36, vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(24),
+            if (!isFlashing)
+              ElevatedButton(
+                onPressed: _isSubmitting ? null : _retryVerification,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.gold,
+                  foregroundColor: AppColors.navy,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 36, vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                ),
+                child: const Text(
+                  'Retry / Capture Now',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                 ),
               ),
-              child: const Text(
-                'Retry / Capture Now',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-              ),
-            ),
             const SizedBox(height: 30),
           ],
         ),

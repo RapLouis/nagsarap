@@ -7,6 +7,7 @@ import '../core/api_endpoints.dart';
 import '../models/liveness_challenge.dart';
 import 'api_service.dart';
 import 'offline_storage_service.dart';
+import 'secure_time_service.dart';
 
 class LivenessChallengeResult {
   final LivenessChallenge? challenge;
@@ -34,13 +35,21 @@ class AttendanceService {
 
   Future<LivenessChallengeResult> requestLivenessChallenge({
     required int eventId,
+    int? slotIndex,
+    String? checkpointKey,
   }) async {
     final sessionId = const Uuid().v4();
 
     try {
       final response = await _api.dio.post(
         ApiEndpoints.attendanceLivenessChallenge,
-        data: {'event_id': eventId, 'session_id': sessionId},
+        data: {
+          'event_id': eventId,
+          'session_id': sessionId,
+          if (slotIndex != null) 'slot_index': slotIndex,
+          if (checkpointKey != null && checkpointKey.isNotEmpty)
+            'checkpoint_key': checkpointKey,
+        },
         options: Options(
           sendTimeout: const Duration(seconds: 15),
           receiveTimeout: const Duration(seconds: 15),
@@ -51,6 +60,11 @@ class AttendanceService {
       final data = _asMap(map?['data']);
       final direction = data?['direction']?.toString();
       final nonce = data?['nonce']?.toString();
+
+      final rawColors = data?['flash_colors'];
+      final flashColors = rawColors is List && rawColors.isNotEmpty
+          ? rawColors.map((e) => e.toString().toLowerCase()).toList()
+          : const ['red', 'green', 'blue'];
 
       final validDirection = direction == 'left' || direction == 'right';
 
@@ -69,6 +83,7 @@ class AttendanceService {
             expiresAt: data?['expires_at'] is num
                 ? (data!['expires_at'] as num).toInt()
                 : null,
+            flashColors: flashColors,
           ),
         );
       }
@@ -176,14 +191,20 @@ class AttendanceService {
     required String challengeNonce,
     required String sessionId,
     String type = 'time_in',
+    int? slotIndex,
+    String? checkpointKey,
   }) async {
     try {
       final normalizedType =
           (type == 'time_out' || type == 'out') ? 'time_out' : 'time_in';
 
-      final formData = FormData.fromMap({
+      final formMap = <String, dynamic>{
         'event_id': eventId,
         'type': normalizedType,
+        'session_type': normalizedType,
+        if (slotIndex != null) 'slot_index': slotIndex,
+        if (checkpointKey != null && checkpointKey.isNotEmpty)
+          'checkpoint_key': checkpointKey,
         'challenge_nonce': challengeNonce,
         'session_id': sessionId,
         'latitude': latitude,
@@ -197,7 +218,19 @@ class AttendanceService {
           turnedFrame.path,
           filename: 'attendance-turn.jpg',
         ),
-      });
+      };
+
+      for (int i = 0; i < flashFrames.length; i++) {
+        formMap['flash_frames[$i]'] = await MultipartFile.fromFile(
+          flashFrames[i].path,
+          filename: 'attendance-flash-$i.jpg',
+        );
+        if (i < flashColors.length) {
+          formMap['flash_colors[$i]'] = flashColors[i];
+        }
+      }
+
+      final formData = FormData.fromMap(formMap);
 
       final response = await _api.dio.post(
         ApiEndpoints.attendanceMobileCheckIn,
@@ -218,7 +251,16 @@ class AttendanceService {
         );
       }
 
-      return AttendanceResult.fromJson(map);
+      final result = AttendanceResult.fromJson(map);
+      final serverTimeStr = result.data?['server_time']?.toString();
+      if (serverTimeStr != null) {
+        final serverTime = DateTime.tryParse(serverTimeStr);
+        if (serverTime != null) {
+          await SecureTimeService.instance.updateServerAnchor(serverTime);
+        }
+      }
+
+      return result;
     } on DioException catch (e) {
       debugPrint(
         'CHECKIN DIO ERROR: ${e.response?.statusCode} - ${e.response?.data}',
@@ -250,16 +292,23 @@ class AttendanceService {
     required List<XFile> flashFrames,
     required String livenessDirection,
     String type = 'time_in',
+    int? slotIndex,
+    String? checkpointKey,
   }) async {
     try {
-      final exists = await _offlineStorage.hasPendingForEvent(eventId);
+      final exists = await _offlineStorage.hasPendingForCheckpoint(
+        eventId: eventId,
+        slotIndex: slotIndex,
+        checkpointKey: checkpointKey,
+        sessionType: type,
+      );
 
       if (exists) {
         return const AttendanceResult(
           success: false,
           code: 'OFFLINE_ALREADY_PENDING',
           message:
-              'An offline attendance for this event is already waiting to sync.',
+              'An offline attendance for this checkpoint is already waiting to sync.',
         );
       }
 
@@ -274,6 +323,8 @@ class AttendanceService {
         flashFrames: flashFrames,
         livenessDirection: livenessDirection,
         sessionType: type,
+        slotIndex: slotIndex,
+        checkpointKey: checkpointKey,
       );
 
       return AttendanceResult(
@@ -286,6 +337,8 @@ class AttendanceService {
           'liveness_direction': record.livenessDirection,
           'sync_status': 'pending',
           'type': type,
+          if (slotIndex != null) 'slot_index': slotIndex,
+          if (checkpointKey != null) 'checkpoint_key': checkpointKey,
         },
       );
     } catch (e) {
@@ -315,7 +368,7 @@ class AttendanceService {
               ? 'time_out'
               : 'time_in';
 
-      final formData = FormData.fromMap({
+      final formMap = <String, dynamic>{
         'event_id': record.eventId,
         'attendance_uuid': record.uuid,
         'attendance_time': record.attendanceTime,
@@ -325,6 +378,9 @@ class AttendanceService {
         'liveness_direction': record.livenessDirection,
         'type': normalizedType,
         'session_type': normalizedType,
+        if (record.slotIndex != null) 'slot_index': record.slotIndex,
+        if (record.checkpointKey != null && record.checkpointKey!.isNotEmpty)
+          'checkpoint_key': record.checkpointKey,
         'center_frame': await MultipartFile.fromFile(
           record.centerFramePath,
           filename: 'offline-center.jpg',
@@ -333,7 +389,16 @@ class AttendanceService {
           record.turnedFramePath,
           filename: 'offline-turn.jpg',
         ),
-      });
+      };
+
+      for (int i = 0; i < record.flashFramePaths.length; i++) {
+        formMap['flash_frames[$i]'] = await MultipartFile.fromFile(
+          record.flashFramePaths[i],
+          filename: 'offline-flash-$i.jpg',
+        );
+      }
+
+      final formData = FormData.fromMap(formMap);
 
       final response = await _api.dio.post(
         ApiEndpoints.attendanceSync,
@@ -434,7 +499,7 @@ class AttendanceService {
       }
 
       debugPrint(
-        'OFFLINE SYNC REJECTED BY SERVER (${result.message}). Cleaning up SQLite.',
+        'OFFLINE SYNC REJECTED BY SERVER (${result.message}). Cleaning up local queue.',
       );
       await _offlineStorage.deletePending(record);
     }
@@ -507,93 +572,17 @@ class AttendanceService {
 
     switch (response.statusCode) {
       case 401:
-        return 'Your login session has expired.';
+        return 'Your session has expired. Please sign in again.';
       case 403:
-        return 'Your account cannot record attendance.';
+        return 'You are not permitted to perform this action.';
       case 404:
-        return 'Event or endpoint not found on server.';
+        return 'Requested attendance resource was not found.';
       case 409:
-        return 'Attendance has already been recorded.';
+        return 'Attendance for this checkpoint has already been recorded.';
       case 422:
-        return 'Attendance verification failed.';
-      case 429:
-        return 'Too many requests. Please wait.';
+        return 'Attendance validation failed. Please verify your location and checkpoint window.';
       default:
-        return 'Server Error (${response.statusCode}): ${response.statusMessage ?? "Attendance verification failed."}';
+        return 'Server error (${response.statusCode}). Please try again.';
     }
   }
-}
-
-class AttendanceResult {
-  const AttendanceResult({
-    required this.success,
-    required this.message,
-    this.code,
-    this.data,
-    this.networkUnavailable = false,
-  });
-
-  final bool success;
-  final String message;
-  final String? code;
-  final Map<String, dynamic>? data;
-  final bool networkUnavailable;
-
-  factory AttendanceResult.fromJson(Map<String, dynamic> json) {
-    final rawData = json['data'];
-    return AttendanceResult(
-      success: json['success'] == true,
-      message: json['message']?.toString() ?? 'Unknown response.',
-      code: json['code']?.toString(),
-      data: rawData is Map ? Map<String, dynamic>.from(rawData) : null,
-    );
-  }
-}
-
-class AttendanceLivenessFrameResult {
-  const AttendanceLivenessFrameResult({
-    required this.success,
-    required this.message,
-    this.code,
-    this.faceDetected = false,
-    this.yaw,
-    this.faceCenterX,
-    this.faceCenterY,
-    this.faceInComfortableZone = true,
-    this.eyeOpenness,
-    this.mouthWidth,
-    this.blurScore,
-    this.detectionScore,
-    this.data,
-    this.networkUnavailable = false,
-  });
-
-  final bool success;
-  final String? code;
-  final String message;
-  final bool faceDetected;
-  final double? yaw;
-  final double? faceCenterX;
-  final double? faceCenterY;
-  final bool faceInComfortableZone;
-  final double? eyeOpenness;
-  final double? mouthWidth;
-  final double? blurScore;
-  final double? detectionScore;
-  final Map<String, dynamic>? data;
-  final bool networkUnavailable;
-}
-
-class OfflineSyncResult {
-  const OfflineSyncResult({
-    required this.total,
-    required this.synced,
-    required this.remaining,
-    this.message = 'Offline sync completed.',
-  });
-
-  final int total;
-  final int synced;
-  final int remaining;
-  final String message;
 }

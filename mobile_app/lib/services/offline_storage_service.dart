@@ -21,6 +21,8 @@ class PendingAttendanceRecord {
     required this.flashFramePaths,
     required this.livenessDirection,
     this.sessionType = 'time_in',
+    this.slotIndex,
+    this.checkpointKey,
   });
 
   final String uuid;
@@ -36,12 +38,23 @@ class PendingAttendanceRecord {
   final List<String> flashFramePaths;
   final String livenessDirection;
   final String sessionType;
+  final int? slotIndex;
+  final String? checkpointKey;
 
   factory PendingAttendanceRecord.fromJson(JsonMap json) {
     List<String> flashes = [];
     if (json['flash_frame_paths'] is List) {
       flashes = List<String>.from(json['flash_frame_paths']);
     }
+
+    final rawSlotIndex = json['slot_index'];
+    final parsedSlotIndex = rawSlotIndex is int
+        ? rawSlotIndex
+        : (rawSlotIndex is num
+            ? rawSlotIndex.toInt()
+            : int.tryParse(rawSlotIndex?.toString() ?? ''));
+
+    final rawCheckpointKey = json['checkpoint_key']?.toString().trim();
 
     return PendingAttendanceRecord(
       uuid: json['uuid'].toString(),
@@ -59,6 +72,10 @@ class PendingAttendanceRecord {
       sessionType: json['session_type']?.toString() == 'time_out'
           ? 'time_out'
           : 'time_in',
+      slotIndex: parsedSlotIndex,
+      checkpointKey: (rawCheckpointKey != null && rawCheckpointKey.isNotEmpty)
+          ? rawCheckpointKey
+          : null,
     );
   }
 
@@ -75,6 +92,8 @@ class PendingAttendanceRecord {
       'flash_frame_paths': flashFramePaths,
       'liveness_direction': livenessDirection,
       'session_type': sessionType,
+      if (slotIndex != null) 'slot_index': slotIndex,
+      if (checkpointKey != null) 'checkpoint_key': checkpointKey,
     };
   }
 
@@ -237,6 +256,26 @@ class OfflineStorageService {
     return records.any((record) => record.eventId == eventId);
   }
 
+  Future<bool> hasPendingForCheckpoint({
+    required int eventId,
+    int? slotIndex,
+    String? checkpointKey,
+    String? sessionType,
+  }) async {
+    final records = await getPendingAttendances();
+    return records.any((record) {
+      if (record.eventId != eventId) return false;
+      if (checkpointKey != null && record.checkpointKey != null) {
+        return (record.slotIndex ?? 0) == (slotIndex ?? 0) &&
+            record.checkpointKey == checkpointKey;
+      }
+      if (sessionType != null) {
+        return record.sessionType == sessionType;
+      }
+      return true;
+    });
+  }
+
   Future<PendingAttendanceRecord> queueAttendance({
     required int eventId,
     required double latitude,
@@ -248,6 +287,8 @@ class OfflineStorageService {
     required List<XFile> flashFrames,
     required String livenessDirection,
     String sessionType = 'time_in',
+    int? slotIndex,
+    String? checkpointKey,
   }) async {
     final pending = await _pendingDirectory();
     final uuid = _generateUuidV4();
@@ -289,6 +330,8 @@ class OfflineStorageService {
         flashFramePaths: flashPaths,
         livenessDirection: livenessDirection == 'right' ? 'right' : 'left',
         sessionType: sessionType,
+        slotIndex: slotIndex,
+        checkpointKey: checkpointKey,
       );
 
       final metadata = File('${recordDirectory.path}/metadata.json');

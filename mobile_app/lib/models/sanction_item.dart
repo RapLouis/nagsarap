@@ -5,6 +5,13 @@ class SanctionItem {
   final String status;
   final String? consequence;
   final String? checkpoint;
+  final String? infractionType;
+  final String? slotLabel;
+  final String? preferredMode;
+  final String? officialReceiptNo;
+  final String? adminRemarks;
+  final double fineAmount;
+  final double? commServiceHours;
 
   final DateTime? issuedAt;
   final DateTime? resolvedAt;
@@ -21,6 +28,13 @@ class SanctionItem {
     required this.resolvedAt,
     this.consequence,
     this.checkpoint,
+    this.infractionType,
+    this.slotLabel,
+    this.preferredMode,
+    this.officialReceiptNo,
+    this.adminRemarks,
+    this.fineAmount = 0.0,
+    this.commServiceHours,
     this.eventDate,
     this.eventId,
   });
@@ -42,16 +56,22 @@ class SanctionItem {
     );
 
     final rawCheckpoint = _stringValue(
-      json['checkpoint'] ??
-          json['checkpoint_key'] ??
+      json['checkpoint_key'] ??
+          json['checkpoint'] ??
+          json['infraction_type'] ??
           json['period'] ??
           json['session_type'] ??
           json['type'],
     );
 
+    final fine = _doubleValue(json['fine_amount']) ?? 0.0;
     final rawConsequence = _stringValue(
       json['consequence'] ?? json['sanction_type'] ?? json['penalty'],
     );
+
+    final effectiveConsequence = rawConsequence.isNotEmpty
+        ? rawConsequence
+        : (fine > 0 ? 'Fine: ₱${fine.toStringAsFixed(2)}' : null);
 
     return SanctionItem(
       id: _intValue(json['sanction_id'] ?? json['id']) ?? 0,
@@ -61,10 +81,17 @@ class SanctionItem {
       ),
       status: _stringValue(
         json['status'],
-        fallback: 'pending',
+        fallback: 'unsettled',
       ),
-      consequence: rawConsequence.isEmpty ? null : rawConsequence,
+      consequence: effectiveConsequence,
       checkpoint: rawCheckpoint.isEmpty ? null : rawCheckpoint,
+      infractionType: _nullableString(json['infraction_type']),
+      slotLabel: _nullableString(json['slot_label']),
+      preferredMode: _nullableString(json['preferred_mode']),
+      officialReceiptNo: _nullableString(json['official_receipt_no']),
+      adminRemarks: _nullableString(json['admin_remarks']),
+      fineAmount: fine,
+      commServiceHours: _doubleValue(json['comm_service_hours']),
       issuedAt: _dateValue(
         json['issued_at'] ?? json['created_at'],
       ),
@@ -86,14 +113,28 @@ class SanctionItem {
 
   bool get isResolved {
     final s = status.trim().toLowerCase();
-    return s == 'resolved' ||
+    return s == 'settled' ||
+        s == 'excused' ||
+        s == 'resolved' ||
         s == 'cleared' ||
         s == 'waived' ||
         resolvedAt != null;
   }
 
+  String get checkpointLabel {
+    final key = (infractionType ?? checkpoint ?? '').toLowerCase();
+    if (key.contains('morning_time_in')) return 'Morning Time-In';
+    if (key.contains('morning_time_out')) return 'Morning Time-Out';
+    if (key.contains('afternoon_time_in')) return 'Afternoon Time-In';
+    if (key.contains('afternoon_time_out')) return 'Afternoon Time-Out';
+    if (missedPeriod == 'time_in') return 'Time-In';
+    if (missedPeriod == 'time_out') return 'Time-Out';
+    return slotLabel ?? 'Checkpoint';
+  }
+
   String? get missedPeriod {
-    final combined = '${checkpoint ?? ''} $title $reason'.toLowerCase();
+    final combined =
+        '${infractionType ?? ''} ${checkpoint ?? ''} $title $reason'.toLowerCase();
 
     final hasTimeIn = combined.contains('time-in') ||
         combined.contains('time in') ||
@@ -119,6 +160,17 @@ class SanctionItem {
     return int.tryParse(value?.toString() ?? '');
   }
 
+  static double? _doubleValue(dynamic value) {
+    if (value is double) return value;
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '');
+  }
+
+  static String? _nullableString(dynamic value) {
+    final s = _stringValue(value);
+    return s.isEmpty ? null : s;
+  }
+
   static String _stringValue(
     dynamic value, {
     String fallback = '',
@@ -138,5 +190,41 @@ class SanctionItem {
       return null;
     }
     return DateTime.tryParse(text);
+  }
+}
+
+class SanctionSummary {
+  final double unsettledBalance;
+  final int activeCount;
+  final bool isCleared;
+  final double fineRatePerLog;
+
+  const SanctionSummary({
+    this.unsettledBalance = 0.0,
+    this.activeCount = 0,
+    this.isCleared = true,
+    this.fineRatePerLog = 0.0,
+  });
+
+  factory SanctionSummary.fromJson(Map<String, dynamic> json) {
+    double toDouble(dynamic v) {
+      if (v is double) return v;
+      if (v is num) return v.toDouble();
+      return double.tryParse(v?.toString() ?? '') ?? 0.0;
+    }
+
+    int toInt(dynamic v) {
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      return int.tryParse(v?.toString() ?? '') ?? 0;
+    }
+
+    final count = toInt(json['active_count']);
+    return SanctionSummary(
+      unsettledBalance: toDouble(json['unsettled_balance']),
+      activeCount: count,
+      isCleared: json['is_cleared'] is bool ? json['is_cleared'] as bool : count == 0,
+      fineRatePerLog: toDouble(json['fine_rate_per_log']),
+    );
   }
 }

@@ -11,6 +11,26 @@ class AttendanceHistoryItem {
 
   int? get eventId => _readInt(['event_id']);
 
+  int? get slotIndex => _readInt(['slot_index']);
+
+  String? get checkpointKey =>
+      _readString(['checkpoint_key', 'checkpoint'])?.toLowerCase();
+
+  String get checkpointLabel {
+    switch (checkpointKey) {
+      case 'morning_time_in':
+        return 'Morning Time-In';
+      case 'morning_time_out':
+        return 'Morning Time-Out';
+      case 'afternoon_time_in':
+        return 'Afternoon Time-In';
+      case 'afternoon_time_out':
+        return 'Afternoon Time-Out';
+      default:
+        return sessionType == 'time_out' ? 'Time-Out' : 'Time-In';
+    }
+  }
+
   String get eventName {
     final eventMap = raw['event'];
     if (eventMap is Map) {
@@ -25,7 +45,7 @@ class AttendanceHistoryItem {
 
   String get sessionType {
     final session = _readString(
-      ['session_type', 'checkpoint_key', 'type', 'session', 'period', 'checkpoint'],
+      ['checkpoint_key', 'session_type', 'type', 'session', 'period', 'checkpoint'],
     )?.toLowerCase();
     if (session != null &&
         (session == 'time_out' ||
@@ -99,6 +119,8 @@ class AttendanceHistoryItem {
   String? get source => _readString(['source', 'method', 'check_in_method']);
 
   String? get eventDate {
+    final direct = _readString(['event_date']);
+    if (direct != null) return direct;
     final eventMap = raw['event'];
     if (eventMap is Map) {
       final d = _readStringFromMap(
@@ -107,7 +129,7 @@ class AttendanceHistoryItem {
       );
       if (d != null) return d;
     }
-    return _readString(['event_date', 'start_date', 'date']);
+    return _readString(['start_date', 'date']);
   }
 
   String? get attendanceTime =>

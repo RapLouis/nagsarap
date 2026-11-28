@@ -1158,11 +1158,11 @@ class ProfileCameraScreen extends StatefulWidget {
 }
 
 class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
-  static const int _requiredStableFrames = 8;
-  static const double _minBrightness = 55.0;
-  static const double _maxBrightness = 225.0;
-  static const double _maxYawDegrees = 12.0;
-  static const double _maxRollDegrees = 12.0;
+  static const int _requiredStableFrames = 6;
+  static const double _minBrightness = 28.0;
+  static const double _maxBrightness = 245.0;
+  static const double _maxYawDegrees = 14.0;
+  static const double _maxRollDegrees = 14.0;
 
   CameraController? _cameraController;
   CameraDescription? _frontCamera;
@@ -1187,7 +1187,7 @@ class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
         enableContours: false,
         enableLandmarks: false,
         enableClassification: false,
-        minFaceSize: 0.22,
+        minFaceSize: 0.20,
       ),
     );
     _initFrontCamera();
@@ -1211,29 +1211,23 @@ class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
       );
       _frontCamera = front;
 
-      CameraController controller = CameraController(
+      final CameraController controller = CameraController(
         front,
-        ResolutionPreset.high,
+        ResolutionPreset.medium,
         enableAudio: false,
         imageFormatGroup: Platform.isAndroid
             ? ImageFormatGroup.nv21
             : ImageFormatGroup.bgra8888,
       );
 
+      await controller.initialize();
+
       try {
-        await controller.initialize();
-      } catch (_) {
-        await controller.dispose();
-        controller = CameraController(
-          front,
-          ResolutionPreset.medium,
-          enableAudio: false,
-          imageFormatGroup: Platform.isAndroid
-              ? ImageFormatGroup.nv21
-              : ImageFormatGroup.bgra8888,
-        );
-        await controller.initialize();
-      }
+        await controller.setExposureMode(ExposureMode.auto);
+      } catch (_) {}
+      try {
+        await controller.setFocusMode(FocusMode.auto);
+      } catch (_) {}
 
       if (!mounted) {
         await controller.dispose();
@@ -1289,24 +1283,7 @@ class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
     _isProcessingFrame = true;
 
     try {
-      // 1. Check lighting brightness
-      final double brightness = _measureAverageBrightness(image);
-      if (brightness < _minBrightness) {
-        _updateGateState(
-          stable: false,
-          hint: 'Lighting is too dark. Move to a brighter area.',
-        );
-        return;
-      }
-      if (brightness > _maxBrightness) {
-        _updateGateState(
-          stable: false,
-          hint: 'Lighting is too bright or backlit.',
-        );
-        return;
-      }
-
-      // 2. Check face presence, position, and frontal alignment
+      // 1. Detect face first so brightness is measured on the face region
       final inputImage = _toInputImage(image);
       if (inputImage == null) return;
 
@@ -1314,10 +1291,18 @@ class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
       if (!mounted || _capturedImage != null) return;
 
       if (faces.isEmpty) {
-        _updateGateState(
-          stable: false,
-          hint: 'Position your face inside the circle.',
-        );
+        final double centerBrightness = _measureRegionBrightness(image, null);
+        if (centerBrightness < _minBrightness) {
+          _updateGateState(
+            stable: false,
+            hint: 'Lighting is too dark. Move to a brighter area.',
+          );
+        } else {
+          _updateGateState(
+            stable: false,
+            hint: 'Position your face inside the circle.',
+          );
+        }
         return;
       }
 
@@ -1332,6 +1317,24 @@ class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
       final face = faces.first;
       final bbox = face.boundingBox;
 
+      // 2. Measure brightness specifically on the detected face region
+      final double faceBrightness = _measureRegionBrightness(image, bbox);
+      if (faceBrightness < _minBrightness) {
+        _updateGateState(
+          stable: false,
+          hint: 'Lighting is too dark. Face a light source or brighten screen.',
+        );
+        return;
+      }
+      if (faceBrightness > _maxBrightness) {
+        _updateGateState(
+          stable: false,
+          hint: 'Lighting is too bright or backlit.',
+        );
+        return;
+      }
+
+      // 3. Check position and frontal alignment
       final int rotation = _frontCamera?.sensorOrientation ?? 0;
       final bool isRotated = rotation == 90 || rotation == 270;
       final double frameW =
@@ -1343,7 +1346,7 @@ class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
       final double centerXRatio = bbox.center.dx / frameW;
       final double centerYRatio = bbox.center.dy / frameH;
 
-      if (faceWidthRatio < 0.26) {
+      if (faceWidthRatio < 0.24) {
         _updateGateState(
           stable: false,
           hint: 'Move slightly closer to the camera.',
@@ -1351,7 +1354,7 @@ class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
         return;
       }
 
-      if (faceWidthRatio > 0.78) {
+      if (faceWidthRatio > 0.80) {
         _updateGateState(
           stable: false,
           hint: 'Move slightly farther from the camera.',
@@ -1359,8 +1362,8 @@ class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
         return;
       }
 
-      if ((centerXRatio - 0.5).abs() > 0.16 ||
-          (centerYRatio - 0.5).abs() > 0.18) {
+      if ((centerXRatio - 0.5).abs() > 0.18 ||
+          (centerYRatio - 0.5).abs() > 0.20) {
         _updateGateState(
           stable: false,
           hint: 'Center your face inside the circle.',
@@ -1406,22 +1409,45 @@ class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
     }
   }
 
-  double _measureAverageBrightness(CameraImage image) {
+  double _measureRegionBrightness(CameraImage image, Rect? rotatedFaceBox) {
     if (image.planes.isEmpty) return 128.0;
     final Uint8List bytes = image.planes.first.bytes;
     if (bytes.isEmpty) return 128.0;
 
+    final int w = image.width;
+    final int h = image.height;
+    final int bytesPerRow = image.planes.first.bytesPerRow;
+
+    // Sample the center 50% of the raw sensor frame so dark backgrounds don't bias luma
+    final int startX = (w * 0.25).round();
+    final int endX = (w * 0.75).round();
+    final int startY = (h * 0.25).round();
+    final int endY = (h * 0.75).round();
+
     int sum = 0;
     int count = 0;
+
     if (image.format.group == ImageFormatGroup.bgra8888) {
-      for (int i = 0; i + 2 < bytes.length; i += 64) {
-        sum += (bytes[i] + bytes[i + 1] + bytes[i + 2]) ~/ 3;
-        count++;
+      for (int y = startY; y < endY; y += 4) {
+        final int rowOffset = y * bytesPerRow;
+        for (int x = startX; x < endX; x += 4) {
+          final int idx = rowOffset + x * 4;
+          if (idx + 2 < bytes.length) {
+            sum += (bytes[idx] + bytes[idx + 1] + bytes[idx + 2]) ~/ 3;
+            count++;
+          }
+        }
       }
     } else {
-      for (int i = 0; i < bytes.length; i += 16) {
-        sum += bytes[i];
-        count++;
+      for (int y = startY; y < endY; y += 4) {
+        final int rowOffset = y * bytesPerRow;
+        for (int x = startX; x < endX; x += 4) {
+          final int idx = rowOffset + x;
+          if (idx < bytes.length) {
+            sum += bytes[idx];
+            count++;
+          }
+        }
       }
     }
 
@@ -1474,13 +1500,12 @@ class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
     try {
       await _stopQualityStream();
 
-      // Keep full native phone camera quality without downscaling or heavy compression
       final XFile rawFile = await controller.takePicture();
-      final XFile unmirroredFile = await _normalizeFrontCapture(rawFile);
+      final XFile normalizedFile = await _normalizeFrontCapture(rawFile);
 
       if (mounted) {
         setState(() {
-          _capturedImage = unmirroredFile;
+          _capturedImage = normalizedFile;
         });
       }
     } catch (e) {
@@ -1510,7 +1535,30 @@ class _ProfileCameraScreenState extends State<ProfileCameraScreen> {
 
       final baked = img.bakeOrientation(decoded);
       final unmirrored = img.flipHorizontal(baked);
-      final encoded = img.encodeJpg(unmirrored, quality: 95);
+
+      // Gently lift shadow exposure if the captured photo is slightly dim
+      double lumaSum = 0;
+      int samples = 0;
+      for (int y = unmirrored.height ~/ 4; y < (unmirrored.height * 3) ~/ 4; y += 8) {
+        for (int x = unmirrored.width ~/ 4; x < (unmirrored.width * 3) ~/ 4; x += 8) {
+          final pixel = unmirrored.getPixel(x, y);
+          lumaSum += (pixel.r + pixel.g + pixel.b) / 3.0;
+          samples++;
+        }
+      }
+      final double avgLuma = samples > 0 ? lumaSum / samples : 128.0;
+
+      img.Image finalImage = unmirrored;
+      if (avgLuma < 85.0) {
+        final double gain = (85.0 / avgLuma.clamp(25.0, 85.0)).clamp(1.0, 1.8);
+        finalImage = img.adjustColor(
+          unmirrored,
+          brightness: gain,
+          gamma: 0.90,
+        );
+      }
+
+      final encoded = img.encodeJpg(finalImage, quality: 95);
 
       await File(rawFile.path).writeAsBytes(encoded, flush: true);
       return rawFile;

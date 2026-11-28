@@ -61,3 +61,4 @@ __pycache__/
 /storage/inertia-devtools/
 android/key.propertiescodebase_essential.zip
 ziryPlrY 
+storage/logs/*.log

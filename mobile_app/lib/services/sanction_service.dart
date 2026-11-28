@@ -19,6 +19,24 @@ class SanctionResult {
   });
 }
 
+class _ExpectedCheckpoint {
+  final DateTime eventDay;
+  final int? slotIndex;
+  final String checkpointKey;
+  final String baseType; // 'time_in' or 'time_out'
+  final String label;
+  final DateTime deadline;
+
+  const _ExpectedCheckpoint({
+    required this.eventDay,
+    required this.slotIndex,
+    required this.checkpointKey,
+    required this.baseType,
+    required this.label,
+    required this.deadline,
+  });
+}
+
 class SanctionService {
   SanctionService._();
 
@@ -54,7 +72,7 @@ class SanctionService {
       debugPrint('SERVER SANCTIONS ERROR: $error');
     }
 
-    // Independently evaluate missed Time-In and Time-Out.
+    // Independently evaluate missed checkpoints (supports both 2-checkpoint and 4-checkpoint events).
     try {
       final eventsResult = await EventService.instance.getEvents();
       final historyResult =
@@ -65,15 +83,8 @@ class SanctionService {
         var syntheticId = 900000;
 
         for (final event in eventsResult.events) {
-          final eventDate = event.date;
-
-          if (eventDate == null) continue;
-
-          final eventDay = DateTime(
-            eventDate.year,
-            eventDate.month,
-            eventDate.day,
-          );
+          final checkpoints = _extractEventCheckpoints(event);
+          if (checkpoints.isEmpty) continue;
 
           // Match attendance records to this event.
           final eventRecords = historyResult.records.where((record) {
@@ -85,85 +96,37 @@ class SanctionService {
                 event.name.trim().toLowerCase();
           }).toList();
 
-          final hasTimeIn = eventRecords.any(
-            (record) => _isSuccessfulRecordFor(
-              record,
-              'time_in',
-            ),
-          );
+          for (final cp in checkpoints) {
+            if (!now.isAfter(cp.deadline)) continue;
 
-          final hasTimeOut = eventRecords.any(
-            (record) => _isSuccessfulRecordFor(
-              record,
-              'time_out',
-            ),
-          );
-
-          final timeInDeadline = _getPeriodDeadline(
-            event: event,
-            eventDate: eventDay,
-            isTimeIn: true,
-          );
-
-          final timeOutDeadline = _getPeriodDeadline(
-            event: event,
-            eventDate: eventDay,
-            isTimeIn: false,
-          );
-
-          // TIME-IN MISSED:
-          // Only generate after the Time-In period closes.
-          if (!hasTimeIn && now.isAfter(timeInDeadline)) {
-            final exists = _alreadyHasSanction(
-              sanctions,
-              eventName: event.name,
-              eventDate: eventDay,
-              period: 'time-in',
-              eventId: event.id,
+            final hasCheckpoint = eventRecords.any(
+              (record) => _isSuccessfulRecordForCheckpoint(record, cp),
             );
 
-            if (!exists) {
-              sanctions.add(
-                SanctionItem(
-                  id: syntheticId++,
-                  title: '${event.name} - Time-In Missed',
-                  reason:
-                      'No Time-In attendance was recorded before the Time-In period closed.',
-                  status: 'pending',
-                  issuedAt: timeInDeadline,
-                  resolvedAt: null,
-                  eventDate: eventDay,
-                  eventId: event.id,
-                ),
+            if (!hasCheckpoint) {
+              final exists = _alreadyHasSanction(
+                sanctions,
+                eventName: event.name,
+                eventDate: cp.eventDay,
+                checkpoint: cp,
+                eventId: event.id,
               );
-            }
-          }
 
-          // TIME-OUT MISSED:
-          // Only generate after the Time-Out period closes.
-          if (!hasTimeOut && now.isAfter(timeOutDeadline)) {
-            final exists = _alreadyHasSanction(
-              sanctions,
-              eventName: event.name,
-              eventDate: eventDay,
-              period: 'time-out',
-              eventId: event.id,
-            );
-
-            if (!exists) {
-              sanctions.add(
-                SanctionItem(
-                  id: syntheticId++,
-                  title: '${event.name} - Time-Out Missed',
-                  reason:
-                      'No Time-Out attendance was recorded before the Time-Out period closed.',
-                  status: 'pending',
-                  issuedAt: timeOutDeadline,
-                  resolvedAt: null,
-                  eventDate: eventDay,
-                  eventId: event.id,
-                ),
-              );
+              if (!exists) {
+                sanctions.add(
+                  SanctionItem(
+                    id: syntheticId++,
+                    title: '${event.name} - ${cp.label} Missed',
+                    reason:
+                        'No ${cp.label} attendance was recorded before the ${cp.label} period closed.',
+                    status: 'pending',
+                    issuedAt: cp.deadline,
+                    resolvedAt: null,
+                    eventDate: cp.eventDay,
+                    eventId: event.id,
+                  ),
+                );
+              }
             }
           }
         }
@@ -189,6 +152,302 @@ class SanctionService {
       message: 'Sanctions loaded successfully.',
       sanctions: sanctions,
     );
+  }
+
+  List<_ExpectedCheckpoint> _extractEventCheckpoints(EventItem event) {
+    final raw = event.raw;
+    final results = <_ExpectedCheckpoint>[];
+
+    // 1. Check multi-day / multi-slot structure (`days[].slots[]`).
+    final rawDays = raw['days'];
+    if (rawDays is List && rawDays.isNotEmpty) {
+      for (final dayEntry in rawDays) {
+        if (dayEntry is! Map) continue;
+        final dayMap = Map<String, dynamic>.from(dayEntry);
+
+        DateTime? parsedDay;
+        final rawDayDate = _firstString(dayMap, const ['date', 'event_date']);
+        if (rawDayDate != null) {
+          final dt = DateTime.tryParse(rawDayDate);
+          if (dt != null) {
+            parsedDay = DateTime(dt.year, dt.month, dt.day);
+          }
+        }
+        parsedDay ??= event.date != null
+            ? DateTime(event.date!.year, event.date!.month, event.date!.day)
+            : null;
+        if (parsedDay == null) continue;
+
+        final rawSlots = dayMap['slots'];
+        if (rawSlots is List && rawSlots.isNotEmpty) {
+          for (int i = 0; i < rawSlots.length; i++) {
+            final slotEntry = rawSlots[i];
+            if (slotEntry is! Map) continue;
+            final slotMap = Map<String, dynamic>.from(slotEntry);
+
+            final slotIndex =
+                int.tryParse(slotMap['slot_index']?.toString() ?? '') ?? i;
+            final periodRaw =
+                _firstString(slotMap, const ['period', 'session', 'name'])
+                    ?.toLowerCase();
+
+            final String prefixKey;
+            final String prefixLabel;
+            if (periodRaw == 'morning' || slotIndex == 0) {
+              prefixKey = 'morning';
+              prefixLabel = 'Morning';
+            } else if (periodRaw == 'afternoon' || slotIndex == 1) {
+              prefixKey = 'afternoon';
+              prefixLabel = 'Afternoon';
+            } else {
+              prefixKey = 'slot_$slotIndex';
+              prefixLabel = 'Session ${slotIndex + 1}';
+            }
+
+            final inDeadline = _getSlotDeadline(
+              slotMap: slotMap,
+              dayMap: dayMap,
+              event: event,
+              eventDate: parsedDay,
+              isTimeIn: true,
+            );
+            final outDeadline = _getSlotDeadline(
+              slotMap: slotMap,
+              dayMap: dayMap,
+              event: event,
+              eventDate: parsedDay,
+              isTimeIn: false,
+            );
+
+            results.add(
+              _ExpectedCheckpoint(
+                eventDay: parsedDay,
+                slotIndex: slotIndex,
+                checkpointKey: '${prefixKey}_time_in',
+                baseType: 'time_in',
+                label: '$prefixLabel Time-In',
+                deadline: inDeadline,
+              ),
+            );
+            results.add(
+              _ExpectedCheckpoint(
+                eventDay: parsedDay,
+                slotIndex: slotIndex,
+                checkpointKey: '${prefixKey}_time_out',
+                baseType: 'time_out',
+                label: '$prefixLabel Time-Out',
+                deadline: outDeadline,
+              ),
+            );
+          }
+        }
+      }
+
+      if (results.isNotEmpty) return results;
+    }
+
+    final eventDate = event.date;
+    if (eventDate == null) return results;
+
+    final eventDay = DateTime(eventDate.year, eventDate.month, eventDate.day);
+
+    // 2. Check top-level 4-checkpoint keys (`morning_time_in_*`, `afternoon_time_in_*`).
+    final hasTopLevelMorning = _firstString(raw, const [
+          'morning_time_in_start',
+          'morning_time_in_end',
+          'morning_time_in',
+          'morning_time_out_start',
+          'morning_time_out_end',
+          'morning_time_out',
+        ]) !=
+        null;
+    final hasTopLevelAfternoon = _firstString(raw, const [
+          'afternoon_time_in_start',
+          'afternoon_time_in_end',
+          'afternoon_time_in',
+          'afternoon_time_out_start',
+          'afternoon_time_out_end',
+          'afternoon_time_out',
+        ]) !=
+        null;
+
+    if (hasTopLevelMorning || hasTopLevelAfternoon) {
+      if (hasTopLevelMorning) {
+        results.add(
+          _ExpectedCheckpoint(
+            eventDay: eventDay,
+            slotIndex: 0,
+            checkpointKey: 'morning_time_in',
+            baseType: 'time_in',
+            label: 'Morning Time-In',
+            deadline: _getPrefixedPeriodDeadline(
+              raw: raw,
+              event: event,
+              eventDate: eventDay,
+              prefix: 'morning',
+              isTimeIn: true,
+            ),
+          ),
+        );
+        results.add(
+          _ExpectedCheckpoint(
+            eventDay: eventDay,
+            slotIndex: 0,
+            checkpointKey: 'morning_time_out',
+            baseType: 'time_out',
+            label: 'Morning Time-Out',
+            deadline: _getPrefixedPeriodDeadline(
+              raw: raw,
+              event: event,
+              eventDate: eventDay,
+              prefix: 'morning',
+              isTimeIn: false,
+            ),
+          ),
+        );
+      }
+
+      if (hasTopLevelAfternoon) {
+        results.add(
+          _ExpectedCheckpoint(
+            eventDay: eventDay,
+            slotIndex: 1,
+            checkpointKey: 'afternoon_time_in',
+            baseType: 'time_in',
+            label: 'Afternoon Time-In',
+            deadline: _getPrefixedPeriodDeadline(
+              raw: raw,
+              event: event,
+              eventDate: eventDay,
+              prefix: 'afternoon',
+              isTimeIn: true,
+            ),
+          ),
+        );
+        results.add(
+          _ExpectedCheckpoint(
+            eventDay: eventDay,
+            slotIndex: 1,
+            checkpointKey: 'afternoon_time_out',
+            baseType: 'time_out',
+            label: 'Afternoon Time-Out',
+            deadline: _getPrefixedPeriodDeadline(
+              raw: raw,
+              event: event,
+              eventDate: eventDay,
+              prefix: 'afternoon',
+              isTimeIn: false,
+            ),
+          ),
+        );
+      }
+
+      return results;
+    }
+
+    // 3. Fallback: standard 2-checkpoint event (Time-In & Time-Out).
+    results.add(
+      _ExpectedCheckpoint(
+        eventDay: eventDay,
+        slotIndex: null,
+        checkpointKey: 'time_in',
+        baseType: 'time_in',
+        label: 'Time-In',
+        deadline: _getPeriodDeadline(
+          event: event,
+          eventDate: eventDay,
+          isTimeIn: true,
+        ),
+      ),
+    );
+    results.add(
+      _ExpectedCheckpoint(
+        eventDay: eventDay,
+        slotIndex: null,
+        checkpointKey: 'time_out',
+        baseType: 'time_out',
+        label: 'Time-Out',
+        deadline: _getPeriodDeadline(
+          event: event,
+          eventDate: eventDay,
+          isTimeIn: false,
+        ),
+      ),
+    );
+
+    return results;
+  }
+
+  bool _isSuccessfulRecordForCheckpoint(
+    AttendanceHistoryItem record,
+    _ExpectedCheckpoint checkpoint,
+  ) {
+    final status = record.status.trim().toLowerCase();
+
+    const rejectedStates = [
+      'missed',
+      'absent',
+      'rejected',
+      'failed',
+      'cancelled',
+      'canceled',
+      'denied',
+      'invalid',
+    ];
+
+    if (rejectedStates.any(status.contains)) {
+      return false;
+    }
+
+    final raw = record.raw;
+
+    // Match record date if multi-day and record carries an explicit date.
+    final rawRecordDate = _firstString(raw, const [
+      'attendance_date',
+      'event_date',
+      'date',
+      'recorded_at',
+      'attendance_time',
+    ]);
+    if (rawRecordDate != null) {
+      final parsed = DateTime.tryParse(rawRecordDate)?.toLocal();
+      if (parsed != null &&
+          (parsed.year != checkpoint.eventDay.year ||
+              parsed.month != checkpoint.eventDay.month ||
+              parsed.day != checkpoint.eventDay.day)) {
+        return false;
+      }
+    }
+
+    final rawCheckpointKey = _firstString(raw, const [
+      'checkpoint_key',
+      'checkpoint',
+    ])?.toLowerCase().replaceAll('-', '_').replaceAll(' ', '_');
+
+    final rawSlot = raw['slot_index'] ?? raw['slotIndex'];
+    final recordSlotIndex =
+        rawSlot != null ? int.tryParse(rawSlot.toString()) : null;
+
+    // If this is a 4-checkpoint slot (e.g., morning_time_in / afternoon_time_out):
+    if (checkpoint.slotIndex != null) {
+      if (rawCheckpointKey != null && rawCheckpointKey.isNotEmpty) {
+        return rawCheckpointKey == checkpoint.checkpointKey;
+      }
+
+      if (recordSlotIndex != null) {
+        return recordSlotIndex == checkpoint.slotIndex &&
+            _isSuccessfulRecordFor(record, checkpoint.baseType);
+      }
+
+      // Legacy records without slot_index/checkpoint_key satisfy slot 0 only.
+      if (checkpoint.slotIndex == 0) {
+        return _isSuccessfulRecordFor(record, checkpoint.baseType);
+      }
+
+      return false;
+    }
+
+    return _isSuccessfulRecordFor(record, checkpoint.baseType);
   }
 
   // Check whether an actual successful attendance exists
@@ -278,19 +537,40 @@ class SanctionService {
   }
 
   // Prevent duplicate sanctions for the same event,
-  // event date, and missed attendance period.
+  // event date, and missed attendance checkpoint/period.
   bool _alreadyHasSanction(
     List<SanctionItem> sanctions, {
     required String eventName,
     required DateTime eventDate,
-    required String period,
+    required _ExpectedCheckpoint checkpoint,
     required int? eventId,
   }) {
+    final labelToken = checkpoint.label.toLowerCase();
+    final keyToken = checkpoint.checkpointKey.toLowerCase();
+    final hyphenPeriod = checkpoint.baseType.replaceAll('_', '-');
+
     return sanctions.any((sanction) {
       final title = sanction.title.toLowerCase();
 
-      if (!title.contains(period)) {
-        return false;
+      if (checkpoint.slotIndex != null) {
+        final hasMorning = title.contains('morning');
+        final hasAfternoon = title.contains('afternoon');
+        final matchesCheckpoint = title.contains(labelToken) ||
+            title.contains(keyToken) ||
+            (title.contains(hyphenPeriod) &&
+                ((checkpoint.checkpointKey.startsWith('morning') &&
+                        hasMorning) ||
+                    (checkpoint.checkpointKey.startsWith('afternoon') &&
+                        hasAfternoon) ||
+                    (!hasMorning && !hasAfternoon)));
+        if (!matchesCheckpoint) {
+          return false;
+        }
+      } else {
+        if (!title.contains(hyphenPeriod) &&
+            !title.contains(checkpoint.baseType)) {
+          return false;
+        }
       }
 
       if (sanction.eventId != null && eventId != null) {
@@ -313,6 +593,127 @@ class SanctionService {
           existingDate.month == eventDate.month &&
           existingDate.day == eventDate.day;
     });
+  }
+
+  DateTime _getSlotDeadline({
+    required Map<String, dynamic> slotMap,
+    required Map<String, dynamic> dayMap,
+    required EventItem event,
+    required DateTime eventDate,
+    required bool isTimeIn,
+  }) {
+    final explicitKeys = isTimeIn
+        ? const [
+            'time_in_end',
+            'time_in_end_time',
+            'time_in_until',
+            'time_in_to',
+            'check_in_end',
+          ]
+        : const [
+            'time_out_end',
+            'time_out_end_time',
+            'time_out_until',
+            'time_out_to',
+            'check_out_end',
+          ];
+
+    final explicitValue = _firstString(slotMap, explicitKeys);
+    final explicitTime = _parseTime(explicitValue);
+    if (explicitTime != null) {
+      return DateTime(
+        eventDate.year,
+        eventDate.month,
+        eventDate.day,
+        explicitTime.hour,
+        explicitTime.minute,
+        explicitTime.second,
+      );
+    }
+
+    final rangeKeys = isTimeIn
+        ? const ['time_in', 'time_in_window']
+        : const ['time_out', 'time_out_window'];
+    for (final key in rangeKeys) {
+      final rangeEnd = _parseRangeEnd(_firstString(slotMap, [key]));
+      if (rangeEnd != null) {
+        return DateTime(
+          eventDate.year,
+          eventDate.month,
+          eventDate.day,
+          rangeEnd.hour,
+          rangeEnd.minute,
+          rangeEnd.second,
+        );
+      }
+    }
+
+    if (!isTimeIn) {
+      final slotEnd = _parseTime(
+        _firstString(slotMap, const ['end_time', 'end']) ??
+            _firstString(dayMap, const ['end_time', 'end']) ??
+            event.endTime,
+      );
+      if (slotEnd != null) {
+        return DateTime(
+          eventDate.year,
+          eventDate.month,
+          eventDate.day,
+          slotEnd.hour,
+          slotEnd.minute,
+          slotEnd.second,
+        );
+      }
+    }
+
+    return eventDate.add(const Duration(days: 1));
+  }
+
+  DateTime _getPrefixedPeriodDeadline({
+    required Map<String, dynamic> raw,
+    required EventItem event,
+    required DateTime eventDate,
+    required String prefix,
+    required bool isTimeIn,
+  }) {
+    final suffix = isTimeIn ? 'time_in' : 'time_out';
+    final explicitValue = _firstString(raw, [
+      '${prefix}_${suffix}_end',
+      '${prefix}_${suffix}_end_time',
+      '${prefix}_${suffix}_until',
+      '${prefix}_${suffix}_to',
+    ]);
+    final explicitTime = _parseTime(explicitValue);
+    if (explicitTime != null) {
+      return DateTime(
+        eventDate.year,
+        eventDate.month,
+        eventDate.day,
+        explicitTime.hour,
+        explicitTime.minute,
+        explicitTime.second,
+      );
+    }
+
+    final rangeEnd = _parseRangeEnd(
+      _firstString(raw, ['${prefix}_$suffix', '${prefix}_${suffix}_window']),
+    );
+    if (rangeEnd != null) {
+      return DateTime(
+        eventDate.year,
+        eventDate.month,
+        eventDate.day,
+        rangeEnd.hour,
+        rangeEnd.minute,
+        rangeEnd.second,
+      );
+    }
+
+    return _getPeriodDeadline(
+      event: event,
+      eventDate: eventDate,
+      isTimeIn: isTimeIn,
+    );
   }
 
   DateTime _getPeriodDeadline({

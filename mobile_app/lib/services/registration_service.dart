@@ -430,7 +430,7 @@ class RegistrationService {
       final compressedTurned = compressedResults[1];
       final compressedFlashFrames = await ImageCompressService.compressBatch(
         flashFrames,
-        quality: 60,
+        quality: 88,
       );
 
       final multipartCenter = await MultipartFile.fromFile(
